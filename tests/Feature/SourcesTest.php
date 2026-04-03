@@ -1,0 +1,279 @@
+<?php
+
+namespace Tests\Feature;
+
+use CodeIgniter\Test\CIUnitTestCase;
+use CodeIgniter\Test\FeatureTestTrait;
+
+/**
+ * Feature tests for:
+ *   POST /api/v1/frames/{id}/sources
+ *   GET  /api/v1/sources/near
+ *
+ * @internal
+ */
+final class SourcesTest extends CIUnitTestCase
+{
+    use FeatureTestTrait;
+
+    private const API_KEY       = 'your-secret-key-here';
+    private const ENDPOINT_NEAR = '/api/v1/sources/near';
+
+    // -------------------------------------------------------------------------
+    // Test lifecycle
+    // -------------------------------------------------------------------------
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->emptyAppTables();
+    }
+
+    private function emptyAppTables(): void
+    {
+        $db = \Config\Database::connect('default');
+        $db->query('DELETE FROM anomalies');
+        $db->query('DELETE FROM sources');
+        $db->query('DELETE FROM frames');
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
+    private function authHeaders(): array
+    {
+        return ['X-API-Key' => self::API_KEY];
+    }
+
+    /**
+     * Insert a frame directly into the DB and return its id.
+     */
+    private function createFrame(array $overrides = []): int
+    {
+        $db = \Config\Database::connect('default');
+        $db->table('frames')->insert(array_merge([
+            'filename'     => 'test_frame_' . uniqid() . '.fits',
+            'obs_time'     => '2024-03-15 22:01:34',
+            'ra_center'    => 202.4696,
+            'dec_center'   => 47.1952,
+            'fov_deg'      => 1.25,
+            'quality_flag' => 'OK',
+        ], $overrides));
+
+        return (int) $db->insertID();
+    }
+
+    private function sourcesEndpoint(int $frameId): string
+    {
+        return "/api/v1/frames/{$frameId}/sources";
+    }
+
+    private function threeSources(): array
+    {
+        return [
+            ['ra' => 202.461, 'dec' => 47.182, 'mag' => 14.23, 'flux' => 45230.5, 'object_type' => 'STAR'],
+            ['ra' => 202.463, 'dec' => 47.184, 'mag' => 15.10, 'flux' => 22000.0, 'object_type' => 'STAR'],
+            ['ra' => 202.458, 'dec' => 47.179, 'mag' => 13.80, 'flux' => 60000.1, 'object_type' => 'STAR'],
+        ];
+    }
+
+    // -------------------------------------------------------------------------
+    // POST /api/v1/frames/{id}/sources — happy paths
+    // -------------------------------------------------------------------------
+
+    public function testValidSourcesArrayReturns201WithCorrectCount(): void
+    {
+        $frameId = $this->createFrame();
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->sourcesEndpoint($frameId), [
+                'filename' => 'test.fits',
+                'sources'  => $this->threeSources(),
+            ]);
+
+        $result->assertStatus(201);
+        $json = json_decode($result->getJSON(), true);
+        $this->assertSame('Sources saved successfully', $json['message']);
+        $this->assertSame(3, $json['count']);
+    }
+
+    public function testEmptySourcesArrayReturns201WithCountZero(): void
+    {
+        $frameId = $this->createFrame();
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->sourcesEndpoint($frameId), [
+                'filename' => 'test.fits',
+                'sources'  => [],
+            ]);
+
+        $result->assertStatus(201);
+        $json = json_decode($result->getJSON(), true);
+        $this->assertSame(0, $json['count']);
+    }
+
+    // -------------------------------------------------------------------------
+    // POST /api/v1/frames/{id}/sources — error paths
+    // -------------------------------------------------------------------------
+
+    public function testNonExistentFrameIdReturns404(): void
+    {
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post('/api/v1/frames/999999/sources', [
+                'filename' => 'test.fits',
+                'sources'  => [],
+            ]);
+
+        $result->assertStatus(404);
+    }
+
+    public function testMissingSourcesFieldReturns400(): void
+    {
+        $frameId = $this->createFrame();
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->sourcesEndpoint($frameId), [
+                'filename' => 'test.fits',
+                // 'sources' intentionally omitted
+            ]);
+
+        $result->assertStatus(400);
+    }
+
+    public function testMissingFilenameFieldReturns400(): void
+    {
+        $frameId = $this->createFrame();
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->sourcesEndpoint($frameId), [
+                // 'filename' intentionally omitted
+                'sources' => $this->threeSources(),
+            ]);
+
+        $result->assertStatus(400);
+    }
+
+    public function testPostSourcesNoApiKeyReturns401(): void
+    {
+        $result = $this->withBodyFormat('json')
+            ->post('/api/v1/frames/1/sources', [
+                'filename' => 'test.fits',
+                'sources'  => [],
+            ]);
+
+        $result->assertStatus(401);
+    }
+
+    // -------------------------------------------------------------------------
+    // GET /api/v1/sources/near — happy paths
+    // -------------------------------------------------------------------------
+
+    public function testNearQueryReturnsSourcesWithinRadius(): void
+    {
+        // Insert a frame and three nearby sources
+        $frameId = $this->createFrame(['obs_time' => '2024-01-01 00:00:00']);
+        $db = \Config\Database::connect('default');
+        foreach ($this->threeSources() as $s) {
+            $db->table('sources')->insert(['frame_id' => $frameId] + $s);
+        }
+
+        // Query near the cluster — radius 60 arcsec, before 2025-01-01
+        $result = $this->withHeaders($this->authHeaders())
+            ->get(self::ENDPOINT_NEAR, [
+                'ra'            => '202.461',
+                'dec'           => '47.182',
+                'radius_arcsec' => '60',
+                'before_time'   => '2025-01-01T00:00:00Z',
+            ]);
+
+        $result->assertStatus(200);
+        $json = json_decode($result->getJSON(), true);
+        $this->assertArrayHasKey('data', $json);
+        $this->assertNotEmpty($json['data']);
+    }
+
+    public function testNearQueryOutsideAllSourcesReturnsEmptyData(): void
+    {
+        $result = $this->withHeaders($this->authHeaders())
+            ->get(self::ENDPOINT_NEAR, [
+                'ra'            => '0.0001',   // Far from any test data
+                'dec'           => '0.0001',
+                'radius_arcsec' => '1',
+                'before_time'   => '2025-01-01T00:00:00Z',
+            ]);
+
+        $result->assertStatus(200);
+        $json = json_decode($result->getJSON(), true);
+        $this->assertSame([], $json['data']);
+    }
+
+    // -------------------------------------------------------------------------
+    // GET /api/v1/sources/near — missing parameters → 400
+    // -------------------------------------------------------------------------
+
+    public function testNearMissingRaReturns400(): void
+    {
+        $result = $this->withHeaders($this->authHeaders())
+            ->get(self::ENDPOINT_NEAR, [
+                'dec'           => '47.182',
+                'radius_arcsec' => '60',
+                'before_time'   => '2025-01-01T00:00:00Z',
+            ]);
+
+        $result->assertStatus(400);
+    }
+
+    public function testNearMissingDecReturns400(): void
+    {
+        $result = $this->withHeaders($this->authHeaders())
+            ->get(self::ENDPOINT_NEAR, [
+                'ra'            => '202.461',
+                'radius_arcsec' => '60',
+                'before_time'   => '2025-01-01T00:00:00Z',
+            ]);
+
+        $result->assertStatus(400);
+    }
+
+    public function testNearMissingRadiusArcsecReturns400(): void
+    {
+        $result = $this->withHeaders($this->authHeaders())
+            ->get(self::ENDPOINT_NEAR, [
+                'ra'          => '202.461',
+                'dec'         => '47.182',
+                'before_time' => '2025-01-01T00:00:00Z',
+            ]);
+
+        $result->assertStatus(400);
+    }
+
+    public function testNearMissingBeforeTimeReturns400(): void
+    {
+        $result = $this->withHeaders($this->authHeaders())
+            ->get(self::ENDPOINT_NEAR, [
+                'ra'            => '202.461',
+                'dec'           => '47.182',
+                'radius_arcsec' => '60',
+            ]);
+
+        $result->assertStatus(400);
+    }
+
+    public function testNearNoApiKeyReturns401(): void
+    {
+        $result = $this->get(self::ENDPOINT_NEAR, [
+            'ra'            => '202.461',
+            'dec'           => '47.182',
+            'radius_arcsec' => '60',
+            'before_time'   => '2025-01-01T00:00:00Z',
+        ]);
+
+        $result->assertStatus(401);
+    }
+}
