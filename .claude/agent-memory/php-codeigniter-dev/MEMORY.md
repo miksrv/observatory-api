@@ -1,0 +1,1 @@
+- [Project Stack](project_stack.md) — CI4.7.2 + PHP 8.1+, MariaDB 10.5.8 in Docker, MySQLi driver
