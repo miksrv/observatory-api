@@ -5,7 +5,10 @@ namespace App\Controllers\Api\V1;
 use App\Controllers\BaseApiController;
 use App\Models\AnomalyModel;
 use App\Models\FrameModel;
+use App\Models\FrameSourceModel;
+use App\Models\ObjectStatsModel;
 use App\Models\SourceModel;
+use App\Models\SourceObservationModel;
 use CodeIgniter\HTTP\ResponseInterface;
 
 class FramesController extends BaseApiController
@@ -126,6 +129,21 @@ class FramesController extends BaseApiController
             return $this->respondError(500, 'Failed to register frame');
         }
 
+        // ----------------------------------------------------------------
+        // Update object statistics (if object is specified)
+        // ----------------------------------------------------------------
+        if (!empty($data['object'])) {
+            $objectStatsModel = new ObjectStatsModel();
+            $objectStatsModel->incrementStats(
+                object:  $data['object'],
+                filter:  $data['filter'] ?? null,
+                exptime: $data['exptime'] ?? 0.0,
+                obsTime: $data['obs_time'],
+                fwhm:    $data['qc_fwhm_median'] ?? null,
+                airmass: $data['airmass'] ?? null
+            );
+        }
+
         return $this->respondCreated([
             'id'      => (string) $insertId,
             'message' => 'Frame registered successfully',
@@ -135,12 +153,18 @@ class FramesController extends BaseApiController
     /**
      * POST /api/v1/frames/{id}/sources
      *
-     * Save all sources detected in a previously registered frame.
-     * An empty sources array is valid and results in a 201 with count 0.
+     * Save detected sources for a frame with proper source catalog management.
      *
-     * @param int|string $id Frame primary key from the URL segment.
+     * For each source:
+     * 1. Check if a matching source exists (within 2 arcsec) in the catalog
+     * 2. If found: use existing source, update observation count
+     * 3. If not found: create new source in catalog
+     * 4. Create observation record with photometry data
+     * 5. Link source to frame
+     *
+     * @param string $id Frame primary key from the URL segment.
      */
-    public function saveSources(int|string $id): ResponseInterface
+    public function saveSources(string $id): ResponseInterface
     {
         $body = $this->request->getJSON(true);
 
@@ -163,13 +187,16 @@ class FramesController extends BaseApiController
         }
 
         // ----------------------------------------------------------------
-        // Verify the parent frame exists
+        // Verify the parent frame exists and get obs_time
         // ----------------------------------------------------------------
         $frameModel = new FrameModel();
+        $frame      = $frameModel->find($id);
 
-        if ($frameModel->find((int) $id) === null) {
-            return $this->respondError(404, 'Frame not found', ['frame_id' => (int) $id]);
+        if ($frame === null) {
+            return $this->respondError(404, 'Frame not found', ['frame_id' => $id]);
         }
+
+        $obsTime = $frame['obs_time'];
 
         // ----------------------------------------------------------------
         // Short-circuit for empty source list
@@ -177,16 +204,27 @@ class FramesController extends BaseApiController
         $sources = $body['sources'];
 
         if (count($sources) === 0) {
-            return $this->respondCreated(['message' => 'Sources saved successfully', 'count' => 0]);
+            return $this->respondCreated([
+                'message'         => 'Sources saved successfully',
+                'count'           => 0,
+                'new_sources'     => 0,
+                'matched_sources' => 0,
+            ]);
         }
 
         // ----------------------------------------------------------------
-        // Build rows, skipping any source missing ra or dec
+        // Process each source
         // ----------------------------------------------------------------
-        $rows    = [];
-        $skipped = 0;
+        $sourceModel      = new SourceModel();
+        $observationModel = new SourceObservationModel();
+        $frameSourceModel = new FrameSourceModel();
+
+        $newSources     = 0;
+        $matchedSources = 0;
+        $skipped        = 0;
 
         foreach ($sources as $source) {
+            // Validate required fields
             if (
                 ! isset($source['ra'], $source['dec'])
                 || ! is_numeric($source['ra'])
@@ -196,46 +234,81 @@ class FramesController extends BaseApiController
                 continue;
             }
 
-            // All rows must have identical keys for insertBatch to work correctly.
-            // We include all allowedFields from SourceModel with null defaults.
-            // Note: pipeline may send mag_calibrated instead of mag — we accept both.
+            $ra  = (float) $source['ra'];
+            $dec = (float) $source['dec'];
+
+            // Try to find existing source within 2 arcsec
+            $existingSource = $sourceModel->findByCoordinates($ra, $dec, 2.0);
+
+            if ($existingSource !== null) {
+                // Use existing source
+                $sourceId = $existingSource['id'];
+                $matchedSources++;
+
+                // Update observation stats
+                $sourceModel->update($sourceId, [
+                    'last_observed_at'  => $obsTime,
+                    'observation_count' => $existingSource['observation_count'] + 1,
+                ]);
+            } else {
+                // Create new source
+                $newSourceData = [
+                    'ra'                => $ra,
+                    'dec'               => $dec,
+                    'catalog_name'      => $source['catalog_name'] ?? null,
+                    'catalog_id'        => $source['catalog_id'] ?? null,
+                    'catalog_mag'       => isset($source['catalog_mag']) ? (float) $source['catalog_mag'] : null,
+                    'object_type'       => $source['object_type'] ?? null,
+                    'first_observed_at' => $obsTime,
+                    'last_observed_at'  => $obsTime,
+                    'observation_count' => 1,
+                ];
+
+                $sourceId = $sourceModel->insert($newSourceData, true);
+
+                if ($sourceId === false) {
+                    log_message('error', 'Failed to create source at RA=' . $ra . ', Dec=' . $dec);
+                    $skipped++;
+                    continue;
+                }
+
+                $newSources++;
+            }
+
+            // Create observation record
             $mag = $source['mag'] ?? $source['mag_calibrated'] ?? null;
 
-            $row = [
-                'frame_id'     => (int) $id,
-                'ra'           => (float) $source['ra'],
-                'dec'          => (float) $source['dec'],
-                'mag'          => isset($mag) ? (float) $mag : null,
-                'flux'         => isset($source['flux'])         ? (float)  $source['flux']         : null,
-                'fwhm'         => isset($source['fwhm'])         ? (float)  $source['fwhm']         : null,
-                'catalog_name' => isset($source['catalog_name']) ? (string) $source['catalog_name'] : null,
-                'catalog_id'   => isset($source['catalog_id'])   ? (string) $source['catalog_id']   : null,
-                'catalog_mag'  => isset($source['catalog_mag'])  ? (float)  $source['catalog_mag']  : null,
-                'object_type'  => isset($source['object_type'])  ? (string) $source['object_type']  : null,
+            $observationData = [
+                'source_id'  => $sourceId,
+                'frame_id'   => $id,
+                'ra'         => $ra,
+                'dec'        => $dec,
+                'mag'        => $mag !== null ? (float) $mag : null,
+                'mag_err'    => isset($source['mag_err']) ? (float) $source['mag_err'] : null,
+                'flux'       => isset($source['flux']) ? (float) $source['flux'] : null,
+                'flux_err'   => isset($source['flux_err']) ? (float) $source['flux_err'] : null,
+                'fwhm'       => isset($source['fwhm']) ? (float) $source['fwhm'] : null,
+                'snr'        => isset($source['snr']) ? (float) $source['snr'] : null,
+                'elongation' => isset($source['elongation']) ? (float) $source['elongation'] : null,
+                'obs_time'   => $obsTime,
             ];
 
-            $rows[] = $row;
+            $observationModel->insert($observationData);
+
+            // Link source to frame
+            $frameSourceModel->linkSourceToFrame($id, $sourceId);
         }
 
-        // All sources were invalid (missing/non-numeric ra or dec)
-        if (count($rows) === 0 && $skipped > 0) {
+        // All sources were invalid
+        if ($newSources + $matchedSources === 0 && $skipped > 0) {
             return $this->respondError(422, 'No valid sources: every source was missing a numeric ra or dec');
         }
 
-        // ----------------------------------------------------------------
-        // Batch insert
-        // ----------------------------------------------------------------
-        $sourceModel = new SourceModel();
-
-        if ($sourceModel->insertBatch($rows) === false) {
-            log_message('error', 'FramesController::saveSources — insertBatch failed for frame_id=' . $id);
-
-            return $this->respondError(500, 'Failed to save sources');
-        }
-
         return $this->respondCreated([
-            'message' => 'Sources saved successfully',
-            'count'   => count($rows),
+            'message'         => 'Sources saved successfully',
+            'count'           => $newSources + $matchedSources,
+            'new_sources'     => $newSources,
+            'matched_sources' => $matchedSources,
         ]);
     }
 
@@ -245,9 +318,9 @@ class FramesController extends BaseApiController
      * Save classified anomalies for a previously registered frame.
      * An empty anomalies array is valid and results in a 201 with count 0 and alerts 0.
      *
-     * @param int|string $id Frame primary key from the URL segment.
+     * @param string $id Frame primary key from the URL segment.
      */
-    public function saveAnomalies(int|string $id): ResponseInterface
+    public function saveAnomalies(string $id): ResponseInterface
     {
         $body = $this->request->getJSON(true);
 
@@ -274,8 +347,8 @@ class FramesController extends BaseApiController
         // ----------------------------------------------------------------
         $frameModel = new FrameModel();
 
-        if ($frameModel->find((int) $id) === null) {
-            return $this->respondError(404, 'Frame not found', ['frame_id' => (int) $id]);
+        if ($frameModel->find($id) === null) {
+            return $this->respondError(404, 'Frame not found', ['frame_id' => $id]);
         }
 
         // ----------------------------------------------------------------
@@ -292,11 +365,6 @@ class FramesController extends BaseApiController
         }
 
         // ----------------------------------------------------------------
-        // Alert-worthy anomaly types — these set is_alert = 1
-        // ----------------------------------------------------------------
-        $alertTypes = ['SUPERNOVA_CANDIDATE', 'MOVING_UNKNOWN', 'SPACE_DEBRIS', 'UNKNOWN'];
-
-        // ----------------------------------------------------------------
         // Build rows, flattening the optional ephemeris nested object
         // ----------------------------------------------------------------
         $rows       = [];
@@ -308,14 +376,15 @@ class FramesController extends BaseApiController
                 : [];
 
             $type    = isset($anomaly['anomaly_type']) ? (string) $anomaly['anomaly_type'] : '';
-            $isAlert = in_array($type, $alertTypes, strict: true) ? 1 : 0;
+            $isAlert = AnomalyModel::isAlertType($type) ? 1 : 0;
 
             if ($isAlert === 1) {
                 $alertCount++;
             }
 
             $row = [
-                'frame_id'     => (int) $id,
+                'frame_id'     => $id,
+                'source_id'    => $anomaly['source_id'] ?? null,
                 'anomaly_type' => $type,
                 'ra'           => isset($anomaly['ra'])  ? (float) $anomaly['ra']  : 0.0,
                 'dec'          => isset($anomaly['dec']) ? (float) $anomaly['dec'] : 0.0,

@@ -3,6 +3,10 @@
 namespace App\Controllers\Api\V1;
 
 use App\Controllers\BaseApiController;
+use App\Models\FrameModel;
+use App\Models\FrameSourceModel;
+use App\Models\SourceModel;
+use App\Models\SourceObservationModel;
 use CodeIgniter\HTTP\ResponseInterface;
 
 class SourcesController extends BaseApiController
@@ -10,33 +14,31 @@ class SourcesController extends BaseApiController
     /**
      * GET /api/v1/sources/near
      *
-     * Cone search for historical sources near a sky position.
+     * Cone search for sources near a sky position.
      * Uses a bounding-box pre-filter on indexed (ra, dec) columns, then
      * applies the Haversine formula in PHP for precise distance filtering.
      */
     public function near(): ResponseInterface
     {
-        $ra            = $this->request->getGet('ra');
-        $dec           = $this->request->getGet('dec');
-        $radiusArcsec  = $this->request->getGet('radius_arcsec');
-        $beforeTime    = $this->request->getGet('before_time');
+        $ra           = $this->request->getGet('ra');
+        $dec          = $this->request->getGet('dec');
+        $radiusArcsec = $this->request->getGet('radius_arcsec');
 
         // ----------------------------------------------------------------
-        // Presence check — all four params are required
+        // Presence check — ra, dec, radius_arcsec are required
         // ----------------------------------------------------------------
         $missing = [];
 
         if ($ra === null || $ra === '')           { $missing[] = 'ra'; }
         if ($dec === null || $dec === '')         { $missing[] = 'dec'; }
         if ($radiusArcsec === null || $radiusArcsec === '') { $missing[] = 'radius_arcsec'; }
-        if ($beforeTime === null || $beforeTime === '')     { $missing[] = 'before_time'; }
 
         if (! empty($missing)) {
             return $this->respondError(400, 'Missing required query parameters', ['missing' => $missing]);
         }
 
         // ----------------------------------------------------------------
-        // Numeric type validation for sky coordinates and radius
+        // Numeric type validation
         // ----------------------------------------------------------------
         if (! is_numeric($ra)) {
             return $this->respondError(400, 'Invalid parameter: ra must be numeric');
@@ -55,64 +57,184 @@ class SourcesController extends BaseApiController
         $radiusArcsec = (float) $radiusArcsec;
 
         // ----------------------------------------------------------------
-        // Parse before_time (ISO 8601) → MySQL DATETIME string
-        // ----------------------------------------------------------------
-        $beforeTimestamp = strtotime($beforeTime);
-
-        if ($beforeTimestamp === false) {
-            return $this->respondError(400, 'Invalid parameter: before_time must be a valid ISO 8601 datetime string');
-        }
-
-        $beforeMysql = date('Y-m-d H:i:s', $beforeTimestamp);
-
-        // ----------------------------------------------------------------
         // Bounding-box pre-filter — uses the (ra, dec) index on sources
-        // and the obs_time index on frames to narrow the candidate set.
-        // The bounding box is a square in degree-space whose half-width
-        // equals radius_arcsec converted to degrees.
         // ----------------------------------------------------------------
         $deg = $radiusArcsec / 3600.0;
 
-        $db = \Config\Database::connect();
+        $sourceModel = new SourceModel();
 
-        $candidates = $db->table('sources s')
-            ->select('s.ra, s.dec, s.mag, s.flux, s.frame_id, f.obs_time')
-            ->join('frames f', 's.frame_id = f.id', 'inner')
-            ->where('s.ra >=', $ra - $deg)
-            ->where('s.ra <=', $ra + $deg)
-            ->where('s.dec >=', $dec - $deg)
-            ->where('s.dec <=', $dec + $deg)
-            ->where('f.obs_time <', $beforeMysql)
-            ->get()
-            ->getResult();
+        $candidates = $sourceModel
+            ->where('ra >=', $ra - $deg)
+            ->where('ra <=', $ra + $deg)
+            ->where('dec >=', $dec - $deg)
+            ->where('dec <=', $dec + $deg)
+            ->findAll();
 
         // ----------------------------------------------------------------
         // Haversine precise filter — discard candidates outside the circle
         // ----------------------------------------------------------------
         $results = [];
 
-        foreach ($candidates as $row) {
-            $distance = $this->haversineArcsec($ra, $dec, (float) $row->ra, (float) $row->dec);
+        foreach ($candidates as $source) {
+            $distance = $this->haversineArcsec($ra, $dec, (float) $source['ra'], (float) $source['dec']);
 
             if ($distance > $radiusArcsec) {
                 continue;
             }
 
-            // Normalise obs_time to ISO 8601 UTC string
-            $obsTimeIso = (new \DateTime($row->obs_time, new \DateTimeZone('UTC')))
-                ->format('Y-m-d\TH:i:s\Z');
-
             $results[] = [
-                'ra'       => (float) $row->ra,
-                'dec'      => (float) $row->dec,
-                'mag'      => $row->mag !== null ? (float) $row->mag : null,
-                'flux'     => $row->flux !== null ? (float) $row->flux : null,
-                'frame_id' => (string) $row->frame_id,
-                'obs_time' => $obsTimeIso,
+                'id'                => $source['id'],
+                'ra'                => (float) $source['ra'],
+                'dec'               => (float) $source['dec'],
+                'catalog_name'      => $source['catalog_name'],
+                'catalog_id'        => $source['catalog_id'],
+                'object_type'       => $source['object_type'],
+                'observation_count' => (int) $source['observation_count'],
+                'last_observed_at'  => $source['last_observed_at']
+                    ? gmdate('Y-m-d\TH:i:s\Z', strtotime($source['last_observed_at']))
+                    : null,
             ];
         }
 
         return $this->respondOk(['data' => $results]);
+    }
+
+    /**
+     * GET /api/v1/sources/{id}/observations
+     *
+     * Get the observation history (light curve data) for a specific source.
+     *
+     * Query parameters:
+     *   from_time  string  ISO 8601 — observations after this time (optional)
+     *   to_time    string  ISO 8601 — observations before this time (optional)
+     *   limit      int     Max observations to return (default 1000)
+     */
+    public function observations(string $id): ResponseInterface
+    {
+        // ----------------------------------------------------------------
+        // Verify source exists
+        // ----------------------------------------------------------------
+        $sourceModel = new SourceModel();
+        $source      = $sourceModel->find($id);
+
+        if ($source === null) {
+            return $this->respondError(404, 'Source not found', ['source_id' => $id]);
+        }
+
+        // ----------------------------------------------------------------
+        // Parse optional query parameters
+        // ----------------------------------------------------------------
+        $fromTime = $this->request->getGet('from_time');
+        $toTime   = $this->request->getGet('to_time');
+        $limit    = $this->request->getGet('limit');
+
+        $fromMysql = null;
+        $toMysql   = null;
+        $limitInt  = 1000;
+
+        if ($fromTime !== null && $fromTime !== '') {
+            $timestamp = strtotime($fromTime);
+            if ($timestamp !== false) {
+                $fromMysql = date('Y-m-d H:i:s', $timestamp);
+            }
+        }
+
+        if ($toTime !== null && $toTime !== '') {
+            $timestamp = strtotime($toTime);
+            if ($timestamp !== false) {
+                $toMysql = date('Y-m-d H:i:s', $timestamp);
+            }
+        }
+
+        if ($limit !== null && is_numeric($limit) && (int) $limit > 0) {
+            $limitInt = min((int) $limit, 10000); // Cap at 10k
+        }
+
+        // ----------------------------------------------------------------
+        // Get observations
+        // ----------------------------------------------------------------
+        $observationModel = new SourceObservationModel();
+        $observations     = $observationModel->getObservationsForSource($id, $fromMysql, $toMysql, $limitInt);
+
+        // Format observations
+        $formattedObs = [];
+        foreach ($observations as $obs) {
+            $formattedObs[] = [
+                'frame_id'   => $obs['frame_id'],
+                'obs_time'   => gmdate('Y-m-d\TH:i:s\Z', strtotime($obs['obs_time'])),
+                'mag'        => $obs['mag'] !== null ? (float) $obs['mag'] : null,
+                'mag_err'    => $obs['mag_err'] !== null ? (float) $obs['mag_err'] : null,
+                'flux'       => $obs['flux'] !== null ? (float) $obs['flux'] : null,
+                'fwhm'       => $obs['fwhm'] !== null ? (float) $obs['fwhm'] : null,
+                'snr'        => $obs['snr'] !== null ? (float) $obs['snr'] : null,
+            ];
+        }
+
+        return $this->respondOk([
+            'source' => [
+                'id'           => $source['id'],
+                'ra'           => (float) $source['ra'],
+                'dec'          => (float) $source['dec'],
+                'catalog_name' => $source['catalog_name'],
+                'object_type'  => $source['object_type'],
+            ],
+            'observations' => $formattedObs,
+        ]);
+    }
+
+    /**
+     * GET /api/v1/sources/{id}/frames
+     *
+     * Get all frames that contain a specific source.
+     */
+    public function frames(string $id): ResponseInterface
+    {
+        // ----------------------------------------------------------------
+        // Verify source exists
+        // ----------------------------------------------------------------
+        $sourceModel = new SourceModel();
+        $source      = $sourceModel->find($id);
+
+        if ($source === null) {
+            return $this->respondError(404, 'Source not found', ['source_id' => $id]);
+        }
+
+        // ----------------------------------------------------------------
+        // Get linked frames
+        // ----------------------------------------------------------------
+        $frameSourceModel = new FrameSourceModel();
+        $frameIds         = $frameSourceModel->getFrameIdsForSource($id);
+
+        if (empty($frameIds)) {
+            return $this->respondOk([
+                'source_id' => $id,
+                'data'      => [],
+            ]);
+        }
+
+        // ----------------------------------------------------------------
+        // Fetch frame details
+        // ----------------------------------------------------------------
+        $frameModel = new FrameModel();
+        $frames     = $frameModel->whereIn('id', $frameIds)
+            ->orderBy('obs_time', 'ASC')
+            ->findAll();
+
+        $formattedFrames = [];
+        foreach ($frames as $frame) {
+            $formattedFrames[] = [
+                'frame_id'   => $frame['id'],
+                'filename'   => $frame['filename'],
+                'obs_time'   => gmdate('Y-m-d\TH:i:s\Z', strtotime($frame['obs_time'])),
+                'ra_center'  => (float) $frame['ra_center'],
+                'dec_center' => (float) $frame['dec_center'],
+            ];
+        }
+
+        return $this->respondOk([
+            'source_id' => $id,
+            'data'      => $formattedFrames,
+        ]);
     }
 
     /**
