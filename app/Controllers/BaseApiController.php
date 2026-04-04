@@ -2,15 +2,15 @@
 
 namespace App\Controllers;
 
+use CodeIgniter\Controller;
 use CodeIgniter\HTTP\ResponseInterface;
 
 /**
  * BaseApiController
  *
  * Shared response helpers for all API controllers.
- * Extend this instead of BaseController in the Api namespace.
  */
-class BaseApiController extends BaseController
+class BaseApiController extends Controller
 {
     /**
      * Return a 201 Created JSON response.

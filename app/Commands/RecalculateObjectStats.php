@@ -85,7 +85,7 @@ class RecalculateObjectStats extends BaseCommand
 
         $frames = $db->table('frames')
             ->select('object, filter, exptime, obs_time, qc_fwhm_median, airmass')
-            ->whereNotNull('object')
+            ->where('object IS NOT NULL')
             ->where('object !=', '')
             ->orderBy('obs_time', 'ASC')
             ->get()
