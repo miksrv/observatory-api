@@ -1,0 +1,34 @@
+# docker-compose.yml (updated to remove obsolete 'version' and fix port mapping)
+# docker compose -f docker-compose.yml up -d
+name: database
+services:
+  observatory-api:
+    container_name: observatory-api
+    image: mariadb:10.5.8
+    restart: always
+    environment:
+      MYSQL_DATABASE: 'db'
+      MYSQL_USER: 'user'
+      MYSQL_PASSWORD: 'password'
+      MYSQL_ROOT_PASSWORD: 'password'
+    ports:
+      - '3306:3306'
+    volumes:
+      - database:/var/lib/mysql
+
+#  php-api:
+#    build: .
+#    container_name: observatory-php-api
+#    working_dir: /var/www/html
+#    volumes:
+#      - .:/var/www/html
+#    ports:
+#      - "8080:80"
+#    depends_on:
+#      - observatory-api
+#    environment:
+#      - CI_ENVIRONMENT=development
+
+volumes:
+  database:
+    name: observatory-api
