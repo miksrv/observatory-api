@@ -193,7 +193,12 @@ Each source requires: `ra`, `dec`. All other source fields are optional (nullabl
 
 **Response `201 Created`:**
 ```json
-{ "message": "Sources saved successfully", "count": 3 }
+{ 
+  "message": "Sources saved successfully", 
+  "count": 287,
+  "new_sources": 12,
+  "matched_sources": 275
+}
 ```
 
 **Errors:** `400` missing fields, `401` invalid key, `404` frame not found
@@ -245,13 +250,12 @@ The `alerts` count is the number of alert-worthy anomaly types:
 
 ### 4. GET /api/v1/sources/near
 
-Cone search for historical sources near a sky position.
+Cone search for sources in the catalog near a sky position.
 
 **Query parameters:**
 - `ra` (float, required) — right ascension in decimal degrees
 - `dec` (float, required) — declination in decimal degrees
 - `radius_arcsec` (float, required) — search radius in arcseconds
-- `before_time` (ISO 8601, required) — only return sources observed strictly before this time
 
 **Implementation note:** Use bounding-box WHERE clause on indexed `(ra, dec)` columns for
 speed, then filter precisely with the Haversine formula in PHP.
@@ -261,22 +265,85 @@ speed, then filter precisely with the Haversine formula in PHP.
 {
   "data": [
     {
+      "id": "6612f8a5e3b9c9.12345678",
       "ra": 202.4612,
       "dec": 47.1819,
-      "mag": 14.21,
-      "flux": 44850.0,
-      "frame_id": "38",
-      "obs_time": "2024-03-14T21:55:12Z"
+      "catalog_name": "Gaia DR3",
+      "catalog_id": "Gaia DR3 1234567890123456789",
+      "object_type": "STAR",
+      "observation_count": 15,
+      "last_observed_at": "2024-03-14T21:55:12Z"
     }
   ]
 }
 ```
 
-Returns `{"data": []}` when no prior detections exist.
+Returns `{"data": []}` when no sources found.
 
 ---
 
-### 5. GET /api/v1/frames/covering
+### 5. GET /api/v1/sources/{id}/observations
+
+Get the observation history (light curve data) for a specific source.
+
+**Query parameters (optional):**
+- `from_time` (ISO 8601) — observations after this time
+- `to_time` (ISO 8601) — observations before this time
+- `limit` (int) — max observations to return (default 1000)
+
+**Response `200 OK`:**
+```json
+{
+  "source": {
+    "id": "6612f8a5e3b9c9.12345678",
+    "ra": 202.4612,
+    "dec": 47.1819,
+    "catalog_name": "Gaia DR3",
+    "object_type": "STAR"
+  },
+  "observations": [
+    {
+      "frame_id": "6612f7b2a1234.87654321",
+      "obs_time": "2024-03-14T21:55:12Z",
+      "mag": 14.21,
+      "mag_err": 0.02,
+      "flux": 44850.0,
+      "fwhm": 3.1,
+      "snr": 125.5
+    }
+  ]
+}
+```
+
+**Errors:** `404` source not found
+
+---
+
+### 6. GET /api/v1/sources/{id}/frames
+
+Get all frames that contain a specific source.
+
+**Response `200 OK`:**
+```json
+{
+  "source_id": "6612f8a5e3b9c9.12345678",
+  "data": [
+    {
+      "frame_id": "6612f7b2a1234.87654321",
+      "filename": "frame_20240314_215512.fits",
+      "obs_time": "2024-03-14T21:55:12Z",
+      "ra_center": 202.470,
+      "dec_center": 47.195
+    }
+  ]
+}
+```
+
+**Errors:** `404` source not found
+
+---
+
+### 7. GET /api/v1/frames/covering
 
 Returns frames whose field of view covered a sky point, observed before a given time.
 
@@ -309,13 +376,163 @@ Returns `{"data": []}` when no prior coverage exists.
 
 ---
 
+### 8. POST /api/v1/sources/near/batch
+
+Batch cone search for sources near multiple sky positions.
+Reduces API calls from O(N) to O(1) when processing frames with many sources.
+
+**Request body:**
+```json
+{
+  "positions": [
+    {"ra": 202.461, "dec": 47.182},
+    {"ra": 202.478, "dec": 47.201},
+    {"ra": 202.490, "dec": 47.195}
+  ],
+  "radius_arcsec": 5.0,
+  "before_time": "2024-03-15T22:01:34Z"
+}
+```
+
+**Required fields:** `positions`, `radius_arcsec`
+**Optional fields:** `before_time`
+
+**Response `200 OK`:**
+```json
+{
+  "results": {
+    "0": [
+      {
+        "id": "6612f8a5e3b9c9.12345678",
+        "ra": 202.4612,
+        "dec": 47.1819,
+        "catalog_name": "Gaia DR3",
+        "object_type": "STAR",
+        "observation_count": 15,
+        "last_observed_at": "2024-03-14T21:55:12Z"
+      }
+    ],
+    "1": [],
+    "2": [...]
+  }
+}
+```
+
+**Errors:** `400` missing required fields, `401` invalid key
+
+---
+
+### 9. POST /api/v1/frames/covering/batch
+
+Batch lookup for frames covering multiple sky positions.
+Reduces API calls from O(N) to O(1).
+
+**Request body:**
+```json
+{
+  "positions": [
+    {"ra": 202.461, "dec": 47.182},
+    {"ra": 202.478, "dec": 47.201}
+  ],
+  "before_time": "2024-03-15T22:01:34Z"
+}
+```
+
+**Required fields:** `positions`, `before_time`
+
+**Response `200 OK`:**
+```json
+{
+  "results": {
+    "0": [
+      {
+        "id": "6612f7b2a1234.87654321",
+        "filename": "frame_20240314_215512.fits",
+        "obs_time": "2024-03-14T21:55:12Z",
+        "ra_center": 202.470,
+        "dec_center": 47.195,
+        "fov_deg": 1.25
+      }
+    ],
+    "1": [...]
+  }
+}
+```
+
+**Errors:** `400` missing required fields, `401` invalid key
+
+---
+
+### 10. GET /api/v1/stats/objects
+
+Get a list of all observed objects with their aggregated statistics.
+
+**Query parameters (optional):**
+- `object` — partial match filter on object name
+
+**Response `200 OK`:**
+```json
+{
+  "data": [
+    {
+      "object": "M51",
+      "total_frames": 150,
+      "total_exposure_sec": 18000.0,
+      "total_exposure_hours": 5.0,
+      "filters": ["L", "R", "G", "B", "Ha"],
+      "first_obs_time": "2024-01-15T20:30:00Z",
+      "last_obs_time": "2024-03-15T22:01:34Z"
+    }
+  ]
+}
+```
+
+Returns `{"data": []}` when no statistics exist.
+
+---
+
+### 11. GET /api/v1/stats/objects/{object}
+
+Get detailed statistics for a specific object, broken down by filter.
+
+**Response `200 OK`:**
+```json
+{
+  "object": "M51",
+  "summary": {
+    "total_frames": 150,
+    "total_exposure_sec": 18000.0,
+    "total_exposure_hours": 5.0,
+    "first_obs_time": "2024-01-15T20:30:00Z",
+    "last_obs_time": "2024-03-15T22:01:34Z"
+  },
+  "by_filter": [
+    {
+      "filter": "L",
+      "frame_count": 50,
+      "total_exposure_sec": 6000.0,
+      "avg_fwhm": 2.8,
+      "avg_airmass": 1.15,
+      "first_obs_time": "2024-01-15T20:30:00Z",
+      "last_obs_time": "2024-03-15T22:01:34Z"
+    }
+  ]
+}
+```
+
+**Errors:** `404` object not found in statistics
+
+---
+
 ## Database Schema
+
+All tables use `CHAR(24)` primary keys with `uniqid('', true)` generated IDs (no auto_increment).
 
 ### Table: `frames`
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `id` | INT UNSIGNED AUTO_INCREMENT PK | |
+| `id` | CHAR(24) PK | Generated by BaseModel |
 | `filename` | VARCHAR(255) NOT NULL | FITS filename |
 | `original_filepath` | VARCHAR(500) | Full path after archiving |
 | `obs_time` | DATETIME NOT NULL | Observation start time UTC |
@@ -358,25 +575,67 @@ Returns `{"data": []}` when no prior coverage exists.
 
 ---
 
-### Table: `sources`
+### Table: `sources` (Source Catalog)
+
+Master catalog of unique celestial sources. One record = one celestial object.
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `id` | BIGINT UNSIGNED AUTO_INCREMENT PK | |
-| `frame_id` | INT UNSIGNED NOT NULL FK→frames.id | |
-| `ra` | DOUBLE NOT NULL | Source RA (degrees) |
-| `dec` | DOUBLE NOT NULL | Source Dec (degrees) |
-| `mag` | FLOAT | Calibrated magnitude |
-| `flux` | FLOAT | Aperture flux (ADU) |
-| `fwhm` | FLOAT | PSF FWHM (arcsec) |
-| `catalog_name` | VARCHAR(50) | Gaia DR3 / Simbad / MPC / null |
+| `id` | CHAR(24) PK | Generated by BaseModel |
+| `ra` | DOUBLE NOT NULL | Canonical RA (degrees) |
+| `dec` | DOUBLE NOT NULL | Canonical Dec (degrees) |
+| `catalog_name` | VARCHAR(50) | Gaia DR3 / Simbad / APASS / null |
 | `catalog_id` | VARCHAR(255) | Catalog identifier |
-| `catalog_mag` | FLOAT | Catalog reference magnitude |
-| `object_type` | VARCHAR(50) | STAR / V* / ASTEROID / etc. |
+| `catalog_mag` | FLOAT | Reference magnitude from catalog |
+| `object_type` | VARCHAR(50) | STAR / GALAXY / V* / ASTEROID / etc. |
+| `first_observed_at` | DATETIME | When first detected |
+| `last_observed_at` | DATETIME | When last detected |
+| `observation_count` | INT DEFAULT 0 | Number of observations |
 | `created_at` | DATETIME | |
 
-**Indexes:** `(ra, dec)`, `frame_id`, `catalog_name`
-Spatial index or composite index on `(ra, dec)` is critical for cone search performance.
+**Indexes:** `(ra, dec)` — critical for cone search, `catalog_name`, `object_type`
+
+**Matching logic:** When saving sources, search within 2 arcsec radius. If found, reuse existing source.
+
+---
+
+### Table: `source_observations` (Photometry History)
+
+Time-varying measurements of each source. Key table for light curves and variability analysis.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | CHAR(24) PK | Generated by BaseModel |
+| `source_id` | CHAR(24) NOT NULL FK→sources.id | |
+| `frame_id` | CHAR(24) NOT NULL FK→frames.id | |
+| `ra` | DOUBLE NOT NULL | Measured RA (may differ slightly) |
+| `dec` | DOUBLE NOT NULL | Measured Dec |
+| `mag` | FLOAT | Calibrated magnitude |
+| `mag_err` | FLOAT | Magnitude error |
+| `flux` | FLOAT | Aperture flux (ADU) |
+| `flux_err` | FLOAT | Flux error |
+| `fwhm` | FLOAT | PSF FWHM (arcsec) |
+| `snr` | FLOAT | Signal-to-noise ratio |
+| `elongation` | FLOAT | PSF elongation |
+| `obs_time` | DATETIME NOT NULL | Observation timestamp |
+| `created_at` | DATETIME | |
+
+**Indexes:** `source_id`, `frame_id`, `obs_time`, `(source_id, obs_time)`
+
+---
+
+### Table: `frame_sources` (Many-to-Many Link)
+
+Quick lookup linking frames to sources.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | CHAR(24) PK | Generated by BaseModel |
+| `frame_id` | CHAR(24) NOT NULL FK→frames.id | |
+| `source_id` | CHAR(24) NOT NULL FK→sources.id | |
+| `created_at` | DATETIME | |
+
+**Indexes:** `frame_id`, `source_id`, UNIQUE `(frame_id, source_id)`
 
 ---
 
@@ -384,8 +643,9 @@ Spatial index or composite index on `(ra, dec)` is critical for cone search perf
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `id` | INT UNSIGNED AUTO_INCREMENT PK | |
-| `frame_id` | INT UNSIGNED NOT NULL FK→frames.id | |
+| `id` | CHAR(24) PK | Generated by BaseModel |
+| `frame_id` | CHAR(24) NOT NULL FK→frames.id | |
+| `source_id` | CHAR(24) NULL FK→sources.id | Link to source if identified |
 | `anomaly_type` | VARCHAR(30) NOT NULL | Classification type |
 | `ra` | DOUBLE NOT NULL | |
 | `dec` | DOUBLE NOT NULL | |
@@ -401,7 +661,78 @@ Spatial index or composite index on `(ra, dec)` is critical for cone search perf
 | `is_alert` | TINYINT(1) DEFAULT 0 | 1 for alert-worthy types |
 | `created_at` | DATETIME | |
 
-**Indexes:** `frame_id`, `anomaly_type`, `is_alert`, `(ra, dec)`
+**Indexes:** `frame_id`, `source_id`, `anomaly_type`, `is_alert`, `(ra, dec)`
+
+---
+
+### Table: `object_stats` (Pre-aggregated Statistics)
+
+Stores aggregated statistics per object+filter combination. Updated incrementally when frames are registered.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | CHAR(24) PK | Generated by BaseModel |
+| `object` | VARCHAR(100) NOT NULL | Target name (M51, NGC 7000, etc.) |
+| `filter` | VARCHAR(50) NULL | Filter name (L, R, Ha, NULL for unfiltered) |
+| `frame_count` | INT DEFAULT 0 | Number of frames |
+| `total_exposure_sec` | FLOAT DEFAULT 0 | Sum of all exptime values |
+| `first_obs_time` | DATETIME | Earliest observation time |
+| `last_obs_time` | DATETIME | Latest observation time |
+| `avg_fwhm` | FLOAT | Average FWHM across frames |
+| `avg_airmass` | FLOAT | Average airmass |
+| `created_at` | DATETIME | |
+| `updated_at` | DATETIME | Auto-updated on change |
+
+**Indexes:** `object`, `filter`, `(object, filter)`
+
+**Note:** Statistics are updated automatically when frames are registered via POST /api/v1/frames.
+Use `php spark recalculate:object-stats` to rebuild statistics from scratch.
+
+---
+
+## Database Schema Diagram
+
+```
+┌─────────────────┐       ┌─────────────────────┐       ┌──────────────────┐
+│     frames      │       │ source_observations │       │     sources      │
+├─────────────────┤       ├─────────────────────┤       ├──────────────────┤
+│ id (CHAR 24 PK) │◄──────│ frame_id (FK)       │       │ id (CHAR 24 PK)  │
+│ filename        │       │ source_id (FK)      │──────►│ ra, dec          │
+│ obs_time        │       │ ra, dec (measured)  │       │ catalog_name     │
+│ ra_center       │       │ mag, flux, fwhm     │       │ catalog_id       │
+│ dec_center      │       │ snr, elongation     │       │ object_type      │
+│ fov_deg         │       │ obs_time            │       │ observation_count│
+│ ...             │       └─────────────────────┘       │ first/last_obs   │
+└─────────────────┘                                     └──────────────────┘
+        │                                                        ▲
+        │           ┌─────────────────┐                          │
+        └──────────►│  frame_sources  │◄─────────────────────────┘
+                    ├─────────────────┤
+                    │ frame_id (FK)   │
+                    │ source_id (FK)  │
+                    └─────────────────┘
+
+┌─────────────────┐
+│    anomalies    │
+├─────────────────┤
+│ id (CHAR 24 PK) │
+│ frame_id (FK)   │──────► frames
+│ source_id (FK)  │──────► sources (optional)
+│ anomaly_type    │
+│ ra, dec         │
+│ magnitude       │
+│ is_alert        │
+│ ...             │
+└─────────────────┘
+```
+
+**Key relationships:**
+- One **source** = one celestial object at fixed coordinates
+- One **source_observation** = one measurement of a source in one frame
+- One **frame** can contain many sources (via `frame_sources`)
+- One **source** can appear in many frames (via `frame_sources`)
+- **anomalies** are linked to frames, optionally to sources
+- **object_stats** = pre-aggregated statistics per object+filter (updated on frame insert)
 
 ---
 
