@@ -41,7 +41,10 @@ final class FramesCreateTest extends CIUnitTestCase
     {
         $db = \Config\Database::connect('default');
         $db->query('DELETE FROM anomalies');
+        $db->query('DELETE FROM frame_sources');
+        $db->query('DELETE FROM source_observations');
         $db->query('DELETE FROM sources');
+        $db->query('DELETE FROM object_stats');
         $db->query('DELETE FROM frames');
     }
 

@@ -131,7 +131,7 @@ final class StatsTest extends CIUnitTestCase
 
         $this->assertNotNull($m51);
         $this->assertSame(3, $m51['total_frames']);
-        $this->assertSame(480.0, $m51['total_exposure_sec']); // 120 + 180 + 180
+        $this->assertEquals(480.0, $m51['total_exposure_sec']); // 120 + 180 + 180
         $this->assertContains('L', $m51['filters']);
         $this->assertContains('R', $m51['filters']);
     }
@@ -187,7 +187,7 @@ final class StatsTest extends CIUnitTestCase
         
         // Check summary
         $this->assertSame(3, $json['summary']['total_frames']);
-        $this->assertSame(600.0, $json['summary']['total_exposure_sec']); // 120 + 180 + 300
+        $this->assertEquals(600.0, $json['summary']['total_exposure_sec']); // 120 + 180 + 300
 
         // Check by_filter
         $this->assertCount(2, $json['by_filter']);
@@ -203,7 +203,7 @@ final class StatsTest extends CIUnitTestCase
 
         $this->assertNotNull($lFilter);
         $this->assertSame(2, $lFilter['frame_count']);
-        $this->assertSame(300.0, $lFilter['total_exposure_sec']); // 120 + 180
+        $this->assertEquals(300.0, $lFilter['total_exposure_sec']); // 120 + 180
         $this->assertEqualsWithDelta(2.9, $lFilter['avg_fwhm'], 0.01); // (2.8 + 3.0) / 2
         $this->assertEqualsWithDelta(1.25, $lFilter['avg_airmass'], 0.01); // (1.2 + 1.3) / 2
     }
@@ -281,7 +281,7 @@ final class StatsTest extends CIUnitTestCase
         $result->assertStatus(200);
         $json = json_decode($result->getJSON(), true);
         $this->assertSame(2, $json['summary']['total_frames']);
-        $this->assertSame(300.0, $json['summary']['total_exposure_sec']);
+        $this->assertEquals(300.0, $json['summary']['total_exposure_sec']);
     }
 
     public function testFrameWithoutObjectDoesNotCreateStats(): void

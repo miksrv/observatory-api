@@ -31,7 +31,10 @@ final class FramesCoveringTest extends CIUnitTestCase
     {
         $db = \Config\Database::connect('default');
         $db->query('DELETE FROM anomalies');
+        $db->query('DELETE FROM frame_sources');
+        $db->query('DELETE FROM source_observations');
         $db->query('DELETE FROM sources');
+        $db->query('DELETE FROM object_stats');
         $db->query('DELETE FROM frames');
     }
 
@@ -45,16 +48,18 @@ final class FramesCoveringTest extends CIUnitTestCase
     }
 
     /**
-     * Insert a frame directly into the DB. Returns the frame id.
+     * Insert a frame directly into the DB. Returns the frame id (string).
      */
     private function createFrame(
         float  $raCenterDeg  = 202.4696,
         float  $decCenterDeg = 47.1952,
         float  $fovDeg       = 1.25,
         string $obsTime      = '2024-03-15 22:01:34'
-    ): int {
+    ): string {
         $db = \Config\Database::connect('default');
+        $id = uniqid('', true);
         $db->table('frames')->insert([
+            'id'           => $id,
             'filename'     => 'covering_test_' . uniqid() . '.fits',
             'obs_time'     => $obsTime,
             'ra_center'    => $raCenterDeg,
@@ -63,7 +68,7 @@ final class FramesCoveringTest extends CIUnitTestCase
             'quality_flag' => 'OK',
         ]);
 
-        return (int) $db->insertID();
+        return $id;
     }
 
     // -------------------------------------------------------------------------

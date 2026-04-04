@@ -30,7 +30,10 @@ final class AnomaliesTest extends CIUnitTestCase
     {
         $db = \Config\Database::connect('default');
         $db->query('DELETE FROM anomalies');
+        $db->query('DELETE FROM frame_sources');
+        $db->query('DELETE FROM source_observations');
         $db->query('DELETE FROM sources');
+        $db->query('DELETE FROM object_stats');
         $db->query('DELETE FROM frames');
     }
 
@@ -43,10 +46,12 @@ final class AnomaliesTest extends CIUnitTestCase
         return ['X-API-Key' => self::API_KEY];
     }
 
-    private function createFrame(): int
+    private function createFrame(): string
     {
         $db = \Config\Database::connect('default');
+        $id = uniqid('', true);
         $db->table('frames')->insert([
+            'id'           => $id,
             'filename'     => 'anomaly_test_' . uniqid() . '.fits',
             'obs_time'     => '2024-03-15 22:01:34',
             'ra_center'    => 202.4696,
@@ -55,10 +60,10 @@ final class AnomaliesTest extends CIUnitTestCase
             'quality_flag' => 'OK',
         ]);
 
-        return (int) $db->insertID();
+        return $id;
     }
 
-    private function anomaliesEndpoint(int $frameId): string
+    private function anomaliesEndpoint(string $frameId): string
     {
         return "/api/v1/frames/{$frameId}/anomalies";
     }
@@ -185,7 +190,7 @@ final class AnomaliesTest extends CIUnitTestCase
     {
         $result = $this->withHeaders($this->authHeaders())
             ->withBodyFormat('json')
-            ->post('/api/v1/frames/999999/anomalies', [
+            ->post('/api/v1/frames/nonexistent.12345678/anomalies', [
                 'filename'  => 'test.fits',
                 'anomalies' => [],
             ]);
@@ -210,7 +215,7 @@ final class AnomaliesTest extends CIUnitTestCase
     public function testNoApiKeyReturns401(): void
     {
         $result = $this->withBodyFormat('json')
-            ->post('/api/v1/frames/1/anomalies', [
+            ->post('/api/v1/frames/anyid.12345678/anomalies', [
                 'filename'  => 'test.fits',
                 'anomalies' => [],
             ]);
