@@ -22,8 +22,6 @@ class FramesController extends BaseApiController
     {
         $body = $this->request->getJSON(true);
 
-        // Log incoming JSON request
-        log_message('info', '[FramesController::create] Incoming JSON: ' . json_encode($body));
 
         if (! is_array($body)) {
             return $this->respondError(400, 'Request body must be valid JSON');
@@ -168,8 +166,6 @@ class FramesController extends BaseApiController
     {
         $body = $this->request->getJSON(true);
 
-        // Log incoming JSON request
-        log_message('info', '[FramesController::saveSources] frame_id=' . $id . ' Incoming JSON: ' . json_encode($body));
 
         if (! is_array($body)) {
             return $this->respondError(400, 'Request body must be valid JSON');
@@ -324,8 +320,6 @@ class FramesController extends BaseApiController
     {
         $body = $this->request->getJSON(true);
 
-        // Log incoming JSON request
-        log_message('info', '[FramesController::saveAnomalies] frame_id=' . $id . ' Incoming JSON: ' . json_encode($body));
 
         if (! is_array($body)) {
             return $this->respondError(400, 'Request body must be valid JSON');
@@ -552,6 +546,128 @@ class FramesController extends BaseApiController
         }
 
         return $this->respondOk(['data' => $results]);
+    }
+
+    /**
+     * POST /api/v1/frames/covering/batch
+     *
+     * Batch lookup for frames covering multiple sky positions.
+     * Reduces API calls from O(N) to O(1) when processing frames with many sources.
+     */
+    public function coveringBatch(): ResponseInterface
+    {
+        $body = $this->request->getJSON(true);
+
+
+        if (! is_array($body)) {
+            return $this->respondError(400, 'Request body must be valid JSON');
+        }
+
+        // ----------------------------------------------------------------
+        // Validate required fields
+        // ----------------------------------------------------------------
+        if (! isset($body['positions']) || ! is_array($body['positions'])) {
+            return $this->respondError(400, 'Missing required field: positions (must be an array)');
+        }
+
+        if (! isset($body['before_time']) || $body['before_time'] === '') {
+            return $this->respondError(400, 'Missing required field: before_time');
+        }
+
+        $positions  = $body['positions'];
+        $beforeTime = $body['before_time'];
+
+        // Parse before_time
+        $beforeTimestamp = strtotime($beforeTime);
+        if ($beforeTimestamp === false) {
+            return $this->respondError(400, 'Invalid before_time format');
+        }
+        $beforeMysql = date('Y-m-d H:i:s', $beforeTimestamp);
+
+        // ----------------------------------------------------------------
+        // Short-circuit for empty positions
+        // ----------------------------------------------------------------
+        if (count($positions) === 0) {
+            return $this->respondOk(['results' => new \stdClass()]);
+        }
+
+        // ----------------------------------------------------------------
+        // Validate positions and compute bounding box
+        // ----------------------------------------------------------------
+        $minRa  = PHP_FLOAT_MAX;
+        $maxRa  = PHP_FLOAT_MIN;
+        $minDec = PHP_FLOAT_MAX;
+        $maxDec = PHP_FLOAT_MIN;
+
+        foreach ($positions as $i => $pos) {
+            if (! isset($pos['ra']) || ! isset($pos['dec']) ||
+                ! is_numeric($pos['ra']) || ! is_numeric($pos['dec'])) {
+                return $this->respondError(400, "Invalid position at index {$i}: ra and dec must be numeric");
+            }
+
+            $ra  = (float) $pos['ra'];
+            $dec = (float) $pos['dec'];
+
+            $minRa  = min($minRa, $ra);
+            $maxRa  = max($maxRa, $ra);
+            $minDec = min($minDec, $dec);
+            $maxDec = max($maxDec, $dec);
+        }
+
+        // ----------------------------------------------------------------
+        // Single query to fetch all candidate frames
+        // We need to expand the bounding box by max possible FOV.
+        // Using a conservative margin of 5 degrees (covers most amateur setups).
+        // ----------------------------------------------------------------
+        $fovMargin = 5.0; // degrees
+        $db = \Config\Database::connect();
+
+        $candidates = $db->query(
+            'SELECT id, filename, obs_time, ra_center, dec_center, fov_deg
+               FROM frames
+              WHERE obs_time < ?
+                AND ra_center  BETWEEN ? AND ?
+                AND dec_center BETWEEN ? AND ?',
+            [
+                $beforeMysql,
+                $minRa - $fovMargin, $maxRa + $fovMargin,
+                $minDec - $fovMargin, $maxDec + $fovMargin
+            ]
+        )->getResultObject();
+
+
+        // ----------------------------------------------------------------
+        // For each position, check which frames cover it
+        // ----------------------------------------------------------------
+        $results = [];
+        $totalMatches = 0;
+
+        foreach ($positions as $i => $pos) {
+            $ra  = (float) $pos['ra'];
+            $dec = (float) $pos['dec'];
+            $posResults = [];
+
+            foreach ($candidates as $frame) {
+                $distArcsec   = $this->haversineArcsec($ra, $dec, (float) $frame->ra_center, (float) $frame->dec_center);
+                $radiusArcsec = ((float) $frame->fov_deg / 2.0) * 3600.0;
+
+                if ($distArcsec <= $radiusArcsec) {
+                    $posResults[] = [
+                        'id'         => (string) $frame->id,
+                        'filename'   => $frame->filename,
+                        'obs_time'   => gmdate('Y-m-d\TH:i:s\Z', strtotime($frame->obs_time)),
+                        'ra_center'  => (float) $frame->ra_center,
+                        'dec_center' => (float) $frame->dec_center,
+                        'fov_deg'    => (float) $frame->fov_deg,
+                    ];
+                }
+            }
+
+            $results[(string) $i] = $posResults;
+            $totalMatches += count($posResults);
+        }
+        
+        return $this->respondOk(['results' => $results]);
     }
 
     /**

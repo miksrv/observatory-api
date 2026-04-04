@@ -238,6 +238,136 @@ class SourcesController extends BaseApiController
     }
 
     /**
+     * POST /api/v1/sources/near/batch
+     *
+     * Batch cone search for sources near multiple sky positions.
+     * Returns historical observations (mag, flux, frame_id, obs_time) for anomaly detection.
+     * Reduces API calls from O(N) to O(1) when processing frames with many sources.
+     */
+    public function nearBatch(): ResponseInterface
+    {
+        $body = $this->request->getJSON(true);
+
+        if (! is_array($body)) {
+            return $this->respondError(400, 'Request body must be valid JSON');
+        }
+
+        // ----------------------------------------------------------------
+        // Validate required fields
+        // ----------------------------------------------------------------
+        if (! isset($body['positions']) || ! is_array($body['positions'])) {
+            return $this->respondError(400, 'Missing required field: positions (must be an array)');
+        }
+
+        if (! isset($body['radius_arcsec']) || ! is_numeric($body['radius_arcsec'])) {
+            return $this->respondError(400, 'Missing or invalid required field: radius_arcsec');
+        }
+
+        $positions    = $body['positions'];
+        $radiusArcsec = (float) $body['radius_arcsec'];
+        $beforeTime   = $body['before_time'] ?? null;
+
+        // Parse before_time if provided
+        $beforeMysql = null;
+        if ($beforeTime !== null && $beforeTime !== '') {
+            $timestamp = strtotime($beforeTime);
+            if ($timestamp === false) {
+                return $this->respondError(400, 'Invalid before_time format');
+            }
+            $beforeMysql = date('Y-m-d H:i:s', $timestamp);
+        }
+
+        // ----------------------------------------------------------------
+        // Short-circuit for empty positions
+        // ----------------------------------------------------------------
+        if (count($positions) === 0) {
+            return $this->respondOk(['results' => new \stdClass()]);
+        }
+
+        // ----------------------------------------------------------------
+        // Validate positions and compute bounding box
+        // ----------------------------------------------------------------
+        $minRa  = PHP_FLOAT_MAX;
+        $maxRa  = PHP_FLOAT_MIN;
+        $minDec = PHP_FLOAT_MAX;
+        $maxDec = PHP_FLOAT_MIN;
+
+        foreach ($positions as $i => $pos) {
+            if (! isset($pos['ra']) || ! isset($pos['dec']) ||
+                ! is_numeric($pos['ra']) || ! is_numeric($pos['dec'])) {
+                return $this->respondError(400, "Invalid position at index {$i}: ra and dec must be numeric");
+            }
+
+            $ra  = (float) $pos['ra'];
+            $dec = (float) $pos['dec'];
+
+            $minRa  = min($minRa, $ra);
+            $maxRa  = max($maxRa, $ra);
+            $minDec = min($minDec, $dec);
+            $maxDec = max($maxDec, $dec);
+        }
+
+        // Expand bounding box by search radius
+        $deg    = $radiusArcsec / 3600.0;
+        $minRa  -= $deg;
+        $maxRa  += $deg;
+        $minDec -= $deg;
+        $maxDec += $deg;
+
+        // ----------------------------------------------------------------
+        // Query source_observations joined with frames for obs_time filter
+        // This returns actual observations with mag, flux, etc.
+        // ----------------------------------------------------------------
+        $db = \Config\Database::connect();
+
+        $sql = 'SELECT so.id, so.source_id, so.frame_id, so.ra, so.dec, so.mag, so.flux, so.fwhm, so.obs_time
+                FROM source_observations so
+                WHERE so.ra BETWEEN ? AND ?
+                  AND so.dec BETWEEN ? AND ?';
+        $params = [$minRa, $maxRa, $minDec, $maxDec];
+
+        if ($beforeMysql !== null) {
+            $sql .= ' AND so.obs_time < ?';
+            $params[] = $beforeMysql;
+        }
+
+        $candidates = $db->query($sql, $params)->getResultArray();
+
+
+        // ----------------------------------------------------------------
+        // For each position, filter candidates using Haversine
+        // ----------------------------------------------------------------
+        $results = [];
+        $totalMatches = 0;
+
+        foreach ($positions as $i => $pos) {
+            $ra  = (float) $pos['ra'];
+            $dec = (float) $pos['dec'];
+            $posResults = [];
+
+            foreach ($candidates as $obs) {
+                $distance = $this->haversineArcsec($ra, $dec, (float) $obs['ra'], (float) $obs['dec']);
+
+                if ($distance <= $radiusArcsec) {
+                    $posResults[] = [
+                        'ra'       => (float) $obs['ra'],
+                        'dec'      => (float) $obs['dec'],
+                        'mag'      => $obs['mag'] !== null ? (float) $obs['mag'] : null,
+                        'flux'     => $obs['flux'] !== null ? (float) $obs['flux'] : null,
+                        'frame_id' => $obs['frame_id'],
+                        'obs_time' => gmdate('Y-m-d\TH:i:s\Z', strtotime($obs['obs_time'])),
+                    ];
+                }
+            }
+
+            $results[(string) $i] = $posResults;
+            $totalMatches += count($posResults);
+        }
+
+        return $this->respondOk(['results' => $results]);
+    }
+
+    /**
      * Compute the angular separation in arcseconds between two sky points
      * using the Haversine formula.
      *
