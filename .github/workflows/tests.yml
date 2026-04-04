@@ -1,0 +1,65 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: PHPUnit (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        php: ["8.2", "8.3"]
+
+    services:
+      mariadb:
+        image: mariadb:10.5.8
+        env:
+          MARIADB_ROOT_PASSWORD: password
+          MARIADB_DATABASE: db
+          MARIADB_USER: user
+          MARIADB_PASSWORD: password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: intl, mbstring, json, mysqlnd
+          coverage: none
+
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-progress --no-interaction
+
+      - name: Configure environment
+        run: |
+          cp env .env
+          echo "" >> .env
+          echo "CI_ENVIRONMENT=testing" >> .env
+          echo "database.default.hostname=127.0.0.1" >> .env
+          echo "database.default.database=db" >> .env
+          echo "database.default.username=user" >> .env
+          echo "database.default.password=password" >> .env
+          echo "database.default.DBDriver=MySQLi" >> .env
+          echo "database.default.port=3306" >> .env
+          echo "API_KEY=your-secret-key-here" >> .env
+
+      - name: Run migrations
+        run: php spark migrate --all
+
+      - name: Run tests
+        run: vendor/bin/phpunit --no-coverage
