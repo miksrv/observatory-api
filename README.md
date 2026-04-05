@@ -1,6 +1,6 @@
 # Observatory API
 
-REST API server — the central persistence layer for the [Observatory FITS Analysis Pipeline](../observatory-pipeline).
+REST API server — the central persistence layer for the [Observatory FITS Analysis Pipeline](https://github.com/miksrv/observatory-pipeline).
 
 Built with **CodeIgniter 4 / PHP**, database — **MariaDB**.
 
