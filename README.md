@@ -605,6 +605,7 @@ php spark recalculate:object-stats
 
 # Start the dev server
 php spark serve
+php spark serve --host 0.0.0.0
 
 # Run tests
 php spark test
