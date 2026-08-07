@@ -3,8 +3,10 @@
 namespace App\Controllers\Api\V1;
 
 use App\Controllers\BaseApiController;
+use App\Libraries\SkyMath;
 use App\Models\FrameModel;
 use App\Models\FrameSourceModel;
+use App\Models\SourceChartModel;
 use App\Models\SourceModel;
 use App\Models\SourceObservationModel;
 use CodeIgniter\HTTP\ResponseInterface;
@@ -15,8 +17,10 @@ class SourcesController extends BaseApiController
      * GET /api/v1/sources/near
      *
      * Cone search for sources near a sky position.
-     * Uses a bounding-box pre-filter on indexed (ra, dec) columns, then
-     * applies the Haversine formula in PHP for precise distance filtering.
+     * Uses a bounding-box pre-filter on indexed (ra, dec) columns in
+     * `source_observations` (the only table with per-epoch positions —
+     * `sources` has none of its own, see SourceModel), then applies the
+     * Haversine formula in PHP for precise distance filtering.
      */
     public function near(): ResponseInterface
     {
@@ -57,31 +61,16 @@ class SourcesController extends BaseApiController
         $radiusArcsec = (float) $radiusArcsec;
 
         // ----------------------------------------------------------------
-        // Bounding-box pre-filter — uses the (ra, dec) index on sources
+        // Cone search — bounding-box pre-filter (declination-scaled RA
+        // margin, RA=0/360 seam handled) then exact Haversine, both inside
+        // SourceModel so this logic lives in exactly one place.
         // ----------------------------------------------------------------
-        $deg = $radiusArcsec / 3600.0;
-
         $sourceModel = new SourceModel();
+        $matches     = $sourceModel->coneSearch($ra, $dec, $radiusArcsec);
 
-        $candidates = $sourceModel
-            ->where('ra >=', $ra - $deg)
-            ->where('ra <=', $ra + $deg)
-            ->where('dec >=', $dec - $deg)
-            ->where('dec <=', $dec + $deg)
-            ->findAll();
-
-        // ----------------------------------------------------------------
-        // Haversine precise filter — discard candidates outside the circle
-        // ----------------------------------------------------------------
         $results = [];
 
-        foreach ($candidates as $source) {
-            $distance = $this->haversineArcsec($ra, $dec, (float) $source['ra'], (float) $source['dec']);
-
-            if ($distance > $radiusArcsec) {
-                continue;
-            }
-
+        foreach ($matches as $source) {
             $results[] = [
                 'id'                => $source['id'],
                 'ra'                => (float) $source['ra'],
@@ -156,6 +145,10 @@ class SourcesController extends BaseApiController
         $observationModel = new SourceObservationModel();
         $observations     = $observationModel->getObservationsForSource($id, $fromMysql, $toMysql, $limitInt);
 
+        // `sources` has no ra/dec of its own (see SourceModel docblock) —
+        // use the most recent observation as the source's "current" position.
+        $latestObs = $observationModel->getLatestObservation($id);
+
         // Format observations
         $formattedObs = [];
         foreach ($observations as $obs) {
@@ -173,8 +166,8 @@ class SourcesController extends BaseApiController
         return $this->respondOk([
             'source' => [
                 'id'           => $source['id'],
-                'ra'           => (float) $source['ra'],
-                'dec'          => (float) $source['dec'],
+                'ra'           => $latestObs !== null ? (float) $latestObs['ra'] : null,
+                'dec'          => $latestObs !== null ? (float) $latestObs['dec'] : null,
                 'catalog_name' => $source['catalog_name'],
                 'object_type'  => $source['object_type'],
             ],
@@ -285,12 +278,19 @@ class SourcesController extends BaseApiController
         }
 
         // ----------------------------------------------------------------
-        // Validate positions and compute bounding box
+        // Validate positions and compute a bounding box that safely covers
+        // all of them:
+        //   - RA margin is declination-scaled per position (SkyMath::raMargin)
+        //     so the box doesn't under-cover near the poles.
+        //   - The RA span is computed via SkyMath::combinedRaRanges, which is
+        //     safe if the batch straddles the RA=0/360 seam (a plain
+        //     min/max over raw RA breaks down there — see its docblock).
         // ----------------------------------------------------------------
-        $minRa  = PHP_FLOAT_MAX;
-        $maxRa  = PHP_FLOAT_MIN;
-        $minDec = PHP_FLOAT_MAX;
-        $maxDec = PHP_FLOAT_MIN;
+        $deg = $radiusArcsec / 3600.0;
+
+        $minDec        = PHP_FLOAT_MAX;
+        $maxDec        = -PHP_FLOAT_MAX;
+        $raWithMargins = [];
 
         foreach ($positions as $i => $pos) {
             if (! isset($pos['ra']) || ! isset($pos['dec']) ||
@@ -301,18 +301,16 @@ class SourcesController extends BaseApiController
             $ra  = (float) $pos['ra'];
             $dec = (float) $pos['dec'];
 
-            $minRa  = min($minRa, $ra);
-            $maxRa  = max($maxRa, $ra);
             $minDec = min($minDec, $dec);
             $maxDec = max($maxDec, $dec);
+
+            $raWithMargins[] = [$ra, SkyMath::raMargin($dec, $deg)];
         }
 
-        // Expand bounding box by search radius
-        $deg    = $radiusArcsec / 3600.0;
-        $minRa  -= $deg;
-        $maxRa  += $deg;
         $minDec -= $deg;
         $maxDec += $deg;
+
+        $raRanges = SkyMath::combinedRaRanges($raWithMargins);
 
         // ----------------------------------------------------------------
         // Query source_observations joined with frames for obs_time filter
@@ -320,11 +318,21 @@ class SourcesController extends BaseApiController
         // ----------------------------------------------------------------
         $db = \Config\Database::connect();
 
+        $raClauses = [];
+        $params    = [];
+
+        foreach ($raRanges as [$min, $max]) {
+            $raClauses[] = 'so.ra BETWEEN ? AND ?';
+            $params[]    = $min;
+            $params[]    = $max;
+        }
+
         $sql = 'SELECT so.id, so.source_id, so.frame_id, so.ra, so.dec, so.mag, so.flux, so.fwhm, so.obs_time
                 FROM source_observations so
-                WHERE so.ra BETWEEN ? AND ?
+                WHERE (' . implode(' OR ', $raClauses) . ')
                   AND so.dec BETWEEN ? AND ?';
-        $params = [$minRa, $maxRa, $minDec, $maxDec];
+        $params[] = $minDec;
+        $params[] = $maxDec;
 
         if ($beforeMysql !== null) {
             $sql .= ' AND so.obs_time < ?';
@@ -346,7 +354,7 @@ class SourcesController extends BaseApiController
             $posResults = [];
 
             foreach ($candidates as $obs) {
-                $distance = $this->haversineArcsec($ra, $dec, (float) $obs['ra'], (float) $obs['dec']);
+                $distance = SkyMath::haversineArcsec($ra, $dec, (float) $obs['ra'], (float) $obs['dec']);
 
                 if ($distance <= $radiusArcsec) {
                     $posResults[] = [
@@ -364,28 +372,407 @@ class SourcesController extends BaseApiController
             $totalMatches += count($posResults);
         }
 
+        // PHP re-canonicalizes numeric-string keys like "0", "1", ... back to
+        // int, so $results ends up with plain sequential int keys despite the
+        // (string) cast above — json_encode() then serializes it as a JSON
+        // array ([...]), not the {"0": ..., "1": ...} object documented in
+        // API.md and expected by the pipeline's api_client/client.py. Casting
+        // to object forces the intended object encoding regardless of key type.
+        return $this->respondOk(['results' => (object) $results]);
+    }
+
+    /**
+     * GET /api/v1/sources/{id}/track
+     *
+     * Get the per-epoch position track for a source: every frame the source
+     * was observed on, chronologically, with the position it was actually
+     * detected at on that specific frame (source_observations.ra/dec — a
+     * moving object's position differs epoch to epoch) plus enough frame
+     * metadata (filename/object) for a caller with filesystem access to the
+     * observatory's FITS archive to locate the file locally.
+     *
+     * Used by observatory-pipeline's modules/finder_chart.py to build the
+     * per-source finder chart uploaded via POST /sources/{id}/chart. Kept as
+     * its own endpoint (rather than extending GET /sources/{id}/observations)
+     * so that existing light-curve consumers of that endpoint are unaffected.
+     */
+    public function track(string $id): ResponseInterface
+    {
+        $sourceModel = new SourceModel();
+        $source      = $sourceModel->find($id);
+
+        if ($source === null) {
+            return $this->respondError(404, 'Source not found', ['source_id' => $id]);
+        }
+
+        $observationModel = new SourceObservationModel();
+        // Ordered ASC by obs_time already — a track is chronological by
+        // definition, and finder_chart.py relies on that order for the
+        // motion-line/numbering on the track-chart style.
+        $observations = $observationModel->getObservationsForSource($id, null, null, 10000);
+
+        if (empty($observations)) {
+            return $this->respondOk(['source_id' => $id, 'epochs' => []]);
+        }
+
+        $frameModel = new FrameModel();
+        $framesById = [];
+        foreach ($frameModel->whereIn('id', array_column($observations, 'frame_id'))->findAll() as $frame) {
+            $framesById[$frame['id']] = $frame;
+        }
+
+        $epochs = [];
+        foreach ($observations as $obs) {
+            $frame = $framesById[$obs['frame_id']] ?? null;
+            if ($frame === null) {
+                // Defensive: source_observations.frame_id has a FK to
+                // frames, so this should never actually happen.
+                continue;
+            }
+
+            $epochs[] = [
+                'frame_id' => $obs['frame_id'],
+                'filename' => $frame['filename'],
+                'object'   => $frame['object'],
+                'obs_time' => gmdate('Y-m-d\TH:i:s\Z', strtotime($obs['obs_time'])),
+                'ra'       => (float) $obs['ra'],
+                'dec'      => (float) $obs['dec'],
+                'mag'      => $obs['mag'] !== null ? (float) $obs['mag'] : null,
+            ];
+        }
+
+        return $this->respondOk(['source_id' => $id, 'epochs' => $epochs]);
+    }
+
+    /**
+     * POST /api/v1/sources/tracks/batch
+     *
+     * Batch version of GET /sources/{id}/track — returns the per-epoch
+     * position track for MULTIPLE sources in a single request. Added so
+     * observatory-pipeline's modules/finder_chart.py can fetch every
+     * anomaly's source track for a frame in one round trip instead of one
+     * GET per source_id (see CLAUDE.md's finder_chart.py section).
+     *
+     * Request body: {"source_ids": ["<id1>", "<id2>", ...]}
+     * Response:     {"results": {"<id1>": [epoch, ...], "<id2>": [], ...}}
+     *
+     * An unknown or malformed source_id resolves to an empty epochs list
+     * rather than failing the whole batch — mirrors nearBatch()'s and
+     * coveringBatch()'s graceful-degradation style, and lets the caller
+     * skip a chart for that one source without losing every other source's
+     * track in the same call.
+     */
+    public function tracksBatch(): ResponseInterface
+    {
+        $body = $this->request->getJSON(true);
+
+        if (! is_array($body)) {
+            return $this->respondError(400, 'Request body must be valid JSON');
+        }
+
+        if (! isset($body['source_ids']) || ! is_array($body['source_ids'])) {
+            return $this->respondError(400, 'Missing required field: source_ids (must be an array)');
+        }
+
+        $sourceIds = array_values(array_unique(array_filter($body['source_ids'], 'is_string')));
+
+        if (count($sourceIds) === 0) {
+            return $this->respondOk(['results' => new \stdClass()]);
+        }
+
+        // Malformed ids (failing the same whitelist as uploadChart()/chart())
+        // are never looked up — they simply resolve to [] below, the same
+        // treatment as an id that's well-formed but unknown.
+        $validSourceIds = array_values(array_filter(
+            $sourceIds,
+            fn (string $id): bool => $this->isValidSourceId($id)
+        ));
+
+        $observations = [];
+        if (count($validSourceIds) > 0) {
+            $observationModel = new SourceObservationModel();
+            $observations      = $observationModel->whereIn('source_id', $validSourceIds)
+                ->orderBy('obs_time', 'ASC')
+                ->findAll();
+        }
+
+        $framesById = [];
+        if (! empty($observations)) {
+            $frameModel = new FrameModel();
+            foreach ($frameModel->whereIn('id', array_unique(array_column($observations, 'frame_id')))->findAll() as $frame) {
+                $framesById[$frame['id']] = $frame;
+            }
+        }
+
+        $results = [];
+        foreach ($sourceIds as $id) {
+            $results[$id] = [];
+        }
+
+        foreach ($observations as $obs) {
+            $frame = $framesById[$obs['frame_id']] ?? null;
+            if ($frame === null) {
+                // Defensive: source_observations.frame_id has a FK to
+                // frames, so this should never actually happen.
+                continue;
+            }
+
+            $results[$obs['source_id']][] = [
+                'frame_id' => $obs['frame_id'],
+                'filename' => $frame['filename'],
+                'object'   => $frame['object'],
+                'obs_time' => gmdate('Y-m-d\TH:i:s\Z', strtotime($obs['obs_time'])),
+                'ra'       => (float) $obs['ra'],
+                'dec'      => (float) $obs['dec'],
+                'mag'      => $obs['mag'] !== null ? (float) $obs['mag'] : null,
+            ];
+        }
+
+        // Same PHP numeric-string-key re-canonicalization concern as
+        // nearBatch()/coveringBatch() — cast to object so json_encode()
+        // emits {"<id>": [...]} rather than a plain array if every id
+        // happened to look numeric. Source ids are uniqid('', true) output
+        // (always containing a '.'), so this is mostly theoretical, but the
+        // cast is free and keeps the contract firm regardless.
+        return $this->respondOk(['results' => (object) $results]);
+    }
+
+    /**
+     * POST /api/v1/sources/charts/batch
+     *
+     * Batch version of POST /sources/{id}/chart. Unlike the single-source
+     * endpoint, the request body can't be raw PNG bytes for more than one
+     * chart at once, so this endpoint takes a JSON envelope with each PNG
+     * base64-encoded instead:
+     *
+     *   {"charts": [
+     *     {"source_id": "...", "style": "track", "frame_count": 5, "png_base64": "..."},
+     *     ...
+     *   ]}
+     *
+     * Response is positionally parallel to the request's "charts" array
+     * (same length/order — mirrors saveSources()'s "source_ids" convention),
+     * one result object per chart:
+     *
+     *   {"results": [
+     *     {"source_id": "...", "status": "ok", "style": "track", "frame_count": 5, "updated_at": "..."},
+     *     {"source_id": "...", "status": "error", "error": "..."},
+     *     ...
+     *   ]}
+     *
+     * A bad entry (invalid id, unknown source, bad style, bad frame_count,
+     * bad PNG) fails only that entry, not the whole batch — one source's
+     * malformed chart must not block every other source's legitimate one
+     * from being stored.
+     */
+    public function uploadChartsBatch(): ResponseInterface
+    {
+        $body = $this->request->getJSON(true);
+
+        if (! is_array($body)) {
+            return $this->respondError(400, 'Request body must be valid JSON');
+        }
+
+        if (! isset($body['charts']) || ! is_array($body['charts'])) {
+            return $this->respondError(400, 'Missing required field: charts (must be an array)');
+        }
+
+        if (count($body['charts']) === 0) {
+            return $this->respondOk(['results' => []]);
+        }
+
+        $sourceModel = new SourceModel();
+        $chartModel  = new SourceChartModel();
+        $dir         = WRITEPATH . 'uploads/charts';
+
+        $results = [];
+        foreach ($body['charts'] as $entry) {
+            $results[] = $this->storeOneChart($entry, $sourceModel, $chartModel, $dir);
+        }
+
         return $this->respondOk(['results' => $results]);
     }
 
     /**
-     * Compute the angular separation in arcseconds between two sky points
-     * using the Haversine formula.
-     *
-     * @param float $ra1  Right ascension of point 1 (decimal degrees)
-     * @param float $dec1 Declination of point 1 (decimal degrees)
-     * @param float $ra2  Right ascension of point 2 (decimal degrees)
-     * @param float $dec2 Declination of point 2 (decimal degrees)
-     *
-     * @return float Angular separation in arcseconds
+     * Validate and store a single entry of uploadChartsBatch()'s "charts"
+     * array. Factored out so each entry's failure is independent and always
+     * returns the same {"source_id", "status", ...} shape, whether it
+     * succeeded or not.
      */
-    private function haversineArcsec(float $ra1, float $dec1, float $ra2, float $dec2): float
+    private function storeOneChart(mixed $entry, SourceModel $sourceModel, SourceChartModel $chartModel, string $dir): array
     {
-        $ra1  = deg2rad($ra1);  $dec1 = deg2rad($dec1);
-        $ra2  = deg2rad($ra2);  $dec2 = deg2rad($dec2);
-        $dra  = $ra2 - $ra1;
-        $ddec = $dec2 - $dec1;
-        $a    = sin($ddec / 2) ** 2 + cos($dec1) * cos($dec2) * sin($dra / 2) ** 2;
+        if (! is_array($entry)) {
+            return ['source_id' => null, 'status' => 'error', 'error' => 'Chart entry must be an object'];
+        }
 
-        return 2 * asin(sqrt($a)) * (180.0 / M_PI) * 3600.0;
+        $sourceId = $entry['source_id'] ?? null;
+
+        if (! is_string($sourceId) || $sourceId === '') {
+            return ['source_id' => $sourceId, 'status' => 'error', 'error' => 'Missing or invalid source_id'];
+        }
+
+        if (! $this->isValidSourceId($sourceId)) {
+            return ['source_id' => $sourceId, 'status' => 'error', 'error' => 'Invalid source id'];
+        }
+
+        if ($sourceModel->find($sourceId) === null) {
+            return ['source_id' => $sourceId, 'status' => 'error', 'error' => 'Source not found'];
+        }
+
+        $style      = $entry['style'] ?? null;
+        $frameCount = $entry['frame_count'] ?? null;
+
+        if (! is_string($style) || ! in_array($style, SourceChartModel::ALLOWED_STYLES, true)) {
+            return ['source_id' => $sourceId, 'status' => 'error', 'error' => 'Invalid or missing style: must be one of '
+                . implode(', ', SourceChartModel::ALLOWED_STYLES)];
+        }
+
+        if (! is_numeric($frameCount) || (int) $frameCount < 1) {
+            return ['source_id' => $sourceId, 'status' => 'error', 'error' => 'Invalid or missing frame_count: must be a positive integer'];
+        }
+
+        $pngBase64 = $entry['png_base64'] ?? null;
+
+        if (! is_string($pngBase64) || $pngBase64 === '') {
+            return ['source_id' => $sourceId, 'status' => 'error', 'error' => 'Missing png_base64'];
+        }
+
+        $pngBytes = base64_decode($pngBase64, true);
+
+        if ($pngBytes === false) {
+            return ['source_id' => $sourceId, 'status' => 'error', 'error' => 'png_base64 is not valid base64'];
+        }
+
+        // Same minimal PNG-signature sanity check as uploadChart().
+        if (substr($pngBytes, 0, 8) !== "\x89PNG\r\n\x1a\n") {
+            return ['source_id' => $sourceId, 'status' => 'error', 'error' => 'Decoded body is not a valid PNG image'];
+        }
+
+        if (! is_dir($dir) && ! mkdir($dir, 0775, true) && ! is_dir($dir)) {
+            return ['source_id' => $sourceId, 'status' => 'error', 'error' => 'Failed to create chart storage directory'];
+        }
+
+        if (file_put_contents($dir . '/' . $sourceId . '.png', $pngBytes) === false) {
+            return ['source_id' => $sourceId, 'status' => 'error', 'error' => 'Failed to store chart image'];
+        }
+
+        $chart = $chartModel->upsertForSource($sourceId, $style, (int) $frameCount);
+
+        return [
+            'source_id'   => $sourceId,
+            'status'      => 'ok',
+            'style'       => $chart['style'],
+            'frame_count' => (int) $chart['frame_count'],
+            'updated_at'  => $chart['updated_at']
+                ? gmdate('Y-m-d\TH:i:s\Z', strtotime($chart['updated_at']))
+                : null,
+        ];
+    }
+
+    /**
+     * POST /api/v1/sources/{id}/chart?style=track&frame_count=5
+     *
+     * Store the finder-chart PNG for a source, fully replacing any previous
+     * one. observatory-pipeline's modules/finder_chart.py always regenerates
+     * the whole image from the current track (see GET .../track) rather than
+     * patching an existing file, so this endpoint always fully overwrites.
+     *
+     * The request body is the raw PNG bytes — not JSON, not multipart —
+     * since the body is entirely consumed by the image; `style` and
+     * `frame_count` travel as query parameters instead.
+     */
+    public function uploadChart(string $id): ResponseInterface
+    {
+        if (! $this->isValidSourceId($id)) {
+            return $this->respondError(400, 'Invalid source id');
+        }
+
+        $sourceModel = new SourceModel();
+        $source      = $sourceModel->find($id);
+
+        if ($source === null) {
+            return $this->respondError(404, 'Source not found', ['source_id' => $id]);
+        }
+
+        $style      = $this->request->getGet('style');
+        $frameCount = $this->request->getGet('frame_count');
+
+        if (! in_array($style, SourceChartModel::ALLOWED_STYLES, true)) {
+            return $this->respondError(400, 'Invalid or missing query parameter: style must be one of '
+                . implode(', ', SourceChartModel::ALLOWED_STYLES));
+        }
+
+        if ($frameCount === null || ! is_numeric($frameCount) || (int) $frameCount < 1) {
+            return $this->respondError(400, 'Invalid or missing query parameter: frame_count must be a positive integer');
+        }
+
+        $body = $this->request->getBody();
+
+        if ($body === null || $body === '') {
+            return $this->respondError(400, 'Request body must contain PNG image bytes');
+        }
+
+        // Minimal sanity check — the 8-byte PNG signature — instead of fully
+        // decoding the image; catches "wrong content" mistakes (e.g. an
+        // error page proxied through, or a client bug sending JSON here)
+        // without pulling an image library into the API.
+        if (substr($body, 0, 8) !== "\x89PNG\r\n\x1a\n") {
+            return $this->respondError(400, 'Request body is not a valid PNG image');
+        }
+
+        $dir = WRITEPATH . 'uploads/charts';
+        if (! is_dir($dir) && ! mkdir($dir, 0775, true) && ! is_dir($dir)) {
+            return $this->respondError(500, 'Failed to create chart storage directory');
+        }
+
+        if (file_put_contents($dir . '/' . $id . '.png', $body) === false) {
+            return $this->respondError(500, 'Failed to store chart image');
+        }
+
+        $chartModel = new SourceChartModel();
+        $chart      = $chartModel->upsertForSource($id, $style, (int) $frameCount);
+
+        return $this->respondOk([
+            'source_id'   => $id,
+            'style'       => $chart['style'],
+            'frame_count' => (int) $chart['frame_count'],
+            'updated_at'  => $chart['updated_at']
+                ? gmdate('Y-m-d\TH:i:s\Z', strtotime($chart['updated_at']))
+                : null,
+        ]);
+    }
+
+    /**
+     * GET /api/v1/sources/{id}/chart.png
+     *
+     * Serve the stored finder-chart PNG for a source as raw image bytes.
+     */
+    public function chart(string $id): ResponseInterface
+    {
+        if (! $this->isValidSourceId($id)) {
+            return $this->respondError(400, 'Invalid source id');
+        }
+
+        $path = WRITEPATH . 'uploads/charts/' . $id . '.png';
+
+        if (! is_file($path)) {
+            return $this->respondError(404, 'No chart available for this source', ['source_id' => $id]);
+        }
+
+        return $this->response
+            ->setStatusCode(200)
+            ->setContentType('image/png')
+            ->setBody(file_get_contents($path));
+    }
+
+    /**
+     * Guard against path traversal via the {id} route segment before it is
+     * ever concatenated into a filesystem path in uploadChart()/chart().
+     * Real ids are uniqid('', true) output — hex digits and a single '.' —
+     * so a generous alnum+dot whitelist is both safe and non-restrictive.
+     */
+    private function isValidSourceId(string $id): bool
+    {
+        return preg_match('/^[a-zA-Z0-9.]{1,64}$/', $id) === 1;
     }
 }

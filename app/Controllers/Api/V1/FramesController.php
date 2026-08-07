@@ -3,6 +3,7 @@
 namespace App\Controllers\Api\V1;
 
 use App\Controllers\BaseApiController;
+use App\Libraries\SkyMath;
 use App\Models\AnomalyModel;
 use App\Models\FrameModel;
 use App\Models\FrameSourceModel;
@@ -154,11 +155,22 @@ class FramesController extends BaseApiController
      * Save detected sources for a frame with proper source catalog management.
      *
      * For each source:
-     * 1. Check if a matching source exists (within 2 arcsec) in the catalog
+     * 1. Check if a matching source exists in the catalog — by stable
+     *    catalog identity (catalog_name + catalog_id) when the source was
+     *    actually catalog-matched, falling back to position (within 2
+     *    arcsec) only for uncatalogued sources, which have no identity to
+     *    match on. Catalog identity is required for anything that moves
+     *    between frames (e.g. an MPC-matched asteroid) — see SourceModel.
      * 2. If found: use existing source, update observation count
      * 3. If not found: create new source in catalog
      * 4. Create observation record with photometry data
      * 5. Link source to frame
+     *
+     * The response includes `source_ids`, positionally parallel to the
+     * request's `sources` array (null for a skipped/invalid entry), so the
+     * caller can correlate each submitted source with its resolved
+     * `sources.id` — e.g. to populate `anomalies[].source_id` on a
+     * subsequent POST /frames/{id}/anomalies call for the same frame.
      *
      * @param string $id Frame primary key from the URL segment.
      */
@@ -205,6 +217,7 @@ class FramesController extends BaseApiController
                 'count'           => 0,
                 'new_sources'     => 0,
                 'matched_sources' => 0,
+                'source_ids'      => [],
             ]);
         }
 
@@ -219,6 +232,14 @@ class FramesController extends BaseApiController
         $matchedSources = 0;
         $skipped        = 0;
 
+        // Parallel to the input `sources` array (same length, same order) so
+        // the caller (the pipeline) can zip its own source list against this
+        // response and learn each source's resolved `sources.id` — e.g. to
+        // attach it as `anomalies[].source_id` in a later POST /anomalies
+        // call. `null` marks a source that was skipped (invalid ra/dec, or
+        // an insert failure) and therefore has no resolved id.
+        $sourceIds = [];
+
         foreach ($sources as $source) {
             // Validate required fields
             if (
@@ -226,6 +247,7 @@ class FramesController extends BaseApiController
                 || ! is_numeric($source['ra'])
                 || ! is_numeric($source['dec'])
             ) {
+                $sourceIds[] = null;
                 $skipped++;
                 continue;
             }
@@ -233,8 +255,39 @@ class FramesController extends BaseApiController
             $ra  = (float) $source['ra'];
             $dec = (float) $source['dec'];
 
-            // Try to find existing source within 2 arcsec
-            $existingSource = $sourceModel->findByCoordinates($ra, $dec, 2.0);
+            $catalogName = $source['catalog_name'] ?? null;
+            $catalogId   = $source['catalog_id'] ?? null;
+            $hasCatalogIdentity = $catalogName !== null && $catalogName !== ''
+                && $catalogId !== null && $catalogId !== '';
+
+            // Prefer matching by stable catalog identity when the source was
+            // actually catalog-matched (Simbad/Gaia DR3/2MASS/Pan-STARRS/MPC).
+            // This is essential for moving objects: an MPC-matched asteroid's
+            // sky position shifts between frames well beyond any reasonable
+            // position-matching radius (Vesta moves ~tens of arcsec/hour), so
+            // position-only matching would mint a brand-new `sources` row for
+            // it on every single frame instead of accumulating observations
+            // against one.
+            //
+            // Fall back to position matching ONLY when there's no catalog
+            // identity to match on at all. Using `??` unconditionally here
+            // used to fall back to findByCoordinates() any time
+            // findByCatalogIdentity() simply hadn't seen this identity
+            // before yet (e.g. the very first observation of a given MPC
+            // designation) — silently "adopting" an unrelated pre-existing
+            // source's row (e.g. a Gaia DR3 star) whenever the two happened
+            // to sit within 2" of each other at this epoch, permanently
+            // mislabeling that row's catalog_name/catalog_id since they are
+            // only ever set on insert, never refreshed on a match (real
+            // incident, 2026-08-06: asteroid 2014 RY1 passing close to a
+            // field star repeatedly resolved to that star's `sources` row).
+            // A catalog-identified source that doesn't match anything yet
+            // must get its own new row instead of risking that.
+            if ($hasCatalogIdentity) {
+                $existingSource = $sourceModel->findByCatalogIdentity($catalogName, $catalogId);
+            } else {
+                $existingSource = $sourceModel->findByCoordinates($ra, $dec, 2.0);
+            }
 
             if ($existingSource !== null) {
                 // Use existing source
@@ -249,10 +302,8 @@ class FramesController extends BaseApiController
             } else {
                 // Create new source
                 $newSourceData = [
-                    'ra'                => $ra,
-                    'dec'               => $dec,
-                    'catalog_name'      => $source['catalog_name'] ?? null,
-                    'catalog_id'        => $source['catalog_id'] ?? null,
+                    'catalog_name'      => $catalogName,
+                    'catalog_id'        => $catalogId,
                     'catalog_mag'       => isset($source['catalog_mag']) ? (float) $source['catalog_mag'] : null,
                     'object_type'       => $source['object_type'] ?? null,
                     'first_observed_at' => $obsTime,
@@ -264,12 +315,15 @@ class FramesController extends BaseApiController
 
                 if ($sourceId === false) {
                     log_message('error', 'Failed to create source at RA=' . $ra . ', Dec=' . $dec);
+                    $sourceIds[] = null;
                     $skipped++;
                     continue;
                 }
 
                 $newSources++;
             }
+
+            $sourceIds[] = $sourceId;
 
             // Create observation record
             $mag = $source['mag'] ?? $source['mag_calibrated'] ?? null;
@@ -305,6 +359,7 @@ class FramesController extends BaseApiController
             'count'           => $newSources + $matchedSources,
             'new_sources'     => $newSources,
             'matched_sources' => $matchedSources,
+            'source_ids'      => $sourceIds,
         ]);
     }
 
@@ -359,6 +414,22 @@ class FramesController extends BaseApiController
         }
 
         // ----------------------------------------------------------------
+        // Validate anomaly_type against the fixed known set (matches the ENUM
+        // constraint on the anomaly_type column) — reject the whole batch
+        // atomically if any entry uses an unrecognized value, rather than
+        // silently inserting it or letting it fail as a raw SQL error.
+        // ----------------------------------------------------------------
+        foreach ($anomalies as $i => $anomaly) {
+            $type = isset($anomaly['anomaly_type']) ? (string) $anomaly['anomaly_type'] : '';
+
+            if (! AnomalyModel::isValidType($type)) {
+                return $this->respondError(400, "Invalid anomaly_type at index {$i}: '{$type}'", [
+                    'allowed_types' => AnomalyModel::ALLOWED_TYPES,
+                ]);
+            }
+        }
+
+        // ----------------------------------------------------------------
         // Build rows, flattening the optional ephemeris nested object
         // ----------------------------------------------------------------
         $rows       = [];
@@ -369,7 +440,7 @@ class FramesController extends BaseApiController
                 ? $anomaly['ephemeris']
                 : [];
 
-            $type    = isset($anomaly['anomaly_type']) ? (string) $anomaly['anomaly_type'] : '';
+            $type    = (string) $anomaly['anomaly_type'];
             $isAlert = AnomalyModel::isAlertType($type) ? 1 : 0;
 
             if ($isAlert === 1) {
@@ -508,20 +579,41 @@ class FramesController extends BaseApiController
         $beforeMysql = date('Y-m-d H:i:s', $beforeTimestamp);
 
         // ----------------------------------------------------------------
-        // Bounding-box pre-filter using fov_deg as the half-width margin.
-        // This is deliberately wider than needed — Haversine below trims it
-        // to exact coverage.
+        // Bounding-box pre-filter. The margin is the widest fov_deg on
+        // record — deliberately wider than any single frame needs, since
+        // Haversine below trims it to each frame's exact fov_deg/2 coverage.
+        // The margin is declination-scaled and split across the RA=0/360
+        // seam (SkyMath) so real coverage near the poles or the seam is
+        // never silently dropped by the pre-filter.
         // ----------------------------------------------------------------
-        $db = \Config\Database::connect();
+        $db        = \Config\Database::connect();
+        $maxFovDeg = (float) ($db->query('SELECT MAX(fov_deg) AS max_fov FROM frames')->getRow()->max_fov ?? 0.0);
 
-        $candidates = $db->query(
-            'SELECT id, filename, obs_time, ra_center, dec_center, fov_deg
-               FROM frames
-              WHERE obs_time < ?
-                AND ra_center  BETWEEN (? - fov_deg) AND (? + fov_deg)
-                AND dec_center BETWEEN (? - fov_deg) AND (? + fov_deg)',
-            [$beforeMysql, $ra, $ra, $dec, $dec]
-        )->getResultObject();
+        if ($maxFovDeg <= 0.0) {
+            // Empty frames table — nothing can possibly cover the point.
+            return $this->respondOk(['data' => []]);
+        }
+
+        $raRanges = SkyMath::raRanges($ra, SkyMath::raMargin($dec, $maxFovDeg));
+
+        $raClauses = [];
+        $params    = [$beforeMysql];
+
+        foreach ($raRanges as [$min, $max]) {
+            $raClauses[] = 'ra_center BETWEEN ? AND ?';
+            $params[]    = $min;
+            $params[]    = $max;
+        }
+
+        $sql = 'SELECT id, filename, obs_time, ra_center, dec_center, fov_deg
+                   FROM frames
+                  WHERE obs_time < ?
+                    AND (' . implode(' OR ', $raClauses) . ')
+                    AND dec_center BETWEEN ? AND ?';
+        $params[] = $dec - $maxFovDeg;
+        $params[] = $dec + $maxFovDeg;
+
+        $candidates = $db->query($sql, $params)->getResultObject();
 
         // ----------------------------------------------------------------
         // Haversine precision filter: keep only frames that truly cover the
@@ -530,7 +622,7 @@ class FramesController extends BaseApiController
         $results = [];
 
         foreach ($candidates as $frame) {
-            $distArcsec    = $this->haversineArcsec($ra, $dec, (float) $frame->ra_center, (float) $frame->dec_center);
+            $distArcsec    = SkyMath::haversineArcsec($ra, $dec, (float) $frame->ra_center, (float) $frame->dec_center);
             $radiusArcsec  = ((float) $frame->fov_deg / 2.0) * 3600.0;
 
             if ($distArcsec <= $radiusArcsec) {
@@ -592,12 +684,30 @@ class FramesController extends BaseApiController
         }
 
         // ----------------------------------------------------------------
-        // Validate positions and compute bounding box
+        // Validate positions and compute a combined bounding box.
+        //
+        // The margin is the widest fov_deg on record, declination-scaled
+        // per position. The RA span across the whole batch is computed via
+        // SkyMath::combinedRaRanges, which stays correct even if the batch
+        // straddles the RA=0/360 seam (see its docblock) — a plain
+        // raw-value min/max does not.
         // ----------------------------------------------------------------
-        $minRa  = PHP_FLOAT_MAX;
-        $maxRa  = PHP_FLOAT_MIN;
-        $minDec = PHP_FLOAT_MAX;
-        $maxDec = PHP_FLOAT_MIN;
+        $db        = \Config\Database::connect();
+        $maxFovDeg = (float) ($db->query('SELECT MAX(fov_deg) AS max_fov FROM frames')->getRow()->max_fov ?? 0.0);
+
+        if ($maxFovDeg <= 0.0) {
+            // Empty frames table — nothing can possibly cover any position.
+            // See the (object) cast note further down — same reason applies here.
+            $results = [];
+            foreach ($positions as $i => $pos) {
+                $results[(string) $i] = [];
+            }
+            return $this->respondOk(['results' => (object) $results]);
+        }
+
+        $minDec        = PHP_FLOAT_MAX;
+        $maxDec        = -PHP_FLOAT_MAX;
+        $raWithMargins = [];
 
         foreach ($positions as $i => $pos) {
             if (! isset($pos['ra']) || ! isset($pos['dec']) ||
@@ -608,33 +718,38 @@ class FramesController extends BaseApiController
             $ra  = (float) $pos['ra'];
             $dec = (float) $pos['dec'];
 
-            $minRa  = min($minRa, $ra);
-            $maxRa  = max($maxRa, $ra);
             $minDec = min($minDec, $dec);
             $maxDec = max($maxDec, $dec);
+
+            $raWithMargins[] = [$ra, SkyMath::raMargin($dec, $maxFovDeg)];
         }
+
+        $minDec -= $maxFovDeg;
+        $maxDec += $maxFovDeg;
+
+        $raRanges = SkyMath::combinedRaRanges($raWithMargins);
 
         // ----------------------------------------------------------------
         // Single query to fetch all candidate frames
-        // We need to expand the bounding box by max possible FOV.
-        // Using a conservative margin of 5 degrees (covers most amateur setups).
         // ----------------------------------------------------------------
-        $fovMargin = 5.0; // degrees
-        $db = \Config\Database::connect();
+        $raClauses = [];
+        $params    = [$beforeMysql];
 
-        $candidates = $db->query(
-            'SELECT id, filename, obs_time, ra_center, dec_center, fov_deg
-               FROM frames
-              WHERE obs_time < ?
-                AND ra_center  BETWEEN ? AND ?
-                AND dec_center BETWEEN ? AND ?',
-            [
-                $beforeMysql,
-                $minRa - $fovMargin, $maxRa + $fovMargin,
-                $minDec - $fovMargin, $maxDec + $fovMargin
-            ]
-        )->getResultObject();
+        foreach ($raRanges as [$min, $max]) {
+            $raClauses[] = 'ra_center BETWEEN ? AND ?';
+            $params[]    = $min;
+            $params[]    = $max;
+        }
 
+        $sql = 'SELECT id, filename, obs_time, ra_center, dec_center, fov_deg
+                   FROM frames
+                  WHERE obs_time < ?
+                    AND (' . implode(' OR ', $raClauses) . ')
+                    AND dec_center BETWEEN ? AND ?';
+        $params[] = $minDec;
+        $params[] = $maxDec;
+
+        $candidates = $db->query($sql, $params)->getResultObject();
 
         // ----------------------------------------------------------------
         // For each position, check which frames cover it
@@ -648,7 +763,7 @@ class FramesController extends BaseApiController
             $posResults = [];
 
             foreach ($candidates as $frame) {
-                $distArcsec   = $this->haversineArcsec($ra, $dec, (float) $frame->ra_center, (float) $frame->dec_center);
+                $distArcsec   = SkyMath::haversineArcsec($ra, $dec, (float) $frame->ra_center, (float) $frame->dec_center);
                 $radiusArcsec = ((float) $frame->fov_deg / 2.0) * 3600.0;
 
                 if ($distArcsec <= $radiusArcsec) {
@@ -666,27 +781,68 @@ class FramesController extends BaseApiController
             $results[(string) $i] = $posResults;
             $totalMatches += count($posResults);
         }
-        
-        return $this->respondOk(['results' => $results]);
+
+        // PHP re-canonicalizes numeric-string keys like "0", "1", ... back to
+        // int, so $results ends up with plain sequential int keys despite the
+        // (string) cast above — json_encode() then serializes it as a JSON
+        // array ([...]), not the {"0": ..., "1": ...} object documented in
+        // API.md and expected by the pipeline's api_client/client.py. Casting
+        // to object forces the intended object encoding regardless of key type.
+        return $this->respondOk(['results' => (object) $results]);
     }
 
     /**
-     * Haversine great-circle distance between two sky positions.
+     * GET /api/v1/frames/nearest-before
      *
-     * @param float $ra1  Right ascension of point 1 (decimal degrees)
-     * @param float $dec1 Declination of point 1 (decimal degrees)
-     * @param float $ra2  Right ascension of point 2 (decimal degrees)
-     * @param float $dec2 Declination of point 2 (decimal degrees)
-     * @return float      Angular separation in arcseconds
+     * The single most recent frame of a given object strictly before a given
+     * time. Used by observatory-pipeline's modules/finder_chart.py to render
+     * a "before/after" comparison chart for a source detected on only one
+     * frame so far: a crop of an earlier frame of the same object at that
+     * exact sky position (nothing expected there yet) next to a crop of the
+     * frame the source was actually detected on. The pipeline has no direct
+     * database access (see CLAUDE.md) — this is the one query it needs that
+     * `GET /frames/covering` doesn't already answer, since that one is a
+     * spatial "was this position ever imaged" check, not "what's the most
+     * recent frame of this object".
      */
-    private function haversineArcsec(float $ra1, float $dec1, float $ra2, float $dec2): float
+    public function nearestBefore(): ResponseInterface
     {
-        $ra1  = deg2rad($ra1);  $dec1 = deg2rad($dec1);
-        $ra2  = deg2rad($ra2);  $dec2 = deg2rad($dec2);
-        $dra  = $ra2 - $ra1;
-        $ddec = $dec2 - $dec1;
-        $a    = sin($ddec / 2) ** 2 + cos($dec1) * cos($dec2) * sin($dra / 2) ** 2;
+        $object     = $this->request->getGet('object');
+        $beforeTime = $this->request->getGet('before_time');
 
-        return 2 * asin(sqrt($a)) * (180.0 / M_PI) * 3600.0;
+        if ($object === null || $object === '') {
+            return $this->respondError(400, 'Missing required parameter: object');
+        }
+
+        if ($beforeTime === null || $beforeTime === '') {
+            return $this->respondError(400, 'Missing required parameter: before_time');
+        }
+
+        $beforeTimestamp = strtotime($beforeTime);
+
+        if ($beforeTimestamp === false) {
+            return $this->respondError(400, 'Invalid parameter: before_time must be a valid ISO 8601 datetime');
+        }
+
+        $beforeMysql = date('Y-m-d H:i:s', $beforeTimestamp);
+
+        $frame = (new FrameModel())
+            ->where('object', $object)
+            ->where('obs_time <', $beforeMysql)
+            ->orderBy('obs_time', 'DESC')
+            ->first();
+
+        if ($frame === null) {
+            return $this->respondOk(['frame' => null]);
+        }
+
+        return $this->respondOk([
+            'frame' => [
+                'id'       => (string) $frame['id'],
+                'filename' => $frame['filename'],
+                'object'   => $frame['object'],
+                'obs_time' => gmdate('Y-m-d\TH:i:s\Z', strtotime($frame['obs_time'])),
+            ],
+        ]);
     }
 }
