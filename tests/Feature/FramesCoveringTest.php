@@ -191,4 +191,50 @@ final class FramesCoveringTest extends CIUnitTestCase
 
         $result->assertStatus(401);
     }
+
+    // -------------------------------------------------------------------------
+    // RA=0/360 seam and pole scaling regressions
+    // -------------------------------------------------------------------------
+
+    /**
+     * A naive `ra_center BETWEEN ra-fov AND ra+fov` bounding box never wraps
+     * at the RA=0/360 seam, so a frame centred at ra_center=359.98 is
+     * invisible to a query at ra=0.02 even though it's well inside the FOV.
+     */
+    public function testCoveringFindsFrameAcrossRaSeam(): void
+    {
+        $this->createFrame(359.98, 10.0, 1.0, '2024-03-10 00:00:00');
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->get(self::ENDPOINT, [
+                'ra'          => '0.02',
+                'dec'         => '10.0',
+                'before_time' => '2025-01-01T00:00:00Z',
+            ]);
+
+        $result->assertStatus(200);
+        $json = json_decode($result->getJSON(), true);
+        $this->assertNotEmpty($json['data'], 'Frame across the RA=0/360 seam must still be found.');
+    }
+
+    /**
+     * Near the celestial poles, meridians converge — a fixed fov_deg margin
+     * used directly as an RA delta under-covers there. (100, 89.5) and
+     * (110, 89.5) are only ~157 arcsec apart despite a 10-degree RA gap.
+     */
+    public function testCoveringFindsFrameNearPoleDespiteLargeRaDifference(): void
+    {
+        $this->createFrame(100.0, 89.5, 1.0, '2024-03-10 00:00:00');
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->get(self::ENDPOINT, [
+                'ra'          => '110.0',
+                'dec'         => '89.5',
+                'before_time' => '2025-01-01T00:00:00Z',
+            ]);
+
+        $result->assertStatus(200);
+        $json = json_decode($result->getJSON(), true);
+        $this->assertNotEmpty($json['data'], 'Frame near the pole must still be found despite the large RA delta.');
+    }
 }
