@@ -81,6 +81,11 @@ class CreateSourceObservationsTable extends Migration
         $this->forge->addKey('frame_id', false, false, 'idx_srcobs_frame');
         $this->forge->addKey('obs_time', false, false, 'idx_srcobs_time');
         $this->forge->addKey(['source_id', 'obs_time'], false, false, 'idx_srcobs_lightcurve');
+        // Bounding-box pre-filter for positional lookups (SourceModel's
+        // dedup fallback and GET /sources/near) now live entirely on this
+        // table, since `sources` carries no ra/dec of its own — see
+        // SourceModel and SourceObservationModel docblocks.
+        $this->forge->addKey(['ra', 'dec'], false, false, 'idx_srcobs_coords');
 
         $this->forge->addForeignKey('source_id', 'sources', 'id', 'CASCADE', 'CASCADE');
         $this->forge->addForeignKey('frame_id', 'frames', 'id', 'CASCADE', 'CASCADE');

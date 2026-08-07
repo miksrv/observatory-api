@@ -7,10 +7,14 @@ use CodeIgniter\Database\Migration;
 /**
  * Migration 2 — Create the `sources` table (Source Catalog).
  *
- * Master catalog of unique celestial sources (stars, galaxies, etc.).
- * A source is identified by its sky coordinates. When a new source is detected
- * at a position where no existing source exists (within matching radius),
- * a new source record is created.
+ * Master catalog of unique celestial sources (stars, galaxies, asteroids,
+ * etc.). A source is identified primarily by its stable catalog identity —
+ * (catalog_name, catalog_id) — enforced by a unique key below. When a new
+ * source is detected with no catalog match at all, a positional fallback
+ * match is used instead (see SourceModel::findByCoordinates(), which
+ * queries `source_observations` — this table intentionally has no ra/dec
+ * columns of its own, since a single static position doesn't make sense
+ * for objects that move between frames, e.g. MPC-matched asteroids/comets).
  */
 class CreateSourcesTable extends Migration
 {
@@ -20,14 +24,6 @@ class CreateSourcesTable extends Migration
             'id' => [
                 'type'       => 'CHAR',
                 'constraint' => 24,
-            ],
-            'ra' => [
-                'type' => 'DOUBLE',
-                'null' => false,
-            ],
-            'dec' => [
-                'type' => 'DOUBLE',
-                'null' => false,
             ],
             'catalog_name' => [
                 'type'       => 'VARCHAR',
@@ -69,9 +65,13 @@ class CreateSourcesTable extends Migration
         ]);
 
         $this->forge->addPrimaryKey('id');
-        $this->forge->addKey(['ra', 'dec'], false, false, 'idx_sources_coords');
         $this->forge->addKey('catalog_name', false, false, 'idx_sources_catalog');
         $this->forge->addKey('object_type', false, false, 'idx_sources_type');
+        // Enforces one `sources` row per distinct catalog object and backs
+        // SourceModel::findByCatalogIdentity(). NULL is not considered equal
+        // to NULL by MySQL/MariaDB unique indexes, so uncatalogued sources
+        // (catalog_name/catalog_id both null) never collide with each other.
+        $this->forge->addUniqueKey(['catalog_name', 'catalog_id'], 'uniq_sources_catalog_identity');
 
         $this->forge->createTable('sources', true);
 

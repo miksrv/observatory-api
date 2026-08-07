@@ -29,9 +29,23 @@ class CreateAnomaliesTable extends Migration
                 'constraint' => 24,
                 'null'       => true,
             ],
+            // Fixed set of classification types produced by anomaly_detector.py in the
+            // observatory-pipeline repo (AnomalyType enum there) — see AnomalyModel::ALLOWED_TYPES
+            // for the PHP-side mirror used to validate incoming values before insert.
             'anomaly_type' => [
-                'type'       => 'VARCHAR',
-                'constraint' => 30,
+                'type'       => 'ENUM',
+                'constraint' => [
+                    'FIRST_OBSERVATION',
+                    'KNOWN_CATALOG_NEW',
+                    'VARIABLE_STAR',
+                    'BINARY_STAR',
+                    'SUPERNOVA_CANDIDATE',
+                    'UNKNOWN',
+                    'ASTEROID',
+                    'COMET',
+                    'MOVING_UNKNOWN',
+                    'SPACE_DEBRIS',
+                ],
                 'null'       => false,
             ],
             'ra' => [
@@ -101,9 +115,15 @@ class CreateAnomaliesTable extends Migration
 
         // FK for frame_id — anomalies are deleted when frame is deleted
         $this->forge->addForeignKey('frame_id', 'frames', 'id', 'CASCADE', 'CASCADE');
-        
-        // Note: source_id has no FK constraint to allow TRUNCATE on sources table.
-        // Referential integrity for source_id is managed at the application level.
+
+        // FK for source_id — anomalies is the primary detection-event record, so a
+        // source being removed from the catalog should NOT cascade-delete the
+        // anomaly history; it just detaches it (ON DELETE SET NULL). ON UPDATE
+        // CASCADE keeps it in sync if a source's id ever changes. NULL is allowed
+        // (source_id itself is nullable) for anomalies not yet linked to a
+        // resolved `sources` row. Truncating `sources` with FOREIGN_KEY_CHECKS=0
+        // (as done for local dev resets) still works fine with this FK in place.
+        $this->forge->addForeignKey('source_id', 'sources', 'id', 'CASCADE', 'SET NULL');
 
         $this->forge->createTable('anomalies', true);
 
