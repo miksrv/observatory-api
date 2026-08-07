@@ -5,8 +5,23 @@ namespace App\Models;
 /**
  * Model for the `sources` table (Source Catalog).
  *
- * Master catalog of unique celestial sources (stars, galaxies, etc.).
- * A source is identified by its sky coordinates.
+ * Master catalog of unique celestial sources (stars, galaxies, asteroids,
+ * etc.). A source is identified primarily by its stable catalog identity
+ * — (catalog_name, catalog_id), e.g. ("MPC", "Vesta") or ("Gaia DR3", "Gaia
+ * DR3 1234567890") — via findByCatalogIdentity(). Position-based matching
+ * (findByCoordinates(), below) is only a fallback for sources with no
+ * catalog match at all.
+ *
+ * This table intentionally has NO ra/dec columns of its own: a single
+ * static position only makes sense for objects that don't move, and this
+ * catalog also has to hold asteroids/comets (matched via MPC) whose sky
+ * position shifts well beyond any reasonable fixed-position matching
+ * radius between frames. Position-based dedup on a static (ra, dec) column
+ * would silently mint a brand-new `sources` row for a moving object on
+ * every single frame instead of accumulating observations against one
+ * source — exactly the bug this design replaces. Per-epoch positions live
+ * in `source_observations` (one row per frame) and that table is what all
+ * positional lookups here delegate to, via SourceObservationModel.
  */
 class SourceModel extends BaseModel
 {
@@ -18,8 +33,6 @@ class SourceModel extends BaseModel
 
     protected $allowedFields = [
         'id',
-        'ra',
-        'dec',
         'catalog_name',
         'catalog_id',
         'catalog_mag',
@@ -30,9 +43,32 @@ class SourceModel extends BaseModel
     ];
 
     /**
-     * Find a source within a matching radius of given coordinates.
+     * Find a source by its stable catalog identity — the preferred match
+     * for any source a catalog cross-match actually identified (Simbad,
+     * Gaia DR3, 2MASS, Pan-STARRS, MPC). Unlike position matching, this is
+     * unaffected by real on-sky motion between frames.
      *
-     * Uses a bounding-box pre-filter then Haversine for precise matching.
+     * @param string|null $catalogName e.g. "MPC", "Gaia DR3" — null means "no catalog match"
+     * @param string|null $catalogId   catalog's own identifier/designation
+     *
+     * @return array|null Source record, or null if either field is missing/empty or no match exists
+     */
+    public function findByCatalogIdentity(?string $catalogName, ?string $catalogId): ?array
+    {
+        if ($catalogName === null || $catalogName === '' || $catalogId === null || $catalogId === '') {
+            return null;
+        }
+
+        return $this->where('catalog_name', $catalogName)
+            ->where('catalog_id', $catalogId)
+            ->first();
+    }
+
+    /**
+     * Positional dedup fallback for sources with no catalog identity at
+     * all (catalog_name/catalog_id both null) — position is the only
+     * signal available for those. Delegates to SourceObservationModel
+     * since `sources` no longer carries its own ra/dec.
      *
      * @param float $ra           RA in degrees
      * @param float $dec          Dec in degrees
@@ -42,49 +78,62 @@ class SourceModel extends BaseModel
      */
     public function findByCoordinates(float $ra, float $dec, float $radiusArcsec = 2.0): ?array
     {
-        // Convert arcsec to degrees for bounding box
-        $deg = $radiusArcsec / 3600.0;
+        $sourceId = (new SourceObservationModel())->findNearestSourceId($ra, $dec, $radiusArcsec);
 
-        // Bounding-box pre-filter
-        $candidates = $this->where('ra >=', $ra - $deg)
-            ->where('ra <=', $ra + $deg)
-            ->where('dec >=', $dec - $deg)
-            ->where('dec <=', $dec + $deg)
-            ->findAll();
-
-        // Haversine precise filter
-        foreach ($candidates as $source) {
-            $distance = $this->haversineArcsec($ra, $dec, (float)$source['ra'], (float)$source['dec']);
-            if ($distance <= $radiusArcsec) {
-                return $source;
-            }
-        }
-
-        return null;
+        return $sourceId !== null ? $this->find($sourceId) : null;
     }
 
     /**
-     * Calculate angular distance between two sky points using the Haversine formula.
+     * Cone search: all known sources within a radius of given coordinates,
+     * nearest-first. Positions come from each source's nearest matching
+     * observation (see SourceObservationModel::coneSearchDistinctSources()),
+     * since `sources` itself has no static ra/dec anymore.
      *
-     * @param float $ra1  RA of point 1 (degrees)
-     * @param float $dec1 Dec of point 1 (degrees)
-     * @param float $ra2  RA of point 2 (degrees)
-     * @param float $dec2 Dec of point 2 (degrees)
+     * @param float $ra           RA in degrees
+     * @param float $dec          Dec in degrees
+     * @param float $radiusArcsec Search radius in arcseconds
      *
-     * @return float Distance in arcseconds
+     * @return array List of source records, each merged with its matched
+     *               ra/dec, e.g. [['id'=>, 'ra'=>, 'dec'=>, 'catalog_name'=>, ...]]
      */
-    private function haversineArcsec(float $ra1, float $dec1, float $ra2, float $dec2): float
+    public function coneSearch(float $ra, float $dec, float $radiusArcsec): array
     {
-        $ra1  = deg2rad($ra1);
-        $dec1 = deg2rad($dec1);
-        $ra2  = deg2rad($ra2);
-        $dec2 = deg2rad($dec2);
+        $nearest = (new SourceObservationModel())->coneSearchDistinctSources($ra, $dec, $radiusArcsec);
 
-        $dra  = $ra2 - $ra1;
-        $ddec = $dec2 - $dec1;
+        if (empty($nearest)) {
+            return [];
+        }
 
-        $a = sin($ddec / 2) ** 2 + cos($dec1) * cos($dec2) * sin($dra / 2) ** 2;
+        $sourceRows = $this->whereIn('id', array_column($nearest, 'source_id'))->findAll();
+        $byId       = [];
 
-        return 2 * asin(sqrt($a)) * (180.0 / M_PI) * 3600.0;
+        foreach ($sourceRows as $row) {
+            $byId[$row['id']] = $row;
+        }
+
+        $results = [];
+
+        foreach ($nearest as $match) {
+            $row = $byId[$match['source_id']] ?? null;
+
+            // Defensive: source_observations.source_id has a FK to sources,
+            // so this should never actually be missing.
+            if ($row === null) {
+                continue;
+            }
+
+            $results[] = [
+                'id'                => $row['id'],
+                'ra'                => $match['ra'],
+                'dec'               => $match['dec'],
+                'catalog_name'      => $row['catalog_name'],
+                'catalog_id'        => $row['catalog_id'],
+                'object_type'       => $row['object_type'],
+                'observation_count' => (int) $row['observation_count'],
+                'last_observed_at'  => $row['last_observed_at'],
+            ];
+        }
+
+        return $results;
     }
 }

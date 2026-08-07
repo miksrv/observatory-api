@@ -52,6 +52,14 @@ class ObjectStatsModel extends BaseModel
      * Increment stats for an object+filter combination.
      * Creates a new row if this is the first frame for this combo.
      *
+     * Serialized with a named advisory lock (see {@see self::withObjectFilterLock()})
+     * because this is a read-then-write: two frames for the same object+filter
+     * registered concurrently could otherwise both read the same "existing"
+     * row and each write frame_count+1 (one increment silently lost), or
+     * both see "no existing row" and each insert a duplicate row for the
+     * same combo — there's no UNIQUE(object, filter) constraint to catch
+     * that (see the migration's comment on why).
+     *
      * @param string      $object  Object name (e.g., "M51")
      * @param string|null $filter  Filter name (e.g., "L", "Ha", or NULL)
      * @param float       $exptime Exposure time in seconds
@@ -66,6 +74,62 @@ class ObjectStatsModel extends BaseModel
         string $obsTime,
         ?float $fwhm = null,
         ?float $airmass = null
+    ): void {
+        $this->withObjectFilterLock($object, $filter, function () use ($object, $filter, $exptime, $obsTime, $fwhm, $airmass): void {
+            $this->incrementStatsUnlocked($object, $filter, $exptime, $obsTime, $fwhm, $airmass);
+        });
+    }
+
+    /**
+     * Run $callback while holding a named MySQL/MariaDB advisory lock
+     * (GET_LOCK) scoped to one object+filter combination, so concurrent
+     * pipeline requests for the *same* combo are serialized while requests
+     * for different combos still run in parallel.
+     *
+     * A regular transaction + `SELECT ... FOR UPDATE` can't cover this: it
+     * only locks rows that already exist, so it can't prevent two
+     * concurrent requests from both seeing "no row yet" and both inserting.
+     * An advisory lock has no such requirement.
+     */
+    private function withObjectFilterLock(string $object, ?string $filter, callable $callback): void
+    {
+        // GET_LOCK() names are capped at 64 bytes in MariaDB; hash to be safe
+        // regardless of object-name length.
+        $lockName = 'object_stats:' . md5($object . '|' . ($filter ?? ''));
+
+        $acquired = $this->db->query('SELECT GET_LOCK(?, 5) AS acquired', [$lockName])
+            ->getRow()
+            ->acquired ?? null;
+
+        if ((int) $acquired !== 1) {
+            // Couldn't get the lock within 5s (or the driver doesn't support
+            // GET_LOCK). Proceed best-effort rather than dropping the frame's
+            // stats update entirely — a rare lost increment under heavy
+            // concurrent write load is preferable to failing the request.
+            log_message('warning', 'ObjectStatsModel: could not acquire lock for ' . $lockName . '; proceeding without it.');
+            $callback();
+
+            return;
+        }
+
+        try {
+            $callback();
+        } finally {
+            $this->db->query('SELECT RELEASE_LOCK(?)', [$lockName]);
+        }
+    }
+
+    /**
+     * The actual read-then-write increment logic. Only ever call this from
+     * within {@see self::withObjectFilterLock()} — see its docblock for why.
+     */
+    private function incrementStatsUnlocked(
+        string $object,
+        ?string $filter,
+        float $exptime,
+        string $obsTime,
+        ?float $fwhm,
+        ?float $airmass
     ): void {
         $existing = $this->findByObjectAndFilter($object, $filter);
 
