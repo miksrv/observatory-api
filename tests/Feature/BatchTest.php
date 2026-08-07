@@ -67,21 +67,30 @@ final class BatchTest extends CIUnitTestCase
 
     private function createSource(array $data = []): string
     {
-        $db = \Config\Database::connect('default');
-        $id = uniqid('', true);
-        $db->table('sources')->insert(array_merge([
+        $db  = \Config\Database::connect('default');
+        $id  = uniqid('', true);
+        $row = array_merge([
             'id'                => $id,
-            'ra'                => 202.461,
-            'dec'               => 47.182,
+            // catalog_id defaults to something unique per call — `sources`
+            // now has a UNIQUE(catalog_name, catalog_id) key, and several
+            // tests call createSource() more than once without overriding it.
             'catalog_name'      => 'Gaia DR3',
-            'catalog_id'        => 'Gaia DR3 1234567890',
+            'catalog_id'        => 'Gaia DR3 ' . $id,
             'object_type'       => 'STAR',
             'first_observed_at' => '2024-01-01 00:00:00',
             'last_observed_at'  => '2024-01-01 00:00:00',
             'observation_count' => 1,
-        ], $data));
+        ], $data);
 
-        return $id;
+        // `sources` no longer has ra/dec columns — callers pass them through
+        // here only for convenience/readability at the call site; the actual
+        // position always ends up in the source_observations row the caller
+        // inserts separately.
+        unset($row['ra'], $row['dec']);
+
+        $db->table('sources')->insert($row);
+
+        return $row['id'];
     }
 
     // =========================================================================
@@ -209,6 +218,74 @@ final class BatchTest extends CIUnitTestCase
             ]);
 
         $result->assertStatus(401);
+    }
+
+    /**
+     * A naive per-batch bounding box built from raw min/max RA values breaks
+     * down at the RA=0/360 seam: a lone position at ra=0.001 gets boxed to
+     * roughly [-0.001, 0.003], which never matches an observation sitting
+     * right across the seam at ra=359.999.
+     */
+    public function testSourcesNearBatchFindsObservationAcrossRaSeam(): void
+    {
+        $frameId = $this->createFrame(['obs_time' => '2024-01-01 00:00:00']);
+
+        $db = \Config\Database::connect('default');
+        $db->table('source_observations')->insert([
+            'id'        => uniqid('', true),
+            'source_id' => $this->createSource(['ra' => 359.999, 'dec' => 10.0]),
+            'frame_id'  => $frameId,
+            'ra'        => 359.999,
+            'dec'       => 10.0,
+            'mag'       => 14.0,
+            'flux'      => 10000.0,
+            'obs_time'  => '2024-01-01 00:00:00',
+        ]);
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post('/api/v1/sources/near/batch', [
+                'positions'     => [['ra' => 0.001, 'dec' => 10.0]],
+                'radius_arcsec' => 10.0,
+            ]);
+
+        $result->assertStatus(200);
+        $json = json_decode($result->getJSON(), true);
+        $this->assertNotEmpty($json['results']['0'], 'Observation across the RA=0/360 seam must still be found.');
+    }
+
+    /**
+     * Sanity check for southern-hemisphere (negative dec) targets — the
+     * batch bounding box's dec bounds must be derived from the actual min/max
+     * of the batch, not from an accidentally-positive sentinel.
+     */
+    public function testSourcesNearBatchWorksForSouthernDeclinations(): void
+    {
+        $frameId = $this->createFrame(['obs_time' => '2024-01-01 00:00:00']);
+
+        $db = \Config\Database::connect('default');
+        $db->table('source_observations')->insert([
+            'id'        => uniqid('', true),
+            'source_id' => $this->createSource(['ra' => 60.0, 'dec' => -47.2]),
+            'frame_id'  => $frameId,
+            'ra'        => 60.0,
+            'dec'       => -47.2,
+            'mag'       => 14.0,
+            'flux'      => 10000.0,
+            'obs_time'  => '2024-01-01 00:00:00',
+        ]);
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post('/api/v1/sources/near/batch', [
+                'positions'     => [['ra' => 60.0, 'dec' => -47.2], ['ra' => 60.0, 'dec' => -10.0]],
+                'radius_arcsec' => 10.0,
+            ]);
+
+        $result->assertStatus(200);
+        $json = json_decode($result->getJSON(), true);
+        $this->assertNotEmpty($json['results']['0']);
+        $this->assertEmpty($json['results']['1']);
     }
 
     // =========================================================================
@@ -354,6 +431,32 @@ final class BatchTest extends CIUnitTestCase
 
         // Should not find the frame (it's after before_time)
         $this->assertEmpty($json['results']['0']);
+    }
+
+    /**
+     * Same RA=0/360 seam problem as sources/near/batch, on the frames side:
+     * a lone query position near ra=0 must still find a frame centred just
+     * across the seam near ra=360.
+     */
+    public function testFramesCoveringBatchFindsFrameAcrossRaSeam(): void
+    {
+        $this->createFrame([
+            'ra_center'  => 359.98,
+            'dec_center' => 10.0,
+            'fov_deg'    => 1.0,
+            'obs_time'   => '2024-03-10 00:00:00',
+        ]);
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post('/api/v1/frames/covering/batch', [
+                'positions'   => [['ra' => 0.02, 'dec' => 10.0]],
+                'before_time' => '2025-01-01T00:00:00Z',
+            ]);
+
+        $result->assertStatus(200);
+        $json = json_decode($result->getJSON(), true);
+        $this->assertNotEmpty($json['results']['0'], 'Frame across the RA=0/360 seam must still be found.');
     }
 }
 

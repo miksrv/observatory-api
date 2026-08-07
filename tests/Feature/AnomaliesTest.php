@@ -80,6 +80,27 @@ final class AnomaliesTest extends CIUnitTestCase
         ];
     }
 
+    /**
+     * Insert a minimal `sources` row directly and return its id — used to
+     * exercise the anomalies.source_id FK (see CreateAnomaliesTable migration).
+     */
+    private function createSource(): string
+    {
+        $db = \Config\Database::connect('default');
+        $id = uniqid('', true);
+        $db->table('sources')->insert([
+            'id'                => $id,
+            'catalog_name'      => 'MPC',
+            'catalog_id'        => 'Vesta-' . $id,
+            'object_type'       => 'ASTEROID',
+            'first_observed_at' => '2024-03-15 22:01:34',
+            'last_observed_at'  => '2024-03-15 22:01:34',
+            'observation_count' => 1,
+        ]);
+
+        return $id;
+    }
+
     private function asteroidWithEphemeris(): array
     {
         return [
@@ -183,6 +204,84 @@ final class AnomaliesTest extends CIUnitTestCase
     }
 
     // -------------------------------------------------------------------------
+    // source_id linkage (FK to sources.id — see CreateAnomaliesTable migration)
+    // -------------------------------------------------------------------------
+
+    public function testAnomalySourceIdIsPersistedWhenProvided(): void
+    {
+        $frameId  = $this->createFrame();
+        $sourceId = $this->createSource();
+
+        $anomaly              = $this->anomalyOf('ASTEROID');
+        $anomaly['source_id'] = $sourceId;
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->anomaliesEndpoint($frameId), [
+                'filename'  => 'test.fits',
+                'anomalies' => [$anomaly],
+            ]);
+
+        $result->assertStatus(201);
+
+        $db  = \Config\Database::connect('default');
+        $row = $db->table('anomalies')->where('frame_id', $frameId)->get()->getRowArray();
+        $this->assertNotNull($row);
+        $this->assertSame($sourceId, $row['source_id']);
+    }
+
+    public function testAnomalySourceIdOmittedDefaultsToNull(): void
+    {
+        $frameId = $this->createFrame();
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->anomaliesEndpoint($frameId), [
+                'filename'  => 'test.fits',
+                // 'source_id' intentionally omitted, as the pipeline sends
+                // for any source it could not resolve a sources.id for.
+                'anomalies' => [$this->anomalyOf('UNKNOWN')],
+            ]);
+
+        $result->assertStatus(201);
+
+        $db  = \Config\Database::connect('default');
+        $row = $db->table('anomalies')->where('frame_id', $frameId)->get()->getRowArray();
+        $this->assertNull($row['source_id']);
+    }
+
+    /**
+     * Regression test for the anomalies.source_id FK added to the existing
+     * CreateAnomaliesTable migration: deleting the referenced `sources` row
+     * must detach the anomaly (ON DELETE SET NULL), not cascade-delete it —
+     * an anomaly is a detection *event* and should survive its source being
+     * later removed from the catalog.
+     */
+    public function testDeletingSourceDetachesAnomalyInsteadOfDeletingIt(): void
+    {
+        $frameId  = $this->createFrame();
+        $sourceId = $this->createSource();
+
+        $anomaly              = $this->anomalyOf('ASTEROID');
+        $anomaly['source_id'] = $sourceId;
+
+        $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->anomaliesEndpoint($frameId), [
+                'filename'  => 'test.fits',
+                'anomalies' => [$anomaly],
+            ])
+            ->assertStatus(201);
+
+        $db = \Config\Database::connect('default');
+        $db->table('sources')->where('id', $sourceId)->delete();
+
+        $row = $db->table('anomalies')->where('frame_id', $frameId)->get()->getRowArray();
+        $this->assertNotNull($row, 'Anomaly row must survive the source deletion');
+        $this->assertNull($row['source_id'], 'source_id must be detached (SET NULL), not left dangling');
+    }
+
+    // -------------------------------------------------------------------------
     // Error paths
     // -------------------------------------------------------------------------
 
@@ -210,6 +309,29 @@ final class AnomaliesTest extends CIUnitTestCase
             ]);
 
         $result->assertStatus(400);
+    }
+
+    public function testInvalidAnomalyTypeReturns400AndInsertsNothing(): void
+    {
+        $frameId = $this->createFrame();
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->anomaliesEndpoint($frameId), [
+                'filename'  => 'test.fits',
+                'anomalies' => [
+                    $this->anomalyOf('UNKNOWN'),
+                    $this->anomalyOf('NOT_A_REAL_TYPE'),
+                ],
+            ]);
+
+        $result->assertStatus(400);
+
+        // The whole batch is rejected atomically — the valid UNKNOWN entry
+        // ahead of the bad one must not have been inserted either.
+        $db    = \Config\Database::connect('default');
+        $count = $db->table('anomalies')->where('frame_id', $frameId)->countAllResults();
+        $this->assertSame(0, $count);
     }
 
     public function testNoApiKeyReturns401(): void
