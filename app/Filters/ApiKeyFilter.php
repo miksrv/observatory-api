@@ -27,7 +27,11 @@ class ApiKeyFilter implements FilterInterface
         $configuredKey = config('App')->apiKey;
         $providedKey   = $request->getHeaderLine('X-API-Key');
 
-        if ($configuredKey === '' || $providedKey !== $configuredKey) {
+        // hash_equals() compares in constant time regardless of where the
+        // strings first differ, unlike !==, which short-circuits on the
+        // first mismatched byte and can leak timing information about the
+        // secret to an attacker probing the endpoint.
+        if ($configuredKey === '' || ! hash_equals($configuredKey, $providedKey)) {
             return response()
                 ->setStatusCode(ResponseInterface::HTTP_UNAUTHORIZED)
                 ->setJSON(['error' => 'Unauthorized', 'details' => (object) []]);
