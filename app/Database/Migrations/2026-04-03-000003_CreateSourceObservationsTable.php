@@ -65,6 +65,28 @@ class CreateSourceObservationsTable extends Migration
                 'type' => 'FLOAT',
                 'null' => true,
             ],
+            // Mirrors observatory-pipeline's astrometry.py `saturated` flag: raw ADU at the
+            // detection's peak was at or above SATURATION_ADU. Persisted (rather than left as an
+            // in-memory-only pipeline flag) so a later, decoupled DETECT_ANOMALIES task can
+            // reconstruct anomaly_detector.py's saturated-artifact suppression rule purely from
+            // stored data, without re-running astrometry/photometry on the original FITS file.
+            'saturated' => [
+                'type'       => 'TINYINT',
+                'constraint' => 1,
+                'default'    => 0,
+                'null'       => false,
+            ],
+            // Mirrors observatory-pipeline's subtraction.py `_from_subtraction` flag: this
+            // observation came from image-subtraction candidate detection, not the normal
+            // detection path. Persisted for the same reason as `saturated` above — without it, a
+            // decoupled anomaly-detection re-run can't tell a subtraction-confirmed candidate from
+            // an ordinary detection, and would wrongly apply the stricter coverage-check gate to it.
+            'from_subtraction' => [
+                'type'       => 'TINYINT',
+                'constraint' => 1,
+                'default'    => 0,
+                'null'       => false,
+            ],
             'obs_time' => [
                 'type' => 'DATETIME',
                 'null' => false,

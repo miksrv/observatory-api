@@ -24,11 +24,6 @@ class CreateFramesTable extends Migration
                 'constraint' => 255,
                 'null'       => false,
             ],
-            'original_filepath' => [
-                'type'       => 'VARCHAR',
-                'constraint' => 500,
-                'null'       => true,
-            ],
             'obs_time' => [
                 'type' => 'DATETIME',
                 'null' => false,
