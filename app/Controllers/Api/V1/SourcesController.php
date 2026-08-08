@@ -313,8 +313,17 @@ class SourcesController extends BaseApiController
         $raRanges = SkyMath::combinedRaRanges($raWithMargins);
 
         // ----------------------------------------------------------------
-        // Query source_observations joined with frames for obs_time filter
-        // This returns actual observations with mag, flux, etc.
+        // Query source_observations, joined with frames to pull each
+        // observation's filter (source_observations itself has no filter
+        // column — only the frame it came from does). The pipeline's
+        // anomaly_detector.py needs this to restrict its historical Δmag
+        // comparison to same-filter detections: a star's brightness in
+        // filter R differs from filter G/Gaia's broadband G purely from its
+        // color (a "color term"), independent of any real change, so
+        // comparing magnitudes across filters is not a valid variability
+        // signal. A LEFT JOIN (not INNER) so a source_observations row
+        // whose frame was since deleted still comes back with filter=null
+        // instead of silently disappearing from the history results.
         // ----------------------------------------------------------------
         $db = \Config\Database::connect();
 
@@ -327,8 +336,9 @@ class SourcesController extends BaseApiController
             $params[]    = $max;
         }
 
-        $sql = 'SELECT so.id, so.source_id, so.frame_id, so.ra, so.dec, so.mag, so.flux, so.fwhm, so.obs_time
+        $sql = 'SELECT so.id, so.source_id, so.frame_id, so.ra, so.dec, so.mag, so.flux, so.fwhm, so.obs_time, f.filter AS filter
                 FROM source_observations so
+                LEFT JOIN frames f ON f.id = so.frame_id
                 WHERE (' . implode(' OR ', $raClauses) . ')
                   AND so.dec BETWEEN ? AND ?';
         $params[] = $minDec;
@@ -364,6 +374,7 @@ class SourcesController extends BaseApiController
                         'flux'     => $obs['flux'] !== null ? (float) $obs['flux'] : null,
                         'frame_id' => $obs['frame_id'],
                         'obs_time' => gmdate('Y-m-d\TH:i:s\Z', strtotime($obs['obs_time'])),
+                        'filter'   => $obs['filter'],
                     ];
                 }
             }
