@@ -43,6 +43,43 @@ README.md's Architecture section for the full picture.
   a JSON **object** keyed by index or id, never an array — the controllers explicitly cast to
   `(object)` before encoding because PHP re-canonicalizes numeric string keys. Preserve that cast
   in any new batch endpoint.
+- **`POST /frames/{id}/anomalies` replaces, it doesn't append.** It deletes every existing
+  `anomalies` row for that `frame_id` before inserting the new batch (after `anomaly_type`
+  validation passes, so a malformed request can't wipe existing data first). This exists so a
+  standalone `DETECT_ANOMALIES` task re-run for an already-classified frame supersedes the
+  previous run's anomalies instead of accumulating duplicates alongside them.
+- **`source_observations.saturated`/`from_subtraction` exist so anomaly detection can be decoupled
+  from astrometry/photometry.** They mirror observatory-pipeline's own transient per-source flags
+  — without persisting them, a standalone `DETECT_ANOMALIES` task re-run purely from stored data
+  (no local FITS access) couldn't reconstruct `anomaly_detector.py`'s saturated-suppression or
+  subtraction-coverage-bypass rules for that observation.
+- **`source_observations` has no `filter` column of its own** — a photometric filter is a property
+  of the *frame*, not the observation row. `SourcesController::nearBatch()` therefore `LEFT JOIN`s
+  `frames` on `frame_id` to resolve each historical detection's filter into the `filter` field of
+  its response (`docs/API.md` section on `POST /sources/near/batch`). observatory-pipeline's
+  `anomaly_detector.py` needs this to restrict its Δmag comparison to same-filter epochs — a star's
+  brightness in one filter isn't directly comparable to another (a color term, not real
+  variability). `GET /sources/near` (the older single-position endpoint, no longer called from the
+  pipeline) was intentionally left as-is rather than also joining `frames` for a field nothing
+  reads.
+- **`tasks`/`task_items` scope is authoritative on `task_items`, not on `tasks`' descriptive
+  `scope_object`/`scope_date_from`/`scope_date_to` columns.** Those three exist only so a task
+  list can be filtered/displayed without joining and aggregating `task_items` every time — never
+  query "which frames does this task cover" from them; resolve it from `task_items` itself.
+- **`source_charts` is dual-keyed: `source_id` OR `task_item_id`, never both.** A finder/discovery
+  chart (`track`/`stamp_strip`/`before_after`) has a source; a `PREVIEW_CATALOG_MATCH` diagnostic
+  chart (`catalog_preview`) doesn't — it's a whole-frame image, not tied to any celestial object —
+  so it keys on `task_item_id` instead. There's no FK from `task_item_id` to `task_items.id`: this
+  migration (2026-08-06) runs before `CreateTasksTable` (2026-08-07) in migration order, so adding
+  one would fail `CREATE TABLE` on a fresh database. Don't "fix" that by adding the FK in place —
+  either move this migration's timestamp after `CreateTasksTable`'s, or add the FK via a follow-up
+  migration.
+- **`POST /tasks/{id}/items/progress`'s `payload` field is bidirectional**, not input-only despite
+  `TasksController::create()` being where it's first mentioned: `GENERATE_CHARTS` reads it as input
+  at task-creation time; `PREVIEW_CATALOG_MATCH` overwrites it with a result
+  (`{"matched", "total", "quality_flag", "chart_uploaded"}`) at completion time via this endpoint.
+  Same column, opposite direction, depending entirely on the task type — never assume "payload" is
+  always caller-supplied input.
 
 ---
 

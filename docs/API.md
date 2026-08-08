@@ -74,10 +74,26 @@ All other errors use:
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/frames` | Register a new FITS frame |
+| `GET` | `/frames` | List frames, filtered by object and/or date range |
 | `GET` | `/frames/covering` | Frames covering a sky point |
 | `POST` | `/frames/covering/batch` | Batch version for multiple positions |
+| `GET` | `/frames/nearest-before` | Most recent frame of an object before a given time |
+| `GET` | `/frames/{id}` | A single frame's full stored record |
+| `GET` | `/frames/{id}/sources` | Sources currently linked to a frame, with per-frame values |
 | `POST` | `/frames/{id}/sources` | Save detected sources for a frame |
-| `POST` | `/frames/{id}/anomalies` | Save classified anomalies for a frame |
+| `POST` | `/frames/{id}/anomalies` | Save classified anomalies for a frame (replaces the frame's anomaly set) |
+
+### Tasks
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/tasks` | Create a task (ANALYZE / DETECT_ANOMALIES / GENERATE_CHARTS / PREVIEW_CATALOG_MATCH) with its item list |
+| `GET` | `/tasks` | List tasks, filtered by status/type/object |
+| `GET` | `/tasks/{id}` | Task detail, including its full item list |
+| `PATCH` | `/tasks/{id}` | Update a task's status |
+| `POST` | `/tasks/{id}/items/progress` | Report the outcome of one or more items |
+| `POST` | `/tasks/{id}/items/{item_id}/chart` | Upload/replace a PREVIEW_CATALOG_MATCH item's diagnostic chart PNG |
+| `GET` | `/tasks/{id}/items/{item_id}/chart.png` | Fetch a task item's stored diagnostic chart PNG |
 
 ### Sources
 
@@ -119,7 +135,6 @@ any missing sub-field is stored as `NULL`.
 ```json
 {
   "filename": "frame_20240315_220134.fits",
-  "original_filepath": "/fits/archive/M51/frame_20240315_220134.fits",
   "obs_time": "2024-03-15T22:01:34Z",
   "ra_center": 202.4696,
   "dec_center": 47.1952,
@@ -289,12 +304,21 @@ asteroid can shift tens of arcsec/hour) — position-only matching would otherwi
       "catalog_name": "Gaia DR3",
       "catalog_id": "Gaia DR3 1234567890123456789",
       "catalog_mag": 14.15,
-      "object_type": "STAR"
+      "object_type": "STAR",
+      "saturated": false,
+      "from_subtraction": false
     }
   ]
 }
 ```
 </details>
+
+`sources[].saturated` and `sources[].from_subtraction` (both optional, default `false`) mirror
+observatory-pipeline's own transient per-source flags (`astrometry.py`'s `saturated`,
+`subtraction.py`'s `_from_subtraction`) into `source_observations`, so a later, standalone
+`DETECT_ANOMALIES` task can reconstruct `anomaly_detector.py`'s saturated-suppression and
+subtraction-coverage-bypass rules for this observation from stored data alone — see
+`GET /frames/{id}/sources` below.
 
 **Response `201 Created`:**
 ```json
@@ -319,7 +343,13 @@ invalid (missing numeric `ra`/`dec`)
 
 ### POST /api/v1/frames/{id}/anomalies
 
-Save classified anomalies for a frame. An empty `anomalies` array is valid (`count: 0, alerts: 0`).
+Save classified anomalies for a frame. **This call replaces the frame's entire anomaly set** —
+any anomalies already stored for this `frame_id` are deleted before the new batch is inserted,
+so re-running anomaly detection for an already-classified frame (e.g. after fixing the classifier,
+or via a standalone `DETECT_ANOMALIES` task) never leaves stale anomalies from the previous run
+sitting alongside the new ones. The delete only happens after `anomaly_type` validation passes for
+every entry, so a malformed request never wipes existing data. An empty `anomalies` array is valid
+(`count: 0, alerts: 0`) and correctly represents "re-ran, found nothing this time".
 
 **Required:** `filename`, `anomalies` (array). Per anomaly: `anomaly_type` (must be one of the
 allowed values below — an unrecognized value rejects the **whole batch** with `400`, nothing is
@@ -383,6 +413,318 @@ the id returned for that same source in `source_ids` from the preceding
 
 **Errors:** `400` missing `filename`/`anomalies`, or an unrecognized `anomaly_type` (batch
 rejected atomically) · `404` frame not found · `500` batch insert failed
+
+---
+
+### GET /api/v1/frames
+
+List frames, oldest first by `obs_time`, optionally filtered by object and/or an `obs_time` range.
+This is the scope-resolution query behind a standalone task:
+turning `object=M51` into a concrete list of frame ids covers that object's **entire** observation
+history, not just frames from a particular pipeline run — e.g. re-running anomaly detection across
+frames taken a year apart, which the inline per-frame pipeline flow has no way to express.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `object` | string | no | Exact match on `frames.object` |
+| `date_from` | ISO 8601 | no | `obs_time >=` this |
+| `date_to` | ISO 8601 | no | `obs_time <` this |
+| `limit` | int | no | Max rows (default 100, capped at 1000) |
+| `offset` | int | no | Pagination offset (default 0) |
+
+**Response `200 OK`** — ordered oldest-first by `obs_time`; each entry has the same full shape as
+`GET /frames/{id}` below:
+```json
+{ "data": [ { "id": "42", "filename": "...", "object": "M51", "obs_time": "...", "...": "..." } ] }
+```
+
+**Errors:** `400` unparseable `date_from`/`date_to`
+
+---
+
+### GET /api/v1/frames/{id}
+
+A single previously registered frame's full stored record — every field `POST /frames` accepted,
+echoed back flat (no nested `observation`/`instrument`/... groups). Lets a standalone task
+reconstruct the `frame_meta` `anomaly_detector.py` needs without any local filesystem access to
+the original FITS file.
+
+**Response `200 OK`:**
+```json
+{
+  "frame": {
+    "id": "42",
+    "filename": "frame_20240315_220134.fits",
+    "obs_time": "2024-03-15T22:01:34Z",
+    "ra_center": 202.4696,
+    "dec_center": 47.1952,
+    "fov_deg": 1.25,
+    "quality_flag": "OK",
+    "object": "M51",
+    "exptime": 120.0,
+    "filter": "V",
+    "frame_type": "Light",
+    "airmass": 1.23,
+    "telescope": "Celestron EdgeHD 11",
+    "camera": "ZWO ASI2600MM Pro",
+    "qc_fwhm_median": 3.2,
+    "...": "... every other frames column, same field names as POST /frames' flattened form"
+  }
+}
+```
+
+**Errors:** `404` frame not found
+
+---
+
+### GET /api/v1/frames/{id}/sources
+
+The sources currently linked to a frame, each with **this frame's own** measured values
+(`source_observations` — not a static catalog position) plus that source's catalog identity. This
+is the piece a standalone `DETECT_ANOMALIES` task needs to reconstruct `anomaly_detector.py`'s
+per-source input for an already-processed frame entirely from stored data — no re-running
+astrometry/photometry, no local FITS access required.
+
+**Response `200 OK`:**
+```json
+{
+  "frame_id": "42",
+  "data": [
+    {
+      "source_id": "6612f8a5e3b9c9.12345678",
+      "ra": 202.461,
+      "dec": 47.182,
+      "mag": 14.23,
+      "mag_err": 0.02,
+      "flux": 45230.5,
+      "flux_err": 120.0,
+      "fwhm": 3.1,
+      "snr": 125.5,
+      "elongation": 1.1,
+      "saturated": false,
+      "from_subtraction": false,
+      "catalog_name": "Gaia DR3",
+      "catalog_id": "Gaia DR3 1234567890123456789",
+      "catalog_mag": 14.15,
+      "object_type": "STAR"
+    }
+  ]
+}
+```
+Returns `{"data": []}` if the frame has no linked sources.
+
+**Errors:** `404` frame not found
+
+---
+
+### Tasks
+
+The granular pipeline job queue. observatory-pipeline submits one task per stage (`ANALYZE` /
+`DETECT_ANOMALIES` / `GENERATE_CHARTS`) instead of running all three inline per file, so any stage
+can be re-run later for an explicit scope — an object, a date range, or exactly the frame/source
+ids a prior stage produced — without re-running whatever came before it.
+
+### POST /api/v1/tasks
+
+Create a task with its full, fixed item list.
+
+**Required:** `type` (one of `ANALYZE`, `DETECT_ANOMALIES`, `GENERATE_CHARTS`,
+`PREVIEW_CATALOG_MATCH`), `items` (array, at least one entry — each entry needs exactly one of
+`filename` / `frame_id` / `source_id`, matching what the task's `type` operates over).
+**Optional:** `scope` (`object`, `date_from`, `date_to` — descriptive only, not queried against;
+the `items` array is the authoritative scope), `parent_task_id` (links a re-run to the task it
+re-runs — must refer to an existing task).
+
+`PREVIEW_CATALOG_MATCH` is observatory-pipeline's diagnostic tool (not part of the
+ANALYZE/DETECT_ANOMALIES/GENERATE_CHARTS production chain) — its items use `filename` like
+`ANALYZE`. It uploads its rendered chart via `POST /tasks/{id}/items/{item_id}/chart` below (there
+is no `frame_id`/`source_id` to key a chart on for this task type — see `source_charts`' schema in
+docs/DATABASE.md) and writes its summary back onto each item's own `payload`
+(`{"matched", "total", "quality_flag", "chart_uploaded"}`) via `POST /tasks/{id}/items/progress`
+below rather than just logging it, since the whole point is a result an operator goes and looks
+at.
+
+<details>
+<summary>Request example</summary>
+
+```json
+{
+  "type": "DETECT_ANOMALIES",
+  "scope": { "object": "M51" },
+  "items": [
+    { "frame_id": "42" },
+    { "frame_id": "57" }
+  ]
+}
+```
+</details>
+
+**Response `201 Created`:**
+```json
+{ "id": "6612f9...", "type": "DETECT_ANOMALIES", "status": "PENDING", "total_items": 2, "message": "Task created successfully" }
+```
+
+**Errors:** `400` invalid/missing `type`, missing/empty `items`, an item with none of
+`filename`/`frame_id`/`source_id`, unparseable `scope.date_from`/`scope.date_to`, or
+`parent_task_id` doesn't refer to an existing task
+
+---
+
+### GET /api/v1/tasks
+
+List tasks, most recent first. Filters (all optional): `status`, `type`, `object` (matches
+`scope_object` exactly). `limit` (default 50, capped at 500).
+
+**Response `200 OK`:**
+```json
+{
+  "data": [
+    {
+      "id": "6612f9...",
+      "type": "DETECT_ANOMALIES",
+      "status": "RUNNING",
+      "scope_object": "M51",
+      "scope_date_from": null,
+      "scope_date_to": null,
+      "total_items": 2,
+      "completed_items": 1,
+      "failed_items": 0,
+      "parent_task_id": null,
+      "error": null,
+      "created_at": "2024-03-15T22:01:34Z",
+      "started_at": "2024-03-15T22:01:40Z",
+      "finished_at": null
+    }
+  ]
+}
+```
+
+---
+
+### GET /api/v1/tasks/{id}
+
+Task detail, including its full item list.
+
+**Response `200 OK`:**
+```json
+{
+  "task": { "...": "same shape as GET /tasks' data entries" },
+  "items": [
+    {
+      "id": "6612fa...",
+      "seq": 0,
+      "filename": null,
+      "frame_id": "42",
+      "source_id": null,
+      "status": "DONE",
+      "error": null,
+      "processed_at": "2024-03-15T22:01:45Z"
+    }
+  ]
+}
+```
+
+**Errors:** `404` task not found
+
+---
+
+### PATCH /api/v1/tasks/{id}
+
+Update a task's own status directly — e.g. the pipeline's worker flips `PENDING` → `RUNNING` when
+it picks the task up, or an operator sets `CANCELLED`. Reaching `COMPLETED` is normally automatic
+(driven by every item resolving via `POST /tasks/{id}/items/progress` below); this endpoint can
+also set it directly (e.g. a zero-item task) or force a state.
+
+**Required:** `status` (one of `PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `CANCELLED`).
+**Optional:** `error` (message, typically set alongside `status: "FAILED"`).
+
+**Response `200 OK`:** `{ "task": { "...": "same shape as GET /tasks/{id}'s task" } }`
+
+**Errors:** `400` invalid/missing `status` · `404` task not found
+
+---
+
+### POST /api/v1/tasks/{id}/items/progress
+
+Report the outcome of one or more items in a single call. The pipeline can call this after every
+individual item for maximum progress granularity, or batch many at once to cut request count —
+this endpoint doesn't enforce either; that trade-off lives entirely on the pipeline side. Updates
+each item row and the parent task's aggregate counters, and auto-completes the task once every
+item has resolved.
+
+**Request body:**
+```json
+{
+  "items": [
+    { "item_id": "6612fa...", "status": "DONE", "frame_id": "42" },
+    { "item_id": "6612fb...", "status": "FAILED", "error": "QC rejected: BLUR" },
+    { "item_id": "6612fc...", "status": "DONE", "payload": { "matched": 82, "total": 98, "quality_flag": "OK", "chart_uploaded": true } }
+  ]
+}
+```
+`frame_id` is only meaningful when reporting an `ANALYZE` item, once `POST /frames` has resolved
+one for it — `DETECT_ANOMALIES`/`GENERATE_CHARTS` items already carry their `frame_id`/`source_id`
+from task creation. `payload` here is a RESULT overwriting the item's stored payload (e.g. a
+`PREVIEW_CATALOG_MATCH` item's summary, shown above) — the same column `GENERATE_CHARTS` reads as
+*input* at task-creation time; which direction depends on the task type, not the field itself.
+
+**Response `200 OK`** — positionally parallel to the request's `items[]`:
+```json
+{
+  "results": [
+    { "item_id": "6612fa...", "status": "ok" },
+    { "item_id": "6612fb...", "status": "ok" }
+  ],
+  "task": { "...": "same shape as GET /tasks/{id}'s task, reflecting the updated counters" }
+}
+```
+An item already resolved (retry, duplicate delivery) reports back `status: "ok"` without
+double-counting the task's counters. An unknown `item_id`, or one belonging to a different task,
+fails only that entry (`status: "error"`) — it never blocks the rest of the batch.
+
+**Errors:** `400` missing `items` (must be an array) · `404` task not found
+
+---
+
+### POST /api/v1/tasks/{task_id}/items/{item_id}/chart
+
+Store the diagnostic chart PNG for a `PREVIEW_CATALOG_MATCH` task item, fully replacing any
+previous one for that item — the `task_item_id`-keyed counterpart of
+`POST /sources/{id}/chart` (section below), for a chart with no source to key on at all (see
+`source_charts`' schema in docs/DATABASE.md: `task_item_id` is nullable and used instead of
+`source_id` for this one style). Same raw-PNG-body shape as that endpoint, for the same reason —
+the request body is entirely consumed by the image.
+
+| Parameter | Type | Required |
+|-----------|------|----------|
+| `style` | must be `catalog_preview` | yes |
+| `frame_count` | int (positive) | yes |
+
+**Request body:** raw PNG bytes, `Content-Type: image/png`. Validated by its 8-byte signature
+(`\x89PNG\r\n\x1a\n`), same as `POST /sources/{id}/chart`.
+
+**Response `200 OK`:**
+```json
+{
+  "task_item_id": "6612fa...",
+  "style": "catalog_preview",
+  "frame_count": 1,
+  "updated_at": "2024-03-15T22:05:00Z"
+}
+```
+
+**Errors:** `400` invalid `{item_id}`, missing/invalid `style` or `frame_count`, or body is not a
+valid PNG · `404` task item not found (on this task)
+
+---
+
+### GET /api/v1/tasks/{task_id}/items/{item_id}/chart.png
+
+Serve the stored diagnostic chart PNG for a task item as raw image bytes (`Content-Type:
+image/png`) — the `task_item_id`-keyed counterpart of `GET /sources/{id}/chart.png`. Not called by
+the pipeline itself; served for a future consumer such as the observatory website/dashboard.
+
+**Errors:** `400` malformed `{item_id}` · `404` no chart uploaded yet for this task item
 
 ---
 
@@ -457,13 +799,21 @@ observation, **not** a catalog/source record:
         "mag": 14.21,
         "flux": 44850.0,
         "frame_id": "6612f7b2a1234.87654321",
-        "obs_time": "2024-03-14T21:55:12Z"
+        "obs_time": "2024-03-14T21:55:12Z",
+        "filter": "L"
       }
     ],
     "1": []
   }
 }
 ```
+`filter` is the normalized filter of the frame that produced that observation (`string|null`) —
+`source_observations` has no filter column of its own, so `SourcesController::nearBatch()` resolves
+it with a `LEFT JOIN frames` on `frame_id`. Added for the observatory-pipeline's
+`modules/anomaly_detector.py`, which restricts its historical Δmag comparison to same-filter
+detections only (comparing across filters is a color-term artifact, not real variability). Not
+present on `GET /sources/near`'s response — that endpoint predates this field.
+
 `{"positions": []}` → `{"results": {}}`.
 
 **Errors:** `400` missing `positions`, missing/non-numeric `radius_arcsec`, non-numeric position, or unparseable `before_time`

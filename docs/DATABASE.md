@@ -36,12 +36,23 @@ CLI commands, see [`../README.md`](../README.md).
 ┌─────────────────┐       ┌─────────────────┐       ┌──────────────────┐
 │    anomalies    │       │  object_stats   │       │  source_charts   │
 ├─────────────────┤       ├─────────────────┤       ├──────────────────┤
-│ frame_id (FK)   │       │ object          │       │ source_id (FK)   │──► sources (unique, cascade)
-│ source_id (FK)  │       │ filter          │       │ style            │
-│ anomaly_type    │       │ frame_count     │       │ frame_count      │
-│ ra, dec         │       │ total_exposure  │       │ updated_at       │
-│ is_alert        │       │ avg_fwhm        │       └──────────────────┘
-└─────────────────┘       └─────────────────┘
+│ frame_id (FK)   │       │ object          │       │ source_id (null) │──► sources (unique, cascade)
+│ source_id (FK)  │       │ filter          │       │ task_item_id     │──► task_items (unique, no FK)
+│ anomaly_type    │       │ frame_count     │       │ style            │
+│ ra, dec         │       │ total_exposure  │       │ frame_count      │
+│ is_alert        │       │ avg_fwhm        │       │ updated_at       │
+└─────────────────┘       └─────────────────┘       └──────────────────┘
+
+┌─────────────────────┐       ┌──────────────────────┐
+│        tasks        │       │      task_items      │
+├─────────────────────┤       ├──────────────────────┤
+│ id (CHAR 24 PK)     │◄──────│ task_id (FK)         │
+│ type, status        │       │ seq                  │
+│ scope_object/dates   │       │ filename             │
+│ total/completed/     │       │ frame_id (FK, null)  │──► frames (SET NULL)
+│   failed_items       │       │ source_id (FK, null) │──► sources (SET NULL)
+│ parent_task_id (FK)  │       │ status, error        │
+└─────────────────────┘       └──────────────────────┘
 ```
 
 **Key relationships:**
@@ -55,11 +66,17 @@ CLI commands, see [`../README.md`](../README.md).
 - One **frame** can contain many sources and vice versa, via `frame_sources`.
 - **anomalies** link to a frame (cascade delete) and optionally to a source (`SET NULL` on
   delete — an anomaly's detection history outlives the source being removed from the catalog).
-- One **source_charts** row = the current finder-chart PNG for one source (1:1, cascade-deleted
-  with its source); the image bytes live on disk at `writable/uploads/charts/{source_id}.png`,
-  not in this table.
+- One **source_charts** row = the current chart PNG for one source (1:1, cascade-deleted with its
+  source) OR one task item (1:1, no cascade — see the table's own notes); the image bytes live on
+  disk at `writable/uploads/charts/{source_id|task_item_id}.png`, not in this table.
 - **object_stats** = pre-aggregated statistics per object+filter, updated incrementally whenever
   a frame is registered (`POST /frames`).
+- One **task** = one stage's unit of work for observatory-pipeline's granular job queue (`ANALYZE`
+  / `DETECT_ANOMALIES` / `GENERATE_CHARTS`), submitted with an explicit, itemized scope rather
+  than run inline per frame. One **task_item** = one unit inside that scope — a filename (for
+  `ANALYZE`, before a frame exists yet), a `frame_id` (`DETECT_ANOMALIES`), or a `source_id`
+  (`GENERATE_CHARTS`). `parent_task_id` links a re-run to the task it re-runs, so re-processing
+  history stays as new rows rather than mutating an old task in place.
 
 ---
 
@@ -71,7 +88,6 @@ CLI commands, see [`../README.md`](../README.md).
 |--------|------|-------|
 | `id` | CHAR(24) PK | |
 | `filename` | VARCHAR(255) NOT NULL | |
-| `original_filepath` | VARCHAR(500) | Full path after archiving |
 | `obs_time` | DATETIME NOT NULL | Observation start time UTC |
 | `ra_center`, `dec_center` | DOUBLE NOT NULL | Frame center (degrees) |
 | `fov_deg` | FLOAT NOT NULL | Field of view (degrees) |
@@ -124,6 +140,8 @@ no catalog identity at all.
 | `mag`, `mag_err` | FLOAT NULL | Calibrated magnitude ± error |
 | `flux`, `flux_err` | FLOAT NULL | Aperture flux (ADU) ± error |
 | `fwhm`, `snr`, `elongation` | FLOAT NULL | |
+| `saturated` | TINYINT(1) DEFAULT 0 | Mirrors observatory-pipeline's `astrometry.py` saturation flag — persisted so `anomaly_detector.py`'s saturated-artifact suppression rule can be reconstructed for this observation later, purely from stored data |
+| `from_subtraction` | TINYINT(1) DEFAULT 0 | Mirrors observatory-pipeline's `subtraction.py` `_from_subtraction` flag — persisted so `anomaly_detector.py`'s coverage-check bypass for subtraction candidates can be reconstructed later, purely from stored data |
 | `obs_time` | DATETIME NOT NULL | |
 | `created_at` | DATETIME | |
 
@@ -179,13 +197,61 @@ Run `php spark recalculate:object-stats` to rebuild this table from scratch.
 
 ### `source_charts`
 
+One row per chart — either a per-source finder/discovery chart (`source_id` set) or a
+`PREVIEW_CATALOG_MATCH` diagnostic chart with no source at all (`task_item_id` set instead).
+Exactly one of the two is set per row, never both.
+
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | CHAR(24) PK | |
-| `source_id` | CHAR(24) NOT NULL UNIQUE FK→sources.id, `ON DELETE CASCADE` | One chart per source |
-| `style` | ENUM('track', 'stamp_strip') NOT NULL | |
-| `frame_count` | INT DEFAULT 0 | Epochs actually included in the current image |
+| `source_id` | CHAR(24) NULL UNIQUE FK→sources.id, `ON DELETE CASCADE` | One chart per source; set for `track`/`stamp_strip`/`before_after` |
+| `task_item_id` | CHAR(24) NULL UNIQUE | One chart per task item; set for `catalog_preview`. **No FK** — this migration (2026-08-06) predates `CreateTasksTable` (2026-08-07) in migration order, so a FK to `task_items.id` here would fail at `CREATE TABLE` time on a fresh database; see the migration's docblock |
+| `style` | ENUM('track', 'stamp_strip', 'before_after', 'catalog_preview') NOT NULL | `catalog_preview` is the only style paired with `task_item_id` instead of `source_id` |
+| `frame_count` | INT DEFAULT 0 | Epochs actually included in the current image; always 1 for `catalog_preview` (a single-frame chart, not an epoch series) |
 | `updated_at` | DATETIME NULL | Set on every upload |
 | `created_at` | DATETIME | |
 
-**Indexes:** `source_id` (unique)
+**Indexes:** `source_id` (unique), `task_item_id` (unique)
+
+### `tasks` (Pipeline Job Queue)
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | CHAR(24) PK | |
+| `type` | ENUM('ANALYZE', 'DETECT_ANOMALIES', 'GENERATE_CHARTS', 'PREVIEW_CATALOG_MATCH') NOT NULL | `PREVIEW_CATALOG_MATCH` is a diagnostic tool, not part of the production chain — see observatory-pipeline's CLAUDE.md |
+| `status` | ENUM('PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED') DEFAULT 'PENDING' | |
+| `scope_object` | VARCHAR(100) NULL | Descriptive only — `task_items` is the authoritative scope |
+| `scope_date_from`, `scope_date_to` | DATETIME NULL | Descriptive only, same as above |
+| `total_items`, `completed_items`, `failed_items` | INT DEFAULT 0 | Progress counters, bumped atomically by `TaskModel::bumpProgress()` |
+| `parent_task_id` | CHAR(24) NULL FK→tasks.id, `ON DELETE SET NULL` | Links a re-run to the task it re-runs |
+| `error` | TEXT NULL | |
+| `started_at`, `finished_at` | DATETIME NULL | |
+| `created_at` | DATETIME | |
+
+**Indexes:** `status`, `type`, `scope_object`, `parent_task_id`
+
+Status reaches `COMPLETED` automatically once `completed_items + failed_items >= total_items`
+(see `TaskModel::bumpProgress()`) — `FAILED`/`CANCELLED` are always set explicitly via
+`PATCH /tasks/{id}`.
+
+### `task_items`
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | CHAR(24) PK | |
+| `task_id` | CHAR(24) NOT NULL FK→tasks.id, cascade | |
+| `seq` | INT NOT NULL | Position within the task, UNIQUE with `task_id` |
+| `filename` | VARCHAR(255) NULL | Populated for `ANALYZE` items before a frame exists, and for `PREVIEW_CATALOG_MATCH` items (which never resolve a frame at all) |
+| `frame_id` | CHAR(24) NULL FK→frames.id, `ON DELETE SET NULL` | Populated for `DETECT_ANOMALIES` items, or once an `ANALYZE` item resolves a frame |
+| `source_id` | CHAR(24) NULL FK→sources.id, `ON DELETE SET NULL` | Populated for `GENERATE_CHARTS` items |
+| `payload` | TEXT NULL (JSON) | Bidirectional: `GENERATE_CHARTS` reads it as *input* at creation time (`{"anomaly_type", "designation"}`); `PREVIEW_CATALOG_MATCH` writes it as a *result* at completion time (`{"output_path", "matched", "total", "quality_flag"}`) via `POST /tasks/{id}/items/progress`. Opaque to the API either way — stored and echoed back, never inspected |
+| `status` | ENUM('PENDING', 'DONE', 'FAILED') DEFAULT 'PENDING' | |
+| `error` | TEXT NULL | |
+| `processed_at` | DATETIME NULL | |
+| `created_at` | DATETIME | |
+
+**Indexes:** `task_id`, `frame_id`, `source_id`, UNIQUE `(task_id, seq)`
+
+Exactly one of `filename` / `frame_id` / `source_id` is meaningful per row — which one depends on
+the parent task's `type`, not on the row itself; there's no discriminator column because the
+parent already disambiguates it.
