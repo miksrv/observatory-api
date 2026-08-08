@@ -36,6 +36,8 @@ class SourceObservationModel extends BaseModel
         'fwhm',
         'snr',
         'elongation',
+        'saturated',
+        'from_subtraction',
         'obs_time',
     ];
 
@@ -84,6 +86,36 @@ class SourceObservationModel extends BaseModel
     }
 
     /**
+     * Count `source_observations` rows per frame, for a batch of frame ids — i.e. how many of
+     * each frame's detected stars actually got recognized/persisted as a source measurement
+     * (vs `frames.qc_star_count`, the pipeline's raw detection count before catalog matching).
+     * Used by the /ui/frames "Stars" column (всего/распознано); one query for the whole page
+     * instead of one per row.
+     *
+     * @param string[] $frameIds
+     *
+     * @return array<string, int> Keyed by frame_id; frames with zero observations are absent.
+     */
+    public function countByFrameIds(array $frameIds): array
+    {
+        if ($frameIds === []) {
+            return [];
+        }
+
+        $rows = $this->select('frame_id, COUNT(*) AS cnt')
+            ->whereIn('frame_id', $frameIds)
+            ->groupBy('frame_id')
+            ->findAll();
+
+        $counts = [];
+        foreach ($rows as $row) {
+            $counts[$row['frame_id']] = (int) $row['cnt'];
+        }
+
+        return $counts;
+    }
+
+    /**
      * Get the most recent observation for a source — used as its "current"
      * position, since `sources` itself no longer stores ra/dec (a static
      * first-detection snapshot would be actively misleading for anything
@@ -101,6 +133,41 @@ class SourceObservationModel extends BaseModel
         return $this->where('source_id', $sourceId)
             ->orderBy('obs_time', 'DESC')
             ->first();
+    }
+
+    /**
+     * Batch version of getLatestObservation() — one query for a whole page of sources instead of
+     * N+1 per row. Used by the /ui/sources listing to show each source's current position (ra/dec)
+     * without a per-source round trip.
+     *
+     * Fetches every observation row for the given source ids ordered so each source's rows are
+     * grouped together with its most recent obs_time first, then keeps only the first row seen per
+     * source_id in PHP — MariaDB has no simple "latest row per group" without window functions, and
+     * nothing else in this codebase relies on those yet.
+     *
+     * @param string[] $sourceIds
+     *
+     * @return array<string, array> Keyed by source_id; sources with no observations are absent.
+     */
+    public function getLatestObservationsForSources(array $sourceIds): array
+    {
+        if ($sourceIds === []) {
+            return [];
+        }
+
+        $rows = $this->whereIn('source_id', $sourceIds)
+            ->orderBy('source_id', 'ASC')
+            ->orderBy('obs_time', 'DESC')
+            ->findAll();
+
+        $latest = [];
+        foreach ($rows as $row) {
+            if (! isset($latest[$row['source_id']])) {
+                $latest[$row['source_id']] = $row;
+            }
+        }
+
+        return $latest;
     }
 
     /**
