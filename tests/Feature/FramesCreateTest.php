@@ -56,7 +56,6 @@ final class FramesCreateTest extends CIUnitTestCase
     {
         return array_merge([
             'filename'          => 'frame_phpunit_test.fits',
-            'original_filepath' => '/fits/archive/M51/frame_phpunit_test.fits',
             'obs_time'          => '2024-03-15T22:01:34Z',
             'ra_center'         => 202.4696,
             'dec_center'        => 47.1952,

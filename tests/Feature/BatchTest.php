@@ -173,6 +173,48 @@ final class BatchTest extends CIUnitTestCase
         $this->assertEmpty($json['results']['2']);
     }
 
+    /**
+     * source_observations itself has no filter column — nearBatch() must
+     * LEFT JOIN frames to pull it, since the pipeline's anomaly_detector.py
+     * needs each historical detection's filter to restrict its Δmag
+     * comparison to same-filter epochs only (comparing across filters is a
+     * color-term artifact, not real variability — see CLAUDE.md on the
+     * pipeline side).
+     */
+    public function testSourcesNearBatchReturnsFilterFromParentFrame(): void
+    {
+        $frameId = $this->createFrame([
+            'obs_time' => '2024-01-01 00:00:00',
+            'filter'   => 'Ha',
+        ]);
+
+        $db = \Config\Database::connect('default');
+        $db->table('source_observations')->insert([
+            'id'        => uniqid('', true),
+            'source_id' => $this->createSource(['ra' => 202.461, 'dec' => 47.182]),
+            'frame_id'  => $frameId,
+            'ra'        => 202.461,
+            'dec'       => 47.182,
+            'mag'       => 14.5,
+            'flux'      => 10000.0,
+            'obs_time'  => '2024-01-01 00:00:00',
+        ]);
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post('/api/v1/sources/near/batch', [
+                'positions'     => [['ra' => 202.461, 'dec' => 47.182]],
+                'radius_arcsec' => 60.0,
+            ]);
+
+        $result->assertStatus(200);
+        $json = json_decode($result->getJSON(), true);
+
+        $this->assertNotEmpty($json['results']['0']);
+        $this->assertArrayHasKey('filter', $json['results']['0'][0]);
+        $this->assertSame('Ha', $json['results']['0'][0]['filter']);
+    }
+
     public function testSourcesNearBatchMissingPositionsReturns400(): void
     {
         $result = $this->withHeaders($this->authHeaders())
