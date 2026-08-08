@@ -66,7 +66,6 @@ class FramesController extends BaseApiController
         $data = [
             // Top-level required fields
             'filename'          => $body['filename'],
-            'original_filepath' => $body['original_filepath'] ?? null,
             // Convert ISO 8601 (2024-03-15T22:01:34Z) to MySQL DATETIME format
             'obs_time'          => date('Y-m-d H:i:s', strtotime($body['obs_time'])),
             'ra_center'         => (float) $body['ra_center'],
@@ -329,18 +328,24 @@ class FramesController extends BaseApiController
             $mag = $source['mag'] ?? $source['mag_calibrated'] ?? null;
 
             $observationData = [
-                'source_id'  => $sourceId,
-                'frame_id'   => $id,
-                'ra'         => $ra,
-                'dec'        => $dec,
-                'mag'        => $mag !== null ? (float) $mag : null,
-                'mag_err'    => isset($source['mag_err']) ? (float) $source['mag_err'] : null,
-                'flux'       => isset($source['flux']) ? (float) $source['flux'] : null,
-                'flux_err'   => isset($source['flux_err']) ? (float) $source['flux_err'] : null,
-                'fwhm'       => isset($source['fwhm']) ? (float) $source['fwhm'] : null,
-                'snr'        => isset($source['snr']) ? (float) $source['snr'] : null,
-                'elongation' => isset($source['elongation']) ? (float) $source['elongation'] : null,
-                'obs_time'   => $obsTime,
+                'source_id'        => $sourceId,
+                'frame_id'         => $id,
+                'ra'               => $ra,
+                'dec'              => $dec,
+                'mag'              => $mag !== null ? (float) $mag : null,
+                'mag_err'          => isset($source['mag_err']) ? (float) $source['mag_err'] : null,
+                'flux'             => isset($source['flux']) ? (float) $source['flux'] : null,
+                'flux_err'         => isset($source['flux_err']) ? (float) $source['flux_err'] : null,
+                'fwhm'             => isset($source['fwhm']) ? (float) $source['fwhm'] : null,
+                'snr'              => isset($source['snr']) ? (float) $source['snr'] : null,
+                'elongation'       => isset($source['elongation']) ? (float) $source['elongation'] : null,
+                // Persisted so a later, decoupled DETECT_ANOMALIES task can reconstruct
+                // anomaly_detector.py's saturated-suppression and subtraction-coverage-bypass
+                // rules purely from stored data (see the migration's docblock for the full
+                // rationale). Both default to false when the pipeline omits them.
+                'saturated'        => ! empty($source['saturated']) ? 1 : 0,
+                'from_subtraction' => ! empty($source['from_subtraction']) ? 1 : 0,
+                'obs_time'         => $obsTime,
             ];
 
             $observationModel->insert($observationData);
@@ -400,24 +405,15 @@ class FramesController extends BaseApiController
             return $this->respondError(404, 'Frame not found', ['frame_id' => $id]);
         }
 
-        // ----------------------------------------------------------------
-        // Short-circuit for empty anomaly list
-        // ----------------------------------------------------------------
         $anomalies = $body['anomalies'];
-
-        if (count($anomalies) === 0) {
-            return $this->respondCreated([
-                'message' => 'Anomalies saved successfully',
-                'count'   => 0,
-                'alerts'  => 0,
-            ]);
-        }
 
         // ----------------------------------------------------------------
         // Validate anomaly_type against the fixed known set (matches the ENUM
         // constraint on the anomaly_type column) — reject the whole batch
         // atomically if any entry uses an unrecognized value, rather than
         // silently inserting it or letting it fail as a raw SQL error.
+        // Deliberately done BEFORE the replace-delete below, so a malformed
+        // batch never gets the chance to wipe the frame's existing anomalies.
         // ----------------------------------------------------------------
         foreach ($anomalies as $i => $anomaly) {
             $type = isset($anomaly['anomaly_type']) ? (string) $anomaly['anomaly_type'] : '';
@@ -427,6 +423,30 @@ class FramesController extends BaseApiController
                     'allowed_types' => AnomalyModel::ALLOWED_TYPES,
                 ]);
             }
+        }
+
+        // ----------------------------------------------------------------
+        // This call always REPLACES the frame's anomaly set rather than
+        // appending to it. Without this, re-running anomaly detection for a
+        // frame that was already classified (e.g. after fixing a classifier
+        // bug, or via a standalone DETECT_ANOMALIES task) would leave the
+        // previous run's anomalies sitting alongside the new ones instead of
+        // superseding them. A frame classified for the first time simply has
+        // nothing to delete here.
+        // ----------------------------------------------------------------
+        $anomalyModel = new AnomalyModel();
+        $anomalyModel->where('frame_id', $id)->delete();
+
+        // ----------------------------------------------------------------
+        // Short-circuit for empty anomaly list — the delete above already
+        // did the only real work needed (a re-run that now finds nothing).
+        // ----------------------------------------------------------------
+        if (count($anomalies) === 0) {
+            return $this->respondCreated([
+                'message' => 'Anomalies saved successfully',
+                'count'   => 0,
+                'alerts'  => 0,
+            ]);
         }
 
         // ----------------------------------------------------------------
@@ -508,10 +528,9 @@ class FramesController extends BaseApiController
         unset($row);
 
         // ----------------------------------------------------------------
-        // Batch insert
+        // Batch insert (into the model instance already created above, for
+        // the replace-delete)
         // ----------------------------------------------------------------
-        $anomalyModel = new AnomalyModel();
-
         if ($anomalyModel->insertBatch($rows) === false) {
             log_message('error', 'FramesController::saveAnomalies — insertBatch failed for frame_id=' . $id);
 
@@ -844,5 +863,181 @@ class FramesController extends BaseApiController
                 'obs_time' => gmdate('Y-m-d\TH:i:s\Z', strtotime($frame['obs_time'])),
             ],
         ]);
+    }
+
+    /**
+     * GET /api/v1/frames
+     *
+     * List frames, most recent first, optionally filtered by object and/or an obs_time range.
+     * This is the scope-resolution query a standalone DETECT_ANOMALIES/GENERATE_CHARTS task uses
+     * to turn "object=M51" (or a date range) into a concrete list of frame ids — e.g. re-running
+     * anomaly detection across an object's entire observation history, old and new frames alike,
+     * something the inline per-frame pipeline flow has no way to express at all.
+     *
+     * Query parameters (all optional):
+     *   object      string    Exact match on `frames.object`
+     *   date_from   ISO 8601  obs_time >= this
+     *   date_to     ISO 8601  obs_time < this
+     *   limit       int       Max rows (default 100, capped at 1000)
+     *   offset      int       Pagination offset (default 0)
+     */
+    public function index(): ResponseInterface
+    {
+        $model = new FrameModel();
+
+        $object   = $this->request->getGet('object');
+        $dateFrom = $this->request->getGet('date_from');
+        $dateTo   = $this->request->getGet('date_to');
+
+        if ($object !== null && $object !== '') {
+            $model = $model->where('object', $object);
+        }
+
+        if ($dateFrom !== null && $dateFrom !== '') {
+            $timestamp = strtotime($dateFrom);
+            if ($timestamp === false) {
+                return $this->respondError(400, 'Invalid parameter: date_from must be a valid ISO 8601 datetime');
+            }
+            $model = $model->where('obs_time >=', date('Y-m-d H:i:s', $timestamp));
+        }
+
+        if ($dateTo !== null && $dateTo !== '') {
+            $timestamp = strtotime($dateTo);
+            if ($timestamp === false) {
+                return $this->respondError(400, 'Invalid parameter: date_to must be a valid ISO 8601 datetime');
+            }
+            $model = $model->where('obs_time <', date('Y-m-d H:i:s', $timestamp));
+        }
+
+        $limit  = (int) ($this->request->getGet('limit') ?? 100);
+        $limit  = $limit > 0 ? min($limit, 1000) : 100;
+        $offset = max(0, (int) ($this->request->getGet('offset') ?? 0));
+
+        $frames = $model->orderBy('obs_time', 'ASC')
+            ->findAll($limit, $offset);
+
+        return $this->respondOk(['data' => array_map([$this, 'formatFrame'], $frames)]);
+    }
+
+    /**
+     * GET /api/v1/frames/{id}
+     *
+     * A single previously registered frame's full stored record — everything POST /frames
+     * accepted, echoed back. Used by a standalone task (DETECT_ANOMALIES re-run, etc.) to
+     * reconstruct the `frame_meta` that anomaly_detector.py needs without having local
+     * filesystem access to the original FITS file at all.
+     */
+    public function show(string $id): ResponseInterface
+    {
+        $frame = (new FrameModel())->find($id);
+
+        if ($frame === null) {
+            return $this->respondError(404, 'Frame not found', ['frame_id' => $id]);
+        }
+
+        return $this->respondOk(['frame' => $this->formatFrame($frame)]);
+    }
+
+    /**
+     * GET /api/v1/frames/{id}/sources
+     *
+     * The sources currently linked to a frame, with their per-frame observation values (this
+     * frame's own measured position/mag/flags — not a static catalog position) plus each
+     * source's catalog identity. This is the piece a standalone DETECT_ANOMALIES task needs to
+     * reconstruct anomaly_detector.py's per-source input for an already-processed frame, entirely
+     * from stored data — no re-running astrometry/photometry, no local FITS access required.
+     */
+    public function sources(string $id): ResponseInterface
+    {
+        if ((new FrameModel())->find($id) === null) {
+            return $this->respondError(404, 'Frame not found', ['frame_id' => $id]);
+        }
+
+        $observations = (new SourceObservationModel())->getObservationsForFrame($id);
+
+        if (empty($observations)) {
+            return $this->respondOk(['frame_id' => $id, 'data' => []]);
+        }
+
+        $sourcesById = [];
+        foreach ((new SourceModel())->whereIn('id', array_unique(array_column($observations, 'source_id')))->findAll() as $source) {
+            $sourcesById[$source['id']] = $source;
+        }
+
+        $data = [];
+        foreach ($observations as $obs) {
+            $source = $sourcesById[$obs['source_id']] ?? null;
+
+            $data[] = [
+                'source_id'        => $obs['source_id'],
+                'ra'               => (float) $obs['ra'],
+                'dec'              => (float) $obs['dec'],
+                'mag'              => $obs['mag'] !== null ? (float) $obs['mag'] : null,
+                'mag_err'          => $obs['mag_err'] !== null ? (float) $obs['mag_err'] : null,
+                'flux'             => $obs['flux'] !== null ? (float) $obs['flux'] : null,
+                'flux_err'         => $obs['flux_err'] !== null ? (float) $obs['flux_err'] : null,
+                'fwhm'             => $obs['fwhm'] !== null ? (float) $obs['fwhm'] : null,
+                'snr'              => $obs['snr'] !== null ? (float) $obs['snr'] : null,
+                'elongation'       => $obs['elongation'] !== null ? (float) $obs['elongation'] : null,
+                'saturated'        => (bool) ($obs['saturated'] ?? false),
+                'from_subtraction' => (bool) ($obs['from_subtraction'] ?? false),
+                // Defensive: source_observations.source_id has a FK to sources, so $source
+                // should never actually be null — falls back to nulls rather than skipping the
+                // observation entirely if it somehow is.
+                'catalog_name'     => $source['catalog_name'] ?? null,
+                'catalog_id'       => $source['catalog_id'] ?? null,
+                'catalog_mag'      => isset($source['catalog_mag']) ? (float) $source['catalog_mag'] : null,
+                'object_type'      => $source['object_type'] ?? null,
+            ];
+        }
+
+        return $this->respondOk(['frame_id' => $id, 'data' => $data]);
+    }
+
+    /**
+     * Flatten a `frames` row into the API's public shape — shared by index() and show() so both
+     * endpoints stay in sync automatically as columns are added.
+     */
+    private function formatFrame(array $frame): array
+    {
+        return [
+            'id'                    => (string) $frame['id'],
+            'filename'              => $frame['filename'],
+            'obs_time'              => gmdate('Y-m-d\TH:i:s\Z', strtotime($frame['obs_time'])),
+            'ra_center'             => (float) $frame['ra_center'],
+            'dec_center'            => (float) $frame['dec_center'],
+            'fov_deg'               => (float) $frame['fov_deg'],
+            'quality_flag'          => $frame['quality_flag'],
+            'object'                => $frame['object'],
+            'exptime'               => $frame['exptime'] !== null ? (float) $frame['exptime'] : null,
+            'filter'                => $frame['filter'],
+            'frame_type'            => $frame['frame_type'],
+            'airmass'               => $frame['airmass'] !== null ? (float) $frame['airmass'] : null,
+            'telescope'             => $frame['telescope'],
+            'camera'                => $frame['camera'],
+            'focal_length_mm'       => $frame['focal_length_mm'] !== null ? (int) $frame['focal_length_mm'] : null,
+            'aperture_mm'           => $frame['aperture_mm'] !== null ? (int) $frame['aperture_mm'] : null,
+            'sensor_temp'           => $frame['sensor_temp'] !== null ? (float) $frame['sensor_temp'] : null,
+            'sensor_temp_setpoint'  => $frame['sensor_temp_setpoint'] !== null ? (float) $frame['sensor_temp_setpoint'] : null,
+            'binning_x'             => $frame['binning_x'] !== null ? (int) $frame['binning_x'] : null,
+            'binning_y'             => $frame['binning_y'] !== null ? (int) $frame['binning_y'] : null,
+            'gain'                  => $frame['gain'] !== null ? (int) $frame['gain'] : null,
+            'offset'                => $frame['offset'] !== null ? (int) $frame['offset'] : null,
+            'width_px'              => $frame['width_px'] !== null ? (int) $frame['width_px'] : null,
+            'height_px'             => $frame['height_px'] !== null ? (int) $frame['height_px'] : null,
+            'observer_name'         => $frame['observer_name'],
+            'site_name'             => $frame['site_name'],
+            'site_lat'              => $frame['site_lat'] !== null ? (float) $frame['site_lat'] : null,
+            'site_lon'              => $frame['site_lon'] !== null ? (float) $frame['site_lon'] : null,
+            'site_elev_m'           => $frame['site_elev_m'] !== null ? (int) $frame['site_elev_m'] : null,
+            'software_capture'      => $frame['software_capture'],
+            'qc_fwhm_median'        => $frame['qc_fwhm_median'] !== null ? (float) $frame['qc_fwhm_median'] : null,
+            'qc_elongation'         => $frame['qc_elongation'] !== null ? (float) $frame['qc_elongation'] : null,
+            'qc_snr_median'         => $frame['qc_snr_median'] !== null ? (float) $frame['qc_snr_median'] : null,
+            'qc_sky_background'    => $frame['qc_sky_background'] !== null ? (float) $frame['qc_sky_background'] : null,
+            'qc_star_count'         => $frame['qc_star_count'] !== null ? (int) $frame['qc_star_count'] : null,
+            'qc_eccentricity'       => $frame['qc_eccentricity'] !== null ? (float) $frame['qc_eccentricity'] : null,
+            'created_at'            => $frame['created_at'] ? gmdate('Y-m-d\TH:i:s\Z', strtotime($frame['created_at'])) : null,
+        ];
     }
 }
