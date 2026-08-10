@@ -73,4 +73,33 @@ class ChartsController extends Controller
             ->setContentType('image/png')
             ->setBody(file_get_contents($path));
     }
+
+    /**
+     * POST /ui/charts/{id}/delete — delete a chart record from DB and its PNG from disk.
+     */
+    public function delete(string $id): ResponseInterface
+    {
+        $model = new SourceChartModel();
+        $chart = $model->find($id);
+
+        if ($chart === null) {
+            return redirect()->to('/ui/charts')->with('error', 'График не найден.');
+        }
+
+        // Determine the filesystem key (source_id or task_item_id)
+        $fileKey = $chart['source_id'] ?? $chart['task_item_id'] ?? null;
+
+        // Delete the PNG file from disk
+        if ($fileKey !== null) {
+            $path = WRITEPATH . 'uploads/charts/' . $fileKey . '.png';
+            if (is_file($path)) {
+                unlink($path);
+            }
+        }
+
+        // Delete the DB row
+        $model->delete($id);
+
+        return redirect()->to('/ui/charts')->with('success', 'График удалён.');
+    }
 }

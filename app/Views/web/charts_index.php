@@ -59,14 +59,18 @@
             </div>
             <div class="card-footer bg-transparent">
                 <?php if ($chart['source_id']): ?>
-                    <a class="btn btn-sm btn-primary w-100" href="/ui/anomalies?source_id=<?= esc($chart['source_id']) ?>">
+                    <a class="btn btn-sm btn-primary w-100 mb-1" href="/ui/anomalies?source_id=<?= esc($chart['source_id']) ?>">
                         Аномалии этого источника →
                     </a>
                 <?php elseif ($chart['task_id']): ?>
-                    <a class="btn btn-sm btn-primary w-100" href="/ui/tasks/<?= esc($chart['task_id']) ?>">
+                    <a class="btn btn-sm btn-primary w-100 mb-1" href="/ui/tasks/<?= esc($chart['task_id']) ?>">
                         К задаче →
                     </a>
                 <?php endif; ?>
+                <form method="post" action="/ui/charts/<?= esc($chart['id']) ?>/delete" class="d-inline w-100"
+                      onsubmit="return confirm('Удалить этот график? Файл тоже будет удалён с диска.')">
+                    <button type="submit" class="btn btn-sm btn-outline-danger w-100">Удалить</button>
+                </form>
             </div>
         </div>
     </div>
