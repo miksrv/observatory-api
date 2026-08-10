@@ -14,7 +14,8 @@ use CodeIgniter\HTTP\ResponseInterface;
  * observatory-pipeline submits one task per stage (ANALYZE / DETECT_ANOMALIES /
  * GENERATE_CHARTS) instead of running all three inline per file, so any stage can be re-run
  * later for an explicit scope (an object, a date range, or exactly the frame/source ids a prior
- * stage produced) without re-running whatever came before it.
+ * stage produced) without re-running whatever came before it. RESTART is a signal task (no items)
+ * — the worker marks it completed and exits so Docker restarts the container with fresh settings.
  */
 class TasksController extends BaseApiController
 {
@@ -47,22 +48,26 @@ class TasksController extends BaseApiController
             return $this->respondError(400, 'Invalid or missing type', ['allowed_types' => TaskModel::TYPES]);
         }
 
-        if (! isset($body['items']) || ! is_array($body['items'])) {
-            return $this->respondError(400, 'Missing required field: items (must be an array)');
-        }
+        // RESTART is a signal task — no items needed (the task itself IS the action).
+        $isSignalTask = ($type === 'RESTART');
 
-        $items = $body['items'];
+        $items = $body['items'] ?? [];
 
-        if (count($items) === 0) {
-            return $this->respondError(400, 'items must contain at least one entry');
-        }
-
-        foreach ($items as $i => $item) {
-            if (! is_array($item) || (
-                ! isset($item['filename']) && ! isset($item['frame_id']) && ! isset($item['source_id'])
-            )) {
-                return $this->respondError(400, "Invalid item at index {$i}: must have filename, frame_id, or source_id");
+        if (! $isSignalTask) {
+            if (! is_array($items) || count($items) === 0) {
+                return $this->respondError(400, 'Missing required field: items (must be a non-empty array)');
             }
+
+            foreach ($items as $i => $item) {
+                if (! is_array($item) || (
+                    ! isset($item['filename']) && ! isset($item['frame_id']) && ! isset($item['source_id'])
+                )) {
+                    return $this->respondError(400, "Invalid item at index {$i}: must have filename, frame_id, or source_id");
+                }
+            }
+        } else {
+            // Signal tasks ignore any items the caller may have passed.
+            $items = [];
         }
 
         $scope = $body['scope'] ?? [];
@@ -114,7 +119,9 @@ class TasksController extends BaseApiController
             return $this->respondError(500, 'Failed to create task');
         }
 
-        (new TaskItemModel())->insertForTask($taskId, $items);
+        if (! empty($items)) {
+            (new TaskItemModel())->insertForTask($taskId, $items);
+        }
 
         return $this->respondCreated([
             'id'          => (string) $taskId,

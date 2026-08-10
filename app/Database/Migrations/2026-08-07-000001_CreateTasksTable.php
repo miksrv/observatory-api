@@ -28,7 +28,7 @@ class CreateTasksTable extends Migration
             ],
             'type' => [
                 'type'       => 'ENUM',
-                'constraint' => ['ANALYZE', 'DETECT_ANOMALIES', 'GENERATE_CHARTS', 'PREVIEW_CATALOG_MATCH'],
+                'constraint' => ['ANALYZE', 'DETECT_ANOMALIES', 'GENERATE_CHARTS', 'PREVIEW_CATALOG_MATCH', 'RESTART'],
                 'null'       => false,
             ],
             'status' => [
@@ -116,6 +116,7 @@ class CreateTasksTable extends Migration
         //   PREVIEW_CATALOG_MATCH -> filename (never resolves a frame_id — this task type never
         //                            calls POST /frames at all; see observatory-pipeline's
         //                            modules/catalog_preview.py)
+        //   RESTART               -> (no items — signal task, no task_items rows created)
         // `payload` isn't just an input either — PREVIEW_CATALOG_MATCH uses it as an OUTPUT slot
         // too: the pipeline writes {"output_path", "matched", "total"} back onto it via
         // POST /tasks/{id}/items/progress once that file's PNG is rendered (see

@@ -6,9 +6,10 @@ namespace App\Models;
  * Model for the `tasks` table — the granular pipeline job queue.
  *
  * A task is one stage's unit of work (ANALYZE / DETECT_ANOMALIES / GENERATE_CHARTS /
- * PREVIEW_CATALOG_MATCH) over an explicit, itemized scope — see TaskItemModel. This is what
- * observatory-pipeline's worker (and any other consumer) polls to know what's active and how far
- * along it is.
+ * PREVIEW_CATALOG_MATCH) over an explicit, itemized scope — see TaskItemModel. RESTART is a
+ * signal task with no items — the pipeline worker marks it completed and exits so Docker restarts
+ * the container with fresh remote settings. This is what observatory-pipeline's worker (and any
+ * other consumer) polls to know what's active and how far along it is.
  */
 class TaskModel extends BaseModel
 {
@@ -18,7 +19,7 @@ class TaskModel extends BaseModel
     // created_at is handled by the DB DEFAULT — no CI timestamp management needed.
     protected $useTimestamps = false;
 
-    public const TYPES = ['ANALYZE', 'DETECT_ANOMALIES', 'GENERATE_CHARTS', 'PREVIEW_CATALOG_MATCH'];
+    public const TYPES = ['ANALYZE', 'DETECT_ANOMALIES', 'GENERATE_CHARTS', 'PREVIEW_CATALOG_MATCH', 'RESTART'];
 
     public const STATUSES = ['PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED'];
 
