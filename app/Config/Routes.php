@@ -64,6 +64,9 @@ $routes->group('api/v1', ['filter' => 'api_key'], static function (RouteCollecti
     $routes->post('sources/charts/batch', 'Api\V1\SourcesController::uploadChartsBatch');
     $routes->get('sources/(:segment)/chart.png', 'Api\V1\SourcesController::chart/$1');
 
+    // Settings (read-only — pipeline pulls its configuration from the DB)
+    $routes->get('settings', 'Api\V1\SettingsController::index');
+
     // Statistics
     $routes->get('stats/objects', 'Api\V1\StatsController::objects');
     $routes->get('stats/objects/(:segment)', 'Api\V1\StatsController::objectDetail/$1');
