@@ -145,7 +145,6 @@ Base URL: `/api/v1`
 | `GET` | `/sources/{id}/track` | Per-epoch position track for a source's finder chart |
 | `POST` | `/sources/tracks/batch` | Batch version of `.../track` for multiple sources |
 | `POST` | `/sources/{id}/chart` | Upload/replace a source's finder-chart PNG |
-| `POST` | `/sources/charts/batch` | Batch version of `.../chart` for multiple sources |
 | `GET` | `/sources/{id}/chart.png` | Fetch a source's stored finder-chart PNG |
 
 ### Settings

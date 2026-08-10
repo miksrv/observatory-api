@@ -111,7 +111,6 @@ All other errors use:
 | `GET` | `/sources/{id}/track` | Per-epoch position track for a source |
 | `POST` | `/sources/tracks/batch` | Batch version of `.../track` for multiple sources |
 | `POST` | `/sources/{id}/chart` | Upload/replace a source's finder-chart PNG |
-| `POST` | `/sources/charts/batch` | Batch version of `.../chart` for multiple sources |
 | `GET` | `/sources/{id}/chart.png` | Fetch a source's stored finder-chart PNG |
 
 ### Settings
@@ -992,38 +991,6 @@ PNG · `404` source not found
 
 ---
 
-### POST /api/v1/sources/charts/batch
-
-Batch version of `POST /sources/{id}/chart`. Since a raw-bytes body can't carry more than one PNG
-at once, this endpoint takes a JSON envelope with each image base64-encoded instead.
-
-**Request body:**
-```json
-{
-  "charts": [
-    { "source_id": "6612f8a5e3b9c9.12345678", "style": "track", "frame_count": 5, "png_base64": "iVBORw0KGgo..." },
-    { "source_id": "6612f8a5e3ba01.87654321", "style": "stamp_strip", "frame_count": 3, "png_base64": "iVBORw0KGgo..." }
-  ]
-}
-```
-
-**Response `200 OK`** — a plain array, positionally parallel to the request's `charts[]` (same
-length/order, unlike `tracks/batch`'s id-keyed object):
-```json
-{
-  "results": [
-    { "source_id": "6612f8a5e3b9c9.12345678", "status": "ok", "style": "track", "frame_count": 5, "updated_at": "2024-03-15T22:05:00Z" },
-    { "source_id": "unknownsource.00000000", "status": "error", "error": "Source not found" }
-  ]
-}
-```
-A bad entry (invalid/unknown `source_id`, bad `style`, bad `frame_count`, bad PNG) fails only
-that entry (`status: "error"`, with an `error` message) — it never blocks the rest of the batch.
-`{"charts": []}` → `{"results": []}`.
-
-**Errors:** `400` missing `charts` (must be an array)
-
----
 
 ### GET /api/v1/sources/{id}/chart.png
 
