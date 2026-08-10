@@ -109,6 +109,12 @@ All other errors use:
 | `POST` | `/sources/charts/batch` | Batch version of `.../chart` for multiple sources |
 | `GET` | `/sources/{id}/chart.png` | Fetch a source's stored finder-chart PNG |
 
+### Settings
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/settings` | Fetch all pipeline configuration parameters |
+
 ### Statistics
 
 | Method | Path | Description |
@@ -1016,6 +1022,47 @@ Serve the stored finder-chart PNG for a source as raw image bytes (`Content-Type
 Not called by the pipeline itself — served for a future consumer such as the observatory website.
 
 **Errors:** `400` malformed `{id}` · `404` no chart uploaded yet for this source
+
+---
+
+### GET /api/v1/settings
+
+Fetch all pipeline configuration parameters as a flat key-value map. The pipeline calls this on
+startup (and optionally periodically) to pull its configuration from the central database instead
+of relying on local `.env` overrides for every tunable — one place to update a threshold, one
+place it takes effect from.
+
+The response is a plain `{ param: value }` object — every parameter stored in the `settings` table,
+sorted alphabetically by name. Values are always strings (the pipeline casts to the appropriate
+type on its side, same as it does with `os.getenv()` today). `API_BASE_URL` and `API_KEY` are
+**not** stored — those remain local to the pipeline's own `.env`.
+
+**Response `200 OK`:**
+```json
+{
+  "data": {
+    "ASTAP_BINARY": "/usr/local/bin/astap",
+    "ASTAP_CATALOGS": "/astap/catalogs",
+    "ASTAP_FOV_HINT": "0",
+    "CACHE_TTL_HOURS": "1.0",
+    "CHART_ENABLED": "true",
+    "CHART_MAX_EPOCHS": "12",
+    "CHART_STAMP_SIZE_ARCSEC": "60.0",
+    "DELTA_MAG_ALERT": "0.5",
+    "EDGE_MARGIN_FRAC": "0.1",
+    "FITS_ARCHIVE": "/fits/archive",
+    "FITS_INCOMING": "/fits/incoming",
+    "FITS_REJECTED": "/fits/rejected",
+    "LOG_LEVEL": "INFO",
+    "MATCH_CONE_ARCSEC": "5.0",
+    "...": "... all other parameters"
+  }
+}
+```
+
+This endpoint is read-only — there is no `PATCH`/`PUT` counterpart. Configuration updates go
+directly into the `settings` table (via a future admin UI or manual SQL) and take effect on the
+pipeline's next fetch.
 
 ---
 

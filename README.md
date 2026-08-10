@@ -148,6 +148,12 @@ Base URL: `/api/v1`
 | `POST` | `/sources/charts/batch` | Batch version of `.../chart` for multiple sources |
 | `GET` | `/sources/{id}/chart.png` | Fetch a source's stored finder-chart PNG |
 
+### Settings
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/settings` | Fetch all pipeline configuration parameters |
+
 ### Statistics
 
 | Method | Path | Description |
@@ -163,7 +169,8 @@ source of truth for the API contract.
 
 ## Database Schema
 
-All tables use `CHAR(24)` primary keys generated via `uniqid('', true)` (no auto-increment).
+All tables use `CHAR(24)` primary keys generated via `uniqid('', true)` (no auto-increment),
+except `settings` which uses a plain auto-increment `INT` PK.
 
 | Table | Purpose |
 |-------|---------|
@@ -174,6 +181,7 @@ All tables use `CHAR(24)` primary keys generated via `uniqid('', true)` (no auto
 | `anomalies` | Classified anomalies per frame |
 | `object_stats` | Pre-aggregated statistics per object/filter, updated on frame insert |
 | `source_charts` | Current finder-chart PNG metadata per source (image bytes live on disk) |
+| `settings` | Pipeline configuration parameters (key-value pairs, seeded with defaults) |
 
 Full column-by-column reference, indexes, foreign keys, and the ER diagram live in
 **[`docs/DATABASE.md`](docs/DATABASE.md)** — the single source of truth for the schema.

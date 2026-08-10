@@ -4,7 +4,8 @@ Single source of truth for the database schema: every table, column, index, and 
 Migrations in `app/Database/Migrations/` are the actual ground truth — this file summarizes them
 for quick reference and should be kept in sync whenever a migration changes.
 
-All tables use `CHAR(24)` primary keys generated via `uniqid('', true)` (no auto-increment).
+All tables use `CHAR(24)` primary keys generated via `uniqid('', true)` (no auto-increment),
+except `settings` which uses a plain auto-increment `INT` PK.
 
 For the API surface built on top of this schema, see [`API.md`](API.md). For project setup and
 CLI commands, see [`../README.md`](../README.md).
@@ -26,12 +27,12 @@ CLI commands, see [`../README.md`](../README.md).
 │ object, filter  │       └─────────────────────┘       │ first/last_obs   │
 │ exptime, ...    │                                     └──────────────────┘
 └─────────────────┘                                              ▲
-        │               ┌─────────────────┐                     │
-        └──────────────►│  frame_sources  │◄────────────────────┘
-                        ├─────────────────┤
-                        │ frame_id (FK)   │
-                        │ source_id (FK)  │
-                        └─────────────────┘
+        │                 ┌─────────────────┐                    │
+        └────────────────►│  frame_sources  │◄───────────────────┘
+                          ├─────────────────┤
+                          │ frame_id (FK)   │
+                          │ source_id (FK)  │
+                          └─────────────────┘
 
 ┌─────────────────┐       ┌─────────────────┐       ┌──────────────────┐
 │    anomalies    │       │  object_stats   │       │  source_charts   │
@@ -48,11 +49,19 @@ CLI commands, see [`../README.md`](../README.md).
 ├─────────────────────┤       ├──────────────────────┤
 │ id (CHAR 24 PK)     │◄──────│ task_id (FK)         │
 │ type, status        │       │ seq                  │
-│ scope_object/dates   │       │ filename             │
-│ total/completed/     │       │ frame_id (FK, null)  │──► frames (SET NULL)
-│   failed_items       │       │ source_id (FK, null) │──► sources (SET NULL)
-│ parent_task_id (FK)  │       │ status, error        │
+│ scope_object/dates  │       │ filename             │
+│ total/completed/    │       │ frame_id (FK, null)  │──► frames (SET NULL)
+│   failed_items      │       │ source_id (FK, null) │──► sources (SET NULL)
+│ parent_task_id (FK) │       │ status, error        │
 └─────────────────────┘       └──────────────────────┘
+
+┌─────────────────────┐
+│      settings       │
+├─────────────────────┤
+│ id (INT PK, auto)   │
+│ param (UNIQUE)      │
+│ value, description  │
+└─────────────────────┘
 ```
 
 **Key relationships:**
@@ -255,3 +264,21 @@ Status reaches `COMPLETED` automatically once `completed_items + failed_items >=
 Exactly one of `filename` / `frame_id` / `source_id` is meaningful per row — which one depends on
 the parent task's `type`, not on the row itself; there's no discriminator column because the
 parent already disambiguates it.
+
+### `settings` (Pipeline Configuration)
+
+Flat key-value store for pipeline configuration parameters. Seeded with defaults matching
+observatory-pipeline's `config.py` on first migration; updated via admin SQL or a future UI.
+`API_BASE_URL` and `API_KEY` are intentionally absent — those stay local to the pipeline's `.env`.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | INT(11) UNSIGNED PK, auto-increment | Unlike every other table, uses auto-increment — no need for uniqid-style IDs on a small config table |
+| `param` | VARCHAR(255) NOT NULL UNIQUE | Parameter name (e.g. `QC_FWHM_MAX_ARCSEC`) |
+| `value` | TEXT NULL | Current value, always stored as a string |
+| `description` | TEXT NULL | Human-readable description of the parameter |
+| `created_at` | DATETIME | `DEFAULT CURRENT_TIMESTAMP` |
+| `updated_at` | DATETIME | `DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP` |
+
+**Indexes:** `param` (unique), `created_at`, `updated_at`
+
