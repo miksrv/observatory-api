@@ -6,6 +6,32 @@
 $title        = $title ?? 'Observatory — Debug UI';
 $flashSuccess = session()->getFlashdata('success');
 $flashError   = session()->getFlashdata('error');
+
+// Pipeline heartbeat — read directly, no controller dependency.
+$_lastSeen = db_connect()->table('settings')
+    ->where('param', 'pipeline_last_seen_at')
+    ->get()->getRowArray();
+$_lastSeenValue = $_lastSeen['value'] ?? null;
+
+if ($_lastSeenValue !== null && $_lastSeenValue !== '') {
+    $_ago = time() - strtotime($_lastSeenValue . ' UTC');
+    if ($_ago < 60) {
+        $_heartbeatText  = $_ago . ' сек назад';
+        $_heartbeatClass = 'text-success';    // online
+    } elseif ($_ago < 3600) {
+        $_heartbeatText  = intdiv($_ago, 60) . ' мин назад';
+        $_heartbeatClass = $_ago < 300 ? 'text-success' : 'text-warning';
+    } elseif ($_ago < 86400) {
+        $_heartbeatText  = intdiv($_ago, 3600) . ' ч назад';
+        $_heartbeatClass = 'text-warning';
+    } else {
+        $_heartbeatText  = intdiv($_ago, 86400) . ' д назад';
+        $_heartbeatClass = 'text-danger';     // offline
+    }
+} else {
+    $_heartbeatText  = 'нет данных';
+    $_heartbeatClass = 'text-secondary';
+}
 ?>
 <!doctype html>
 <html lang="ru">
@@ -37,7 +63,11 @@ $flashError   = session()->getFlashdata('error');
                 <li class="nav-item"><a class="nav-link" href="/ui/tasks">Задачи (tasks)</a></li>
                 <li class="nav-item"><a class="nav-link" href="/ui/charts">Графики (charts)</a></li>
                 <li class="nav-item"><a class="nav-link" href="/ui/anomalies">Аномалии (anomalies)</a></li>
+                <li class="nav-item"><a class="nav-link" href="/ui/settings">Настройки</a></li>
             </ul>
+            <span class="navbar-text ms-auto small">
+                Pipeline: <span class="<?= $_heartbeatClass ?> fw-semibold"><?= $_heartbeatText ?></span>
+            </span>
         </div>
     </div>
 </nav>
