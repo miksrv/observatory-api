@@ -3,16 +3,16 @@
 namespace App\Controllers\Web;
 
 use App\Models\AnomalyModel;
+use App\Models\SourceChartModel;
 use App\Models\TaskItemModel;
 use App\Models\TaskModel;
 use CodeIgniter\Controller;
 use CodeIgniter\HTTP\ResponseInterface;
 
 /**
- * Debug UI page: "Anomalies" — anomalies joined with their frame (object/filename/obs_time) and
- * source (catalog identity) for context. The typical way in is a click-through from
- * /ui/charts?source_id=... (Web\ChartsController) or from a task's item list
- * (Web\TasksController::show()), but every filter is also a plain query-string param here.
+ * Debug UI page: "Anomalies" — anomalies grouped by source, joined with their frame
+ * (object/filename/obs_time) and source (catalog identity) for context. Each row in the list
+ * represents one source with all its anomalies aggregated together.
  */
 class AnomaliesController extends Controller
 {
@@ -52,38 +52,84 @@ class AnomaliesController extends Controller
 
         $anomalies = $model->orderBy('frames.obs_time', 'DESC')->findAll(500);
 
+        // Group anomalies by source_id (null source_id anomalies each get their own group).
+        $groups = [];
+        $nullIdx = 0;
+
+        foreach ($anomalies as $a) {
+            $key = $a['source_id'] ? 'src_' . $a['source_id'] : 'null_' . ($nullIdx++);
+            if (! isset($groups[$key])) {
+                $groups[$key] = [
+                    'source_id'    => $a['source_id'],
+                    'catalog_name' => $a['catalog_name'] ?? null,
+                    'object'       => $a['object'] ?? null,
+                    'anomaly_ids'  => [],
+                    'types'        => [],
+                    'has_alert'    => false,
+                    'first_obs'    => $a['obs_time'],
+                    'last_obs'     => $a['obs_time'],
+                    'mpc_designation' => $a['mpc_designation'] ?? null,
+                    'ra'           => $a['ra'],
+                    'dec'          => $a['dec'],
+                ];
+            }
+
+            $groups[$key]['anomaly_ids'][] = $a['id'];
+            $groups[$key]['types'][]       = $a['anomaly_type'];
+            if ($a['is_alert']) {
+                $groups[$key]['has_alert'] = true;
+            }
+            // Track date range.
+            if ($a['obs_time'] && ($groups[$key]['first_obs'] === null || $a['obs_time'] < $groups[$key]['first_obs'])) {
+                $groups[$key]['first_obs'] = $a['obs_time'];
+            }
+            if ($a['obs_time'] && ($groups[$key]['last_obs'] === null || $a['obs_time'] > $groups[$key]['last_obs'])) {
+                $groups[$key]['last_obs'] = $a['obs_time'];
+            }
+            // Keep latest MPC designation if set.
+            if (! empty($a['mpc_designation'])) {
+                $groups[$key]['mpc_designation'] = $a['mpc_designation'];
+            }
+        }
+
+        // Deduplicate types within each group.
+        foreach ($groups as &$g) {
+            $g['types'] = array_unique($g['types']);
+        }
+        unset($g);
+
         return $this->response->setBody(view('web/anomalies_index', [
-            'anomalies'    => $anomalies,
+            'groups'       => array_values($groups),
             'anomalyTypes' => AnomalyModel::ALLOWED_TYPES,
             'filters'      => $filters,
         ]));
     }
 
     /**
-     * POST /ui/anomalies/generate-charts — create a GENERATE_CHARTS task from selected anomalies'
-     * source_ids. Deduplicates source_ids so the task doesn't chart the same source twice.
+     * POST /ui/anomalies/generate-charts — create a GENERATE_CHARTS task from selected groups.
+     * Each task item carries `source_id` and a `payload` with all anomaly_ids in that group.
      */
     public function createTask(): ResponseInterface
     {
-        $anomalyIds = $this->collectAnomalyIds();
+        $groupsData = $this->collectSelectedGroups();
 
-        if (count($anomalyIds) === 0) {
-            return redirect()->back()->with('error', 'Выберите хотя бы одну аномалию.');
+        if (count($groupsData) === 0) {
+            return redirect()->back()->with('error', 'Выберите хотя бы одну группу аномалий.');
         }
 
-        // Resolve unique source_ids from selected anomalies (skip those without a source).
-        $anomalies = (new AnomalyModel())->whereIn('id', $anomalyIds)->findAll();
-        $sourceIds = array_values(array_unique(array_filter(
-            array_column($anomalies, 'source_id')
-        )));
+        // Filter out groups without source_id.
+        $groupsData = array_filter($groupsData, static fn ($g) => ! empty($g['source_id']));
 
-        if (count($sourceIds) === 0) {
-            return redirect()->back()->with('error', 'Ни одна из выбранных аномалий не привязана к источнику (source_id).');
+        if (count($groupsData) === 0) {
+            return redirect()->back()->with('error', 'Ни одна из выбранных групп не привязана к источнику (source_id).');
         }
 
         $items = [];
-        foreach ($sourceIds as $sid) {
-            $items[] = ['source_id' => $sid];
+        foreach ($groupsData as $g) {
+            $items[] = [
+                'source_id' => $g['source_id'],
+                'payload'   => ['anomaly_ids' => $g['anomaly_ids']],
+            ];
         }
 
         $taskModel = new TaskModel();
@@ -104,16 +150,23 @@ class AnomaliesController extends Controller
     }
 
     /**
-     * POST /ui/anomalies/delete — delete selected anomalies and any associated source_charts
-     * (both DB rows and chart image files on disk).
+     * POST /ui/anomalies/delete — delete selected groups' anomalies and any associated
+     * source_charts (both DB rows and chart image files on disk).
      */
     public function delete(): ResponseInterface
     {
-        $anomalyIds = $this->collectAnomalyIds();
+        $groupsData = $this->collectSelectedGroups();
 
-        if (count($anomalyIds) === 0) {
-            return redirect()->back()->with('error', 'Выберите хотя бы одну аномалию для удаления.');
+        if (count($groupsData) === 0) {
+            return redirect()->back()->with('error', 'Выберите хотя бы одну группу аномалий для удаления.');
         }
+
+        // Flatten all anomaly IDs from selected groups.
+        $anomalyIds = [];
+        foreach ($groupsData as $g) {
+            $anomalyIds = array_merge($anomalyIds, $g['anomaly_ids']);
+        }
+        $anomalyIds = array_unique($anomalyIds);
 
         $anomalyModel = new AnomalyModel();
         $anomalies    = $anomalyModel->whereIn('id', $anomalyIds)->findAll();
@@ -160,17 +213,30 @@ class AnomaliesController extends Controller
     }
 
     /**
-     * Extract and validate anomaly_ids[] from POST data.
+     * Extract selected groups from POST data.
+     * Each group is submitted as group_data[] with JSON-encoded {source_id, anomaly_ids[]}.
      *
-     * @return string[]
+     * @return array<array{source_id: ?string, anomaly_ids: string[]}>
      */
-    private function collectAnomalyIds(): array
+    private function collectSelectedGroups(): array
     {
-        $ids = (array) ($this->request->getPost('anomaly_ids') ?? []);
+        $raw = (array) ($this->request->getPost('group_data') ?? []);
 
-        return array_values(array_unique(array_filter(
-            $ids,
-            static fn ($v): bool => is_string($v) && $v !== ''
-        )));
+        $groups = [];
+        foreach ($raw as $json) {
+            if (! is_string($json) || $json === '') {
+                continue;
+            }
+            $decoded = json_decode($json, true);
+            if (! is_array($decoded) || empty($decoded['anomaly_ids'])) {
+                continue;
+            }
+            $groups[] = [
+                'source_id'   => $decoded['source_id'] ?? null,
+                'anomaly_ids' => (array) $decoded['anomaly_ids'],
+            ];
+        }
+
+        return $groups;
     }
 }

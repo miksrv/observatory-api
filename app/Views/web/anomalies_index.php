@@ -42,7 +42,6 @@
 
 <form method="post" id="anomalyActionForm">
 <?= csrf_field() ?>
-<input type="hidden" name="action" id="formAction" value="">
 
 <div class="mb-2 d-flex align-items-center gap-2">
     <button type="button" class="btn btn-sm btn-success" id="btnGenerateCharts" disabled>
@@ -61,34 +60,46 @@
 <thead class="table-light">
 <tr>
     <th><input type="checkbox" id="checkAll" title="Выбрать все"></th>
-    <th>Obs time (UTC)</th><th>Object</th><th>Frame</th><th>Тип</th><th>Alert</th>
-    <th>RA / Dec</th><th>Mag</th><th>Δmag</th><th>MPC</th><th>Источник</th><th>Notes</th>
+    <th>Источник</th><th>Объект</th><th>Типы</th><th>Alert</th>
+    <th>MPC</th><th>RA / Dec</th><th>Кол-во</th><th>Период наблюдений</th>
 </tr>
 </thead>
 <tbody>
-<?php if (empty($anomalies)): ?>
-    <tr><td colspan="12" class="text-center text-muted py-4">Ничего не найдено по заданному фильтру.</td></tr>
+<?php if (empty($groups)): ?>
+    <tr><td colspan="9" class="text-center text-muted py-4">Ничего не найдено по заданному фильтру.</td></tr>
 <?php endif; ?>
-<?php foreach ($anomalies as $a): ?>
-    <tr class="<?= $a['is_alert'] ? 'table-danger' : '' ?>">
+<?php foreach ($groups as $idx => $g): ?>
+    <tr class="<?= $g['has_alert'] ? 'table-danger' : '' ?>">
         <td>
-            <input type="checkbox" name="anomaly_ids[]" value="<?= esc($a['id']) ?>" class="anomaly-check" data-source-id="<?= esc($a['source_id'] ?? '') ?>">
+            <input type="checkbox"
+                   name="group_data[]"
+                   value="<?= esc(json_encode(['source_id' => $g['source_id'], 'anomaly_ids' => $g['anomaly_ids']])) ?>"
+                   class="group-check"
+                   data-source-id="<?= esc($g['source_id'] ?? '') ?>">
         </td>
-        <td class="small"><?= $a['obs_time'] ? esc(gmdate('Y-m-d H:i:s', strtotime($a['obs_time']))) : '—' ?></td>
-        <td><?= esc($a['object'] ?? '—') ?></td>
-        <td class="text-break small"><?= esc($a['filename'] ?? $a['frame_id']) ?></td>
-        <td><?= esc($a['anomaly_type']) ?></td>
-        <td><?php if ($a['is_alert']): ?><span class="badge bg-danger">alert</span><?php endif; ?></td>
-        <td class="small"><?= number_format((float) $a['ra'], 5) ?> / <?= number_format((float) $a['dec'], 5) ?></td>
-        <td><?= $a['magnitude'] !== null ? number_format((float) $a['magnitude'], 2) : '—' ?></td>
-        <td><?= $a['delta_mag'] !== null ? number_format((float) $a['delta_mag'], 2) : '—' ?></td>
-        <td><?= esc($a['mpc_designation'] ?? '—') ?></td>
         <td class="small">
-            <?php if ($a['source_id']): ?>
-                <a href="/ui/charts?source_id=<?= esc($a['source_id']) ?>"><?= esc($a['catalog_name'] ?? $a['source_id']) ?></a>
+            <?php if ($g['source_id']): ?>
+                <a href="/ui/charts?source_id=<?= esc($g['source_id']) ?>"><?= esc($g['catalog_name'] ?? $g['source_id']) ?></a>
             <?php else: ?>—<?php endif; ?>
         </td>
-        <td class="small"><?= esc($a['notes'] ?? '') ?></td>
+        <td><?= esc($g['object'] ?? '—') ?></td>
+        <td>
+            <?php foreach ($g['types'] as $type): ?>
+                <span class="badge bg-secondary"><?= esc($type) ?></span>
+            <?php endforeach; ?>
+        </td>
+        <td><?php if ($g['has_alert']): ?><span class="badge bg-danger">alert</span><?php endif; ?></td>
+        <td><?= esc($g['mpc_designation'] ?? '—') ?></td>
+        <td class="small"><?= number_format((float) $g['ra'], 5) ?> / <?= number_format((float) $g['dec'], 5) ?></td>
+        <td><span class="badge bg-info text-dark"><?= count($g['anomaly_ids']) ?></span></td>
+        <td class="small">
+            <?php if ($g['first_obs']): ?>
+                <?= esc(gmdate('Y-m-d H:i', strtotime($g['first_obs']))) ?>
+                <?php if ($g['last_obs'] !== $g['first_obs']): ?>
+                    &mdash; <?= esc(gmdate('Y-m-d H:i', strtotime($g['last_obs']))) ?>
+                <?php endif; ?>
+            <?php else: ?>—<?php endif; ?>
+        </td>
     </tr>
 <?php endforeach; ?>
 </tbody>
@@ -99,15 +110,14 @@
 <script>
 (function() {
     const form = document.getElementById('anomalyActionForm');
-    const actionField = document.getElementById('formAction');
     const checkAll = document.getElementById('checkAll');
-    const boxes = () => document.querySelectorAll('.anomaly-check');
+    const boxes = () => document.querySelectorAll('.group-check');
     const btnCharts = document.getElementById('btnGenerateCharts');
     const btnDelete = document.getElementById('btnDelete');
     const countEl = document.getElementById('selectedCount');
 
     function updateState() {
-        const checked = document.querySelectorAll('.anomaly-check:checked');
+        const checked = document.querySelectorAll('.group-check:checked');
         const count = checked.length;
         const hasSource = [...checked].some(cb => cb.dataset.sourceId !== '');
         btnCharts.disabled = !hasSource;
@@ -124,7 +134,7 @@
     });
 
     document.querySelector('tbody').addEventListener('change', function(e) {
-        if (e.target.classList.contains('anomaly-check')) updateState();
+        if (e.target.classList.contains('group-check')) updateState();
     });
 
     document.getElementById('btnSelectAll').addEventListener('click', function() {
@@ -138,15 +148,13 @@
     });
 
     btnCharts.addEventListener('click', function() {
-        actionField.value = 'generate_charts';
         form.action = '/ui/anomalies/generate-charts';
         form.submit();
     });
 
     btnDelete.addEventListener('click', function() {
-        const count = document.querySelectorAll('.anomaly-check:checked').length;
-        if (!confirm('Удалить ' + count + ' аномали(й) и связанные чарты? Это действие необратимо.')) return;
-        actionField.value = 'delete';
+        const count = document.querySelectorAll('.group-check:checked').length;
+        if (!confirm('Удалить ' + count + ' группу(ы) аномалий и связанные чарты? Это действие необратимо.')) return;
         form.action = '/ui/anomalies/delete';
         form.submit();
     });
