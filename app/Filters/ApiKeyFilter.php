@@ -39,7 +39,8 @@ class ApiKeyFilter implements FilterInterface
     }
 
     /**
-     * No post-processing required for API key authentication.
+     * After a successful API request, update the pipeline heartbeat timestamp
+     * so we can tell whether the pipeline service is online.
      *
      * @param RequestInterface  $request
      * @param ResponseInterface $response
@@ -48,6 +49,12 @@ class ApiKeyFilter implements FilterInterface
      */
     public function after(RequestInterface $request, ResponseInterface $response, $arguments = null): void
     {
-        // Nothing to do after the response.
+        // Only record heartbeat for successful (2xx) responses.
+        if ($response->getStatusCode() >= 200 && $response->getStatusCode() < 300) {
+            db_connect()
+                ->table('settings')
+                ->where('param', 'pipeline_last_seen_at')
+                ->update(['value' => gmdate('Y-m-d H:i:s')]);
+        }
     }
 }

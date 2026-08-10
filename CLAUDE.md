@@ -80,6 +80,15 @@ README.md's Architecture section for the full picture.
   (`{"matched", "total", "quality_flag", "chart_uploaded"}`) at completion time via this endpoint.
   Same column, opposite direction, depending entirely on the task type — never assume "payload" is
   always caller-supplied input.
+- **`settings.type` discriminates configurable vs. system-managed rows.** `config` rows are
+  user-tunable and served via `GET /settings`; `internal` rows (e.g. `pipeline_last_seen_at`) are
+  written/read by the API itself and excluded from the settings endpoint and any configuration UI.
+  `SettingModel::getAllAsMap()` and `getConfigurable()` filter on `type = 'config'` automatically;
+  `getAll()` returns everything including internal rows.
+- **Pipeline heartbeat** (`pipeline_last_seen_at`) is updated in `ApiKeyFilter::after()` on every
+  successful (2xx) authenticated API request — not in any controller. This is a cross-cutting
+  concern handled entirely in the filter layer; adding a new controller or endpoint requires no
+  extra work for the heartbeat to keep working.
 
 ---
 

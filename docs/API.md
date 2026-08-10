@@ -41,6 +41,11 @@ mismatched key → **`401 Unauthorized`**:
 { "error": "Unauthorized", "details": {} }
 ```
 
+**Pipeline heartbeat.** After every successful (2xx) authenticated request, `ApiKeyFilter::after()`
+writes the current UTC timestamp into `settings.value` where `param = 'pipeline_last_seen_at'`
+(an `internal`-type setting, invisible to `GET /settings` and any future UI). This lets the system
+determine whether the pipeline service is online without a dedicated health-check endpoint.
+
 ---
 
 ## Error Format
@@ -1027,15 +1032,20 @@ Not called by the pipeline itself — served for a future consumer such as the o
 
 ### GET /api/v1/settings
 
-Fetch all pipeline configuration parameters as a flat key-value map. The pipeline calls this on
-startup (and optionally periodically) to pull its configuration from the central database instead
-of relying on local `.env` overrides for every tunable — one place to update a threshold, one
-place it takes effect from.
+Fetch all **user-configurable** pipeline parameters as a flat key-value map. The pipeline calls
+this on startup (and optionally periodically) to pull its configuration from the central database
+instead of relying on local `.env` overrides for every tunable — one place to update a threshold,
+one place it takes effect from.
 
-The response is a plain `{ param: value }` object — every parameter stored in the `settings` table,
-sorted alphabetically by name. Values are always strings (the pipeline casts to the appropriate
-type on its side, same as it does with `os.getenv()` today). `API_BASE_URL` and `API_KEY` are
-**not** stored — those remain local to the pipeline's own `.env`.
+Only rows with `type = 'config'` are returned. Internal/system parameters (e.g.
+`pipeline_last_seen_at` — the pipeline heartbeat, automatically updated by the API on every
+successful authenticated request) are excluded from this response and from any future
+configuration UI.
+
+The response is a plain `{ param: value }` object — every configurable parameter stored in the
+`settings` table, sorted alphabetically by name. Values are always strings (the pipeline casts to
+the appropriate type on its side, same as it does with `os.getenv()` today). `API_BASE_URL` and
+`API_KEY` are **not** stored — those remain local to the pipeline's own `.env`.
 
 **Response `200 OK`:**
 ```json

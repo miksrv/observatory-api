@@ -61,6 +61,7 @@ CLI commands, see [`../README.md`](../README.md).
 │ id (INT PK, auto)   │
 │ param (UNIQUE)      │
 │ value, description  │
+│ type (ENUM)         │
 └─────────────────────┘
 ```
 
@@ -271,14 +272,21 @@ Flat key-value store for pipeline configuration parameters. Seeded with defaults
 observatory-pipeline's `config.py` on first migration; updated via admin SQL or a future UI.
 `API_BASE_URL` and `API_KEY` are intentionally absent — those stay local to the pipeline's `.env`.
 
+Each row has a `type` discriminator: `config` parameters are user-tunable and served to the
+pipeline via `GET /settings`; `internal` parameters are system-managed (e.g.
+`pipeline_last_seen_at` — the pipeline heartbeat timestamp, written automatically by
+`ApiKeyFilter::after()` on every successful API request) and excluded from the settings endpoint
+and any future configuration UI.
+
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | INT(11) UNSIGNED PK, auto-increment | Unlike every other table, uses auto-increment — no need for uniqid-style IDs on a small config table |
 | `param` | VARCHAR(255) NOT NULL UNIQUE | Parameter name (e.g. `QC_FWHM_MAX_ARCSEC`) |
 | `value` | TEXT NULL | Current value, always stored as a string |
 | `description` | TEXT NULL | Human-readable description of the parameter |
+| `type` | ENUM('config', 'internal') NOT NULL DEFAULT 'config' | `config` = user-configurable, shown in UI and served via `GET /settings`; `internal` = system-managed, hidden from UI and the settings endpoint |
 | `created_at` | DATETIME | `DEFAULT CURRENT_TIMESTAMP` |
 | `updated_at` | DATETIME | `DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP` |
 
-**Indexes:** `param` (unique), `created_at`, `updated_at`
+**Indexes:** `param` (unique), `type`, `created_at`, `updated_at`
 

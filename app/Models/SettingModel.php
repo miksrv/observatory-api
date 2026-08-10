@@ -30,12 +30,13 @@ class SettingModel extends Model
         'param',
         'value',
         'description',
+        'type',
     ];
 
     /**
      * Return every setting row, ordered alphabetically by param name.
      *
-     * @return array<int, array{id: int, param: string, value: string|null, description: string|null}>
+     * @return array<int, array{id: int, param: string, value: string|null, description: string|null, type: string}>
      */
     public function getAll(): array
     {
@@ -43,7 +44,17 @@ class SettingModel extends Model
     }
 
     /**
-     * Return all settings as a flat param → value map (no metadata).
+     * Return only user-configurable settings (type = 'config'), ordered alphabetically.
+     *
+     * @return array<int, array{id: int, param: string, value: string|null, description: string|null, type: string}>
+     */
+    public function getConfigurable(): array
+    {
+        return $this->where('type', 'config')->orderBy('param', 'ASC')->findAll();
+    }
+
+    /**
+     * Return all configurable settings as a flat param → value map (no metadata).
      *
      * This is the format the pipeline client expects: a simple object whose
      * keys are parameter names and whose values are their current string
@@ -53,7 +64,7 @@ class SettingModel extends Model
      */
     public function getAllAsMap(): array
     {
-        $rows = $this->orderBy('param', 'ASC')->findAll();
+        $rows = $this->where('type', 'config')->orderBy('param', 'ASC')->findAll();
         $map  = [];
 
         foreach ($rows as $row) {

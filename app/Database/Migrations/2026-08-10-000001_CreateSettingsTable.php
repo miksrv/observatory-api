@@ -33,6 +33,12 @@ class CreateSettingsTable extends Migration
                 'type'       => 'TEXT',
                 'null'       => true,
             ],
+            'type' => [
+                'type'       => 'ENUM',
+                'constraint' => ['config', 'internal'],
+                'default'    => 'config',
+                'null'       => false,
+            ],
             'created_at' => [
                 'type'    => 'DATETIME',
                 'null'    => true,
@@ -47,6 +53,7 @@ class CreateSettingsTable extends Migration
 
         $this->forge->addPrimaryKey('id');
         $this->forge->addUniqueKey('param');
+        $this->forge->addKey('type', false, false, 'idx_settings_type');
         $this->forge->addKey('created_at', false, false, 'idx_settings_created_at');
         $this->forge->addKey('updated_at', false, false, 'idx_settings_updated_at');
 
@@ -153,11 +160,14 @@ class CreateSettingsTable extends Migration
 
             // Logging
             ['param' => 'LOG_LEVEL', 'value' => 'INFO', 'description' => 'Log verbosity level'],
+
+            // Pipeline heartbeat
+            ['param' => 'pipeline_last_seen_at', 'value' => null, 'description' => 'UTC timestamp of the last authenticated API request from observatory-pipeline', 'type' => 'internal'],
         ];
 
         foreach ($defaultSettings as $setting) {
-            $sql = "INSERT INTO settings (param, value, description) VALUES (?, ?, ?)";
-            $this->db->query($sql, [$setting['param'], $setting['value'], $setting['description']]);
+            $sql = "INSERT INTO settings (param, value, description, type) VALUES (?, ?, ?, ?)";
+            $this->db->query($sql, [$setting['param'], $setting['value'], $setting['description'], $setting['type'] ?? 'config']);
         }
     }
 }
