@@ -66,6 +66,8 @@ README.md's Architecture section for the full picture.
   `scope_object`/`scope_date_from`/`scope_date_to` columns.** Those three exist only so a task
   list can be filtered/displayed without joining and aggregating `task_items` every time — never
   query "which frames does this task cover" from them; resolve it from `task_items` itself.
+  Exception: `RESTART` is a signal task with no items at all — `total_items` = 0, no `task_items`
+  rows; the API auto-marks it `COMPLETED` upon creation since there are no items to resolve.
 - **`source_charts` is dual-keyed: `source_id` OR `task_item_id`, never both.** A finder/discovery
   chart (`track`/`stamp_strip`/`before_after`) has a source; a `PREVIEW_CATALOG_MATCH` diagnostic
   chart (`catalog_preview`) doesn't — it's a whole-frame image, not tied to any celestial object —

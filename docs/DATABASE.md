@@ -83,10 +83,11 @@ CLI commands, see [`../README.md`](../README.md).
   a frame is registered (`POST /frames`).
 - One **task** = one stage's unit of work for observatory-pipeline's granular job queue (`ANALYZE`
   / `DETECT_ANOMALIES` / `GENERATE_CHARTS`), submitted with an explicit, itemized scope rather
-  than run inline per frame. One **task_item** = one unit inside that scope — a filename (for
-  `ANALYZE`, before a frame exists yet), a `frame_id` (`DETECT_ANOMALIES`), or a `source_id`
-  (`GENERATE_CHARTS`). `parent_task_id` links a re-run to the task it re-runs, so re-processing
-  history stays as new rows rather than mutating an old task in place.
+  than run inline per frame. `RESTART` is a signal task with no items — it tells the worker to
+  exit so Docker restarts it with fresh settings. One **task_item** = one unit inside that scope
+  — a filename (for `ANALYZE`, before a frame exists yet), a `frame_id` (`DETECT_ANOMALIES`), or
+  a `source_id` (`GENERATE_CHARTS`). `parent_task_id` links a re-run to the task it re-runs, so
+  re-processing history stays as new rows rather than mutating an old task in place.
 
 ---
 
@@ -228,7 +229,7 @@ Exactly one of the two is set per row, never both.
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | CHAR(24) PK | |
-| `type` | ENUM('ANALYZE', 'DETECT_ANOMALIES', 'GENERATE_CHARTS', 'PREVIEW_CATALOG_MATCH') NOT NULL | `PREVIEW_CATALOG_MATCH` is a diagnostic tool, not part of the production chain — see observatory-pipeline's CLAUDE.md |
+| `type` | ENUM('ANALYZE', 'DETECT_ANOMALIES', 'GENERATE_CHARTS', 'PREVIEW_CATALOG_MATCH', 'RESTART') NOT NULL | `PREVIEW_CATALOG_MATCH` is a diagnostic tool; `RESTART` is a signal task (no items) — see observatory-pipeline's CLAUDE.md |
 | `status` | ENUM('PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED') DEFAULT 'PENDING' | |
 | `scope_object` | VARCHAR(100) NULL | Descriptive only — `task_items` is the authoritative scope |
 | `scope_date_from`, `scope_date_to` | DATETIME NULL | Descriptive only, same as above |

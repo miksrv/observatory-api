@@ -92,7 +92,7 @@ All other errors use:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/tasks` | Create a task (ANALYZE / DETECT_ANOMALIES / GENERATE_CHARTS / PREVIEW_CATALOG_MATCH) with its item list |
+| `POST` | `/tasks` | Create a task (ANALYZE / DETECT_ANOMALIES / GENERATE_CHARTS / PREVIEW_CATALOG_MATCH / RESTART) with its item list |
 | `GET` | `/tasks` | List tasks, filtered by status/type/object |
 | `GET` | `/tasks/{id}` | Task detail, including its full item list |
 | `PATCH` | `/tasks/{id}` | Update a task's status |
@@ -533,15 +533,19 @@ Returns `{"data": []}` if the frame has no linked sources.
 The granular pipeline job queue. observatory-pipeline submits one task per stage (`ANALYZE` /
 `DETECT_ANOMALIES` / `GENERATE_CHARTS`) instead of running all three inline per file, so any stage
 can be re-run later for an explicit scope — an object, a date range, or exactly the frame/source
-ids a prior stage produced — without re-running whatever came before it.
+ids a prior stage produced — without re-running whatever came before it. `RESTART` is a signal
+task (no items) that tells the pipeline worker to exit and let Docker restart it with fresh
+remote settings.
 
 ### POST /api/v1/tasks
 
 Create a task with its full, fixed item list.
 
 **Required:** `type` (one of `ANALYZE`, `DETECT_ANOMALIES`, `GENERATE_CHARTS`,
-`PREVIEW_CATALOG_MATCH`), `items` (array, at least one entry — each entry needs exactly one of
-`filename` / `frame_id` / `source_id`, matching what the task's `type` operates over).
+`PREVIEW_CATALOG_MATCH`, `RESTART`). For all types except `RESTART`: `items` (array, at least one
+entry — each entry needs exactly one of `filename` / `frame_id` / `source_id`, matching what the
+task's `type` operates over). `RESTART` is a signal task — `items` may be omitted or empty; any
+items passed for this type are silently ignored.
 **Optional:** `scope` (`object`, `date_from`, `date_to` — descriptive only, not queried against;
 the `items` array is the authoritative scope), `parent_task_id` (links a re-run to the task it
 re-runs — must refer to an existing task).
@@ -575,8 +579,8 @@ at.
 { "id": "6612f9...", "type": "DETECT_ANOMALIES", "status": "PENDING", "total_items": 2, "message": "Task created successfully" }
 ```
 
-**Errors:** `400` invalid/missing `type`, missing/empty `items`, an item with none of
-`filename`/`frame_id`/`source_id`, unparseable `scope.date_from`/`scope.date_to`, or
+**Errors:** `400` invalid/missing `type`, missing/empty `items` (except `RESTART`), an item with
+none of `filename`/`frame_id`/`source_id`, unparseable `scope.date_from`/`scope.date_to`, or
 `parent_task_id` doesn't refer to an existing task
 
 ---
@@ -1072,7 +1076,10 @@ the appropriate type on its side, same as it does with `os.getenv()` today). `AP
 
 This endpoint is read-only — there is no `PATCH`/`PUT` counterpart. Configuration updates go
 directly into the `settings` table (via a future admin UI or manual SQL) and take effect on the
-pipeline's next fetch.
+pipeline's next startup. To trigger a restart without manual SSH access to the observatory server,
+submit a `RESTART` task (`POST /tasks {"type": "RESTART"}`) — the worker finishes its current task,
+marks the `RESTART` task `COMPLETED`, and exits; Docker restarts the container and the fresh
+process re-fetches settings.
 
 ---
 
