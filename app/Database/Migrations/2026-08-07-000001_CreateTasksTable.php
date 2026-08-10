@@ -108,11 +108,14 @@ class CreateTasksTable extends Migration
 
         // ------------------------------------------------------------------
         // task_items — one row per unit of work inside a task's scope. Exactly one of
-        // filename / frame_id / source_id is meaningful per row, depending on the parent task's
-        // type and how far it has progressed:
+        // filename / frame_id / source_id / anomaly_id is meaningful per row, depending on the
+        // parent task's type and how far it has progressed:
         //   ANALYZE               -> filename (frame_id filled in once POST /frames resolves one)
         //   DETECT_ANOMALIES      -> frame_id
-        //   GENERATE_CHARTS       -> source_id
+        //   GENERATE_CHARTS       -> anomaly_id + source_id (operator creates via UI from the
+        //                            anomalies table; source_id is denormalized from the anomaly
+        //                            for pipeline convenience; payload carries anomaly_type and
+        //                            designation so the pipeline doesn't need a separate fetch)
         //   PREVIEW_CATALOG_MATCH -> filename (never resolves a frame_id — this task type never
         //                            calls POST /frames at all; see observatory-pipeline's
         //                            modules/catalog_preview.py)
@@ -155,6 +158,11 @@ class CreateTasksTable extends Migration
                 'constraint' => 24,
                 'null'       => true,
             ],
+            'anomaly_id' => [
+                'type'       => 'CHAR',
+                'constraint' => 24,
+                'null'       => true,
+            ],
             // Opaque, item-type-specific metadata the client needs back when this item is
             // processed — e.g. a GENERATE_CHARTS item's {"anomaly_type": ..., "designation": ...},
             // computed once by the DETECT_ANOMALIES task that created it. JSON-encoded by the
@@ -188,11 +196,13 @@ class CreateTasksTable extends Migration
         $this->forge->addKey('task_id', false, false, 'idx_taskitems_task');
         $this->forge->addKey('frame_id', false, false, 'idx_taskitems_frame');
         $this->forge->addKey('source_id', false, false, 'idx_taskitems_source');
+        $this->forge->addKey('anomaly_id', false, false, 'idx_taskitems_anomaly');
         $this->forge->addUniqueKey(['task_id', 'seq'], 'uk_taskitems_task_seq');
 
         $this->forge->addForeignKey('task_id', 'tasks', 'id', 'CASCADE', 'CASCADE');
         $this->forge->addForeignKey('frame_id', 'frames', 'id', 'CASCADE', 'SET NULL');
         $this->forge->addForeignKey('source_id', 'sources', 'id', 'CASCADE', 'SET NULL');
+        $this->forge->addForeignKey('anomaly_id', 'anomalies', 'id', 'CASCADE', 'SET NULL');
 
         $this->forge->createTable('task_items', true);
 

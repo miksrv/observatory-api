@@ -101,6 +101,8 @@ $routes->group('ui', static function (RouteCollection $routes): void {
     $routes->get('charts/(:segment)/image', 'Web\ChartsController::image/$1');
 
     $routes->get('anomalies', 'Web\AnomaliesController::index');
+    $routes->post('anomalies/generate-charts', 'Web\AnomaliesController::createTask');
+    $routes->post('anomalies/delete', 'Web\AnomaliesController::delete');
 
     $routes->get('settings', 'Web\SettingsController::index');
     $routes->post('settings', 'Web\SettingsController::save');
