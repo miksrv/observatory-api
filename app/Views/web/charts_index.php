@@ -44,6 +44,13 @@
                         <?= esc($chart['catalog_name'] ?? '—') ?> <?= esc($chart['catalog_id'] ?? '') ?>
                         <?php if ($chart['object_type']): ?><br><?= esc($chart['object_type']) ?><?php endif; ?>
                     </div>
+                    <?php if (!empty($chart['src_ra']) && !empty($chart['src_dec'])): ?>
+                        <div class="small mt-1">
+                            📍 <a href="https://aladin.cds.unistra.fr/AladinLite/?target=<?= urlencode($chart['src_ra'] . ' ' . $chart['src_dec']) ?>&fov=0.10&survey=P%2FDSS2%2Fcolor" target="_blank" rel="noopener">
+                                <?= esc(number_format((float)$chart['src_ra'], 5)) ?>°, <?= esc(number_format((float)$chart['src_dec'], 5)) ?>°
+                            </a>
+                        </div>
+                    <?php endif; ?>
                 <?php else: ?>
                     <div class="small text-muted">task_item_id (PREVIEW_CATALOG_MATCH)</div>
                     <code class="small"><?= esc($chart['task_item_id']) ?></code>

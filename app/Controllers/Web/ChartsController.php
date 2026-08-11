@@ -29,10 +29,18 @@ class ChartsController extends Controller
         $model = (new SourceChartModel())
             ->select(
                 'source_charts.*, sources.catalog_name, sources.catalog_id, sources.object_type, '
-                . 'task_items.task_id AS task_id, task_items.filename AS item_filename'
+                . 'task_items.task_id AS task_id, task_items.filename AS item_filename, '
+                . 'latest_obs.ra AS src_ra, latest_obs.dec AS src_dec'
             )
             ->join('sources', 'sources.id = source_charts.source_id', 'left')
-            ->join('task_items', 'task_items.id = source_charts.task_item_id', 'left');
+            ->join('task_items', 'task_items.id = source_charts.task_item_id', 'left')
+            ->join(
+                '(SELECT so.source_id, so.ra, so.dec FROM source_observations so '
+                . 'INNER JOIN (SELECT source_id, MAX(id) AS max_id FROM source_observations GROUP BY source_id) latest '
+                . 'ON so.id = latest.max_id) latest_obs',
+                'latest_obs.source_id = source_charts.source_id',
+                'left'
+            );
 
         if ($sourceId !== '') {
             $model = $model->where('source_charts.source_id', $sourceId);
