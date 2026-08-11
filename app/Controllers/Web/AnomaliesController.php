@@ -29,7 +29,8 @@ class AnomaliesController extends Controller
         $model = (new AnomalyModel())
             ->select(
                 'anomalies.*, frames.object AS object, frames.filename AS filename, '
-                . 'frames.obs_time AS obs_time, sources.catalog_name AS catalog_name'
+                . 'frames.obs_time AS obs_time, sources.catalog_name AS catalog_name, '
+                . 'sources.catalog_id AS catalog_id'
             )
             ->join('frames', 'frames.id = anomalies.frame_id', 'left')
             ->join('sources', 'sources.id = anomalies.source_id', 'left');
@@ -62,6 +63,7 @@ class AnomaliesController extends Controller
                 $groups[$key] = [
                     'source_id'    => $a['source_id'],
                     'catalog_name' => $a['catalog_name'] ?? null,
+                    'catalog_id'   => $a['catalog_id'] ?? null,
                     'object'       => $a['object'] ?? null,
                     'anomaly_ids'  => [],
                     'types'        => [],
@@ -92,9 +94,19 @@ class AnomaliesController extends Controller
             }
         }
 
-        // Deduplicate types within each group.
+        // Deduplicate types within each group, and resolve a single display
+        // designation: prefer the MPC designation (solar-system objects),
+        // falling back to the source's own catalog_id (e.g. a Simbad main_id
+        // like "V* BE UMa") for catalog-matched but non-MPC anomaly types
+        // (VARIABLE_STAR, BINARY_STAR, SUPERNOVA_CANDIDATE) — mpc_designation
+        // is only ever set on MPC matches (see observatory-pipeline's
+        // modules/anomaly_detector.py), so without this fallback those types
+        // always carried designation=null into the GENERATE_CHARTS task
+        // payload below, even though the same source's catalog identity is
+        // already visible right here via the sources join.
         foreach ($groups as &$g) {
             $g['types'] = array_unique($g['types']);
+            $g['designation'] = $g['mpc_designation'] ?: $g['catalog_id'];
         }
         unset($g);
 

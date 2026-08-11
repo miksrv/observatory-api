@@ -4,6 +4,8 @@ namespace App\Controllers\Web;
 
 use App\Models\SourceModel;
 use App\Models\SourceObservationModel;
+use App\Models\TaskItemModel;
+use App\Models\TaskModel;
 use CodeIgniter\Controller;
 use CodeIgniter\HTTP\ResponseInterface;
 
@@ -75,5 +77,40 @@ class SourcesController extends Controller
             'filterSearch'     => $search,
             'limit'            => $limit,
         ]));
+    }
+
+    /**
+     * POST /ui/sources/generate-charts — create a GENERATE_CHARTS task for a single source.
+     * The task item only carries source_id; observatory-pipeline itself decides which chart
+     * styles (track/stamp_strip/before_after) to render and upload for it — see CLAUDE.md /
+     * SourceChartModel for why style isn't chosen at task-creation time.
+     */
+    public function createTask(): ResponseInterface
+    {
+        $sourceId = trim((string) ($this->request->getPost('source_id') ?? ''));
+
+        if ($sourceId === '') {
+            return redirect()->back()->with('error', 'Не указан source_id.');
+        }
+
+        if ((new SourceModel())->find($sourceId) === null) {
+            return redirect()->back()->with('error', "Источник {$sourceId} не найден.");
+        }
+
+        $taskModel = new TaskModel();
+        $taskId    = $taskModel->insert([
+            'type'        => 'GENERATE_CHARTS',
+            'status'      => 'PENDING',
+            'total_items' => 1,
+        ], true);
+
+        if ($taskId === false) {
+            return redirect()->back()->with('error', 'Не удалось создать задачу: ' . implode(', ', $taskModel->errors()));
+        }
+
+        (new TaskItemModel())->insertForTask($taskId, [['source_id' => $sourceId]]);
+
+        return redirect()->to('/ui/tasks/' . $taskId)
+            ->with('success', "Задача {$taskId} создана: GENERATE_CHARTS для источника {$sourceId}.");
     }
 }
