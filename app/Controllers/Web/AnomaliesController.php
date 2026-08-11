@@ -128,7 +128,11 @@ class AnomaliesController extends Controller
         foreach ($groupsData as $g) {
             $items[] = [
                 'source_id' => $g['source_id'],
-                'payload'   => ['anomaly_ids' => $g['anomaly_ids']],
+                'payload'   => [
+                    'anomaly_type' => $g['anomaly_type'],
+                    'designation'  => $g['designation'],
+                    'anomaly_ids'  => $g['anomaly_ids'],
+                ],
             ];
         }
 
@@ -232,8 +236,10 @@ class AnomaliesController extends Controller
                 continue;
             }
             $groups[] = [
-                'source_id'   => $decoded['source_id'] ?? null,
-                'anomaly_ids' => (array) $decoded['anomaly_ids'],
+                'source_id'    => $decoded['source_id'] ?? null,
+                'anomaly_ids'  => (array) $decoded['anomaly_ids'],
+                'anomaly_type' => $decoded['anomaly_type'] ?? null,
+                'designation'  => $decoded['designation'] ?? null,
             ];
         }
 

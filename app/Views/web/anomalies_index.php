@@ -73,7 +73,7 @@
         <td>
             <input type="checkbox"
                    name="group_data[]"
-                   value="<?= esc(json_encode(['source_id' => $g['source_id'], 'anomaly_ids' => $g['anomaly_ids']])) ?>"
+                   value="<?= esc(json_encode(['source_id' => $g['source_id'], 'anomaly_ids' => $g['anomaly_ids'], 'anomaly_type' => $g['types'][0] ?? null, 'designation' => $g['mpc_designation'] ?? null])) ?>"
                    class="group-check"
                    data-source-id="<?= esc($g['source_id'] ?? '') ?>">
         </td>
