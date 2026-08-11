@@ -61,7 +61,7 @@
 <tr>
     <th><input type="checkbox" id="checkAll" title="Выбрать все"></th>
     <th>Источник</th><th>Объект</th><th>Типы</th><th>Alert</th>
-    <th>MPC</th><th>RA / Dec</th><th>Кол-во</th><th>Период наблюдений</th>
+    <th>Обозначение</th><th>RA / Dec</th><th>Кол-во</th><th>Период наблюдений</th>
 </tr>
 </thead>
 <tbody>
@@ -73,7 +73,7 @@
         <td>
             <input type="checkbox"
                    name="group_data[]"
-                   value="<?= esc(json_encode(['source_id' => $g['source_id'], 'anomaly_ids' => $g['anomaly_ids'], 'anomaly_type' => $g['types'][0] ?? null, 'designation' => $g['mpc_designation'] ?? null])) ?>"
+                   value="<?= esc(json_encode(['source_id' => $g['source_id'], 'anomaly_ids' => $g['anomaly_ids'], 'anomaly_type' => $g['types'][0] ?? null, 'designation' => $g['designation'] ?? null])) ?>"
                    class="group-check"
                    data-source-id="<?= esc($g['source_id'] ?? '') ?>">
         </td>
@@ -89,7 +89,7 @@
             <?php endforeach; ?>
         </td>
         <td><?php if ($g['has_alert']): ?><span class="badge bg-danger">alert</span><?php endif; ?></td>
-        <td><?= esc($g['mpc_designation'] ?? '—') ?></td>
+        <td><?= esc($g['designation'] ?? '—') ?></td>
         <td class="small"><?= number_format((float) $g['ra'], 5) ?> / <?= number_format((float) $g['dec'], 5) ?></td>
         <td><span class="badge bg-info text-dark"><?= count($g['anomaly_ids']) ?></span></td>
         <td class="small">

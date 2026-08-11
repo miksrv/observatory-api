@@ -93,6 +93,11 @@
             <a href="/ui/charts?source_id=<?= esc($source['id']) ?>" onclick="event.stopPropagation()">графики</a>
             ·
             <a href="/ui/anomalies?source_id=<?= esc($source['id']) ?>" onclick="event.stopPropagation()">аномалии</a>
+            ·
+            <form method="post" action="/ui/sources/generate-charts" class="d-inline" onclick="event.stopPropagation()">
+                <input type="hidden" name="source_id" value="<?= esc($source['id']) ?>">
+                <button type="submit" class="btn btn-link btn-sm p-0 align-baseline">построить графики</button>
+            </form>
         </td>
     </tr>
 <?php endforeach; ?>
