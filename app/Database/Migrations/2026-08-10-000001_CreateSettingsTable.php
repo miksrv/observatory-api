@@ -123,6 +123,7 @@ class CreateSettingsTable extends Migration
             ['param' => 'MATCH_CONE_ARCSEC', 'value' => '5.0', 'description' => 'Cross-matching cone search radius in arcseconds'],
             ['param' => 'MOVING_CONE_ARCSEC', 'value' => '120.0', 'description' => 'Widened cone search radius for moving objects in arcseconds'],
             ['param' => 'DELTA_MAG_ALERT', 'value' => '0.5', 'description' => 'Magnitude change threshold for alerting anomalies'],
+            ['param' => 'MPC_MAG_LIMIT', 'value' => '19.0', 'description' => 'Faintest predicted visual magnitude (V) for an MPC/SkyBot object to be eligible for source matching'],
 
             // Edge-of-frame geometry
             ['param' => 'EDGE_MARGIN_FRAC', 'value' => '0.1', 'description' => 'Fraction of the frame\'s width/height treated as "near the edge"'],
@@ -132,6 +133,11 @@ class CreateSettingsTable extends Migration
             // Image subtraction
             ['param' => 'SUBTRACTION_MIN_FRAMES', 'value' => '3', 'description' => 'Minimum number of archived reference frames required to attempt subtraction'],
             ['param' => 'SUBTRACTION_DETECT_SIGMA', 'value' => '5.0', 'description' => 'Detection threshold on the difference image (multiples of background RMS)'],
+
+            // Forced photometry
+            ['param' => 'FORCED_PHOTOMETRY_ENABLED', 'value' => 'true', 'description' => 'Enable or disable the reverse-matching forced photometry pass'],
+            ['param' => 'FORCED_PHOTOMETRY_MAG_LIMIT', 'value' => '20.0', 'description' => 'Faintest Gaia DR3 G-band magnitude eligible for forced photometry'],
+            ['param' => 'FORCED_PHOTOMETRY_MIN_SNR', 'value' => '3.0', 'description' => 'Minimum significance (net_flux / flux_err) for a forced-photometry measurement to be reported'],
 
             // Observatory site coordinates
             ['param' => 'SITE_LAT', 'value' => '0.0', 'description' => 'Site latitude in degrees (positive = North)'],
