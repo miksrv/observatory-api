@@ -93,7 +93,7 @@ class CreateSettingsTable extends Migration
             ['param' => 'QC_ELONGATION_MAX', 'value' => '2.0', 'description' => 'Maximum acceptable median elongation'],
             ['param' => 'QC_SNR_MIN', 'value' => '5.0', 'description' => 'Minimum acceptable median SNR'],
             ['param' => 'QC_STARS_MIN', 'value' => '10', 'description' => 'Minimum stars threshold for good frames'],
-            ['param' => 'QC_SKY_BACKGROUND_MAX', 'value' => '20000.0', 'description' => 'Maximum acceptable median sky background (ADU)'],
+            ['param' => 'QC_SKY_BACKGROUND_MAX', 'value' => '50000.0', 'description' => 'Maximum acceptable median sky background (ADU)'],
             ['param' => 'QC_STARS_MIN_NARROWBAND', 'value' => '5', 'description' => 'Star-count floor for narrowband frames'],
 
             // Narrowband filters

@@ -37,6 +37,7 @@ class SourceObservationModel extends BaseModel
         'snr',
         'elongation',
         'saturated',
+        'near_edge',
         'from_subtraction',
         'obs_time',
     ];

@@ -87,6 +87,18 @@ class CreateSourceObservationsTable extends Migration
                 'default'    => 0,
                 'null'       => false,
             ],
+            // Mirrors observatory-pipeline's astrometry.py / subtraction.py `near_edge` flag:
+            // pixel position within EDGE_MARGIN_FRAC of any frame edge, where coma inflates a
+            // star's measured elongation for purely optical reasons. Persisted so a decoupled
+            // DETECT_ANOMALIES re-run can reconstruct anomaly_detector.py's edge-aware
+            // SPACE_DEBRIS_EDGE_ELONGATION_MIN threshold purely from stored data without
+            // re-running astrometry on the original FITS file.
+            'near_edge' => [
+                'type'       => 'TINYINT',
+                'constraint' => 1,
+                'default'    => 0,
+                'null'       => false,
+            ],
             'obs_time' => [
                 'type' => 'DATETIME',
                 'null' => false,

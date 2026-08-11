@@ -344,6 +344,7 @@ class FramesController extends BaseApiController
                 // rules purely from stored data (see the migration's docblock for the full
                 // rationale). Both default to false when the pipeline omits them.
                 'saturated'        => ! empty($source['saturated']) ? 1 : 0,
+                'near_edge'        => ! empty($source['near_edge']) ? 1 : 0,
                 'from_subtraction' => ! empty($source['from_subtraction']) ? 1 : 0,
                 'obs_time'         => $obsTime,
             ];
@@ -980,6 +981,7 @@ class FramesController extends BaseApiController
                 'snr'              => $obs['snr'] !== null ? (float) $obs['snr'] : null,
                 'elongation'       => $obs['elongation'] !== null ? (float) $obs['elongation'] : null,
                 'saturated'        => (bool) ($obs['saturated'] ?? false),
+                'near_edge'        => (bool) ($obs['near_edge'] ?? false),
                 'from_subtraction' => (bool) ($obs['from_subtraction'] ?? false),
                 // Defensive: source_observations.source_id has a FK to sources, so $source
                 // should never actually be null — falls back to nulls rather than skipping the
