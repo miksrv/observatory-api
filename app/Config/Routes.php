@@ -90,6 +90,7 @@ $routes->group('ui', static function (RouteCollection $routes): void {
     $routes->get('frames', 'Web\FramesController::index');
 
     $routes->get('sources', 'Web\SourcesController::index');
+    $routes->post('sources/generate-charts', 'Web\SourcesController::createTask');
 
     $routes->get('tasks', 'Web\TasksController::index');
     $routes->post('tasks', 'Web\FramesController::createTask');

@@ -344,4 +344,65 @@ final class AnomaliesTest extends CIUnitTestCase
 
         $result->assertStatus(401);
     }
+
+    // -------------------------------------------------------------------------
+    // Web debug UI (Web\AnomaliesController::index) — designation resolution
+    // -------------------------------------------------------------------------
+
+    /**
+     * Insert a `sources` row with an arbitrary catalog match (Simbad, Gaia
+     * DR3, ...) — unlike createSource() above, which is hardcoded to an MPC
+     * match.
+     */
+    private function createSourceWithCatalog(string $catalogName, string $catalogId): string
+    {
+        $db = \Config\Database::connect('default');
+        $id = uniqid('', true);
+        $db->table('sources')->insert([
+            'id'                => $id,
+            'catalog_name'      => $catalogName,
+            'catalog_id'        => $catalogId,
+            'object_type'       => 'V*',
+            'first_observed_at' => '2024-03-15 22:01:34',
+            'last_observed_at'  => '2024-03-15 22:01:34',
+            'observation_count' => 1,
+        ]);
+
+        return $id;
+    }
+
+    /**
+     * Regression test: a Simbad-matched anomaly type (VARIABLE_STAR here)
+     * never carries `mpc_designation` — that field is scoped to MPC
+     * solar-system objects only (see observatory-pipeline's
+     * modules/anomaly_detector.py). /ui/anomalies must fall back to the
+     * source's own `catalog_id` for its display designation and for the
+     * `designation` field embedded in the GENERATE_CHARTS task payload it
+     * builds — otherwise a finder chart generated from that task never
+     * shows the star's catalog name next to its anomaly_type, even though
+     * /ui/charts (which reads catalog_id directly off `sources`) shows it
+     * fine.
+     */
+    public function testVariableStarAnomalyFallsBackToCatalogIdForDesignation(): void
+    {
+        $frameId  = $this->createFrame();
+        $sourceId = $this->createSourceWithCatalog('Simbad', 'V* BE UMa');
+
+        $anomaly              = $this->anomalyOf('VARIABLE_STAR');
+        $anomaly['source_id'] = $sourceId;
+        // 'mpc_designation' intentionally omitted/null.
+
+        $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->anomaliesEndpoint($frameId), [
+                'filename'  => 'test.fits',
+                'anomalies' => [$anomaly],
+            ])
+            ->assertStatus(201);
+
+        $result = $this->get('/ui/anomalies');
+
+        $result->assertStatus(200);
+        $result->assertSee('V* BE UMa');
+    }
 }
