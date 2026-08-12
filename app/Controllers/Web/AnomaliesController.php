@@ -67,6 +67,11 @@ class AnomaliesController extends Controller
                     'object'       => $a['object'] ?? null,
                     'anomaly_ids'  => [],
                     'types'        => [],
+                    // anomaly_ids grouped by their own anomaly_type — a source classified with
+                    // more than one type over its lifetime (see createTask()'s docblock) needs
+                    // its GENERATE_CHARTS task built per-type, not per-group, so each type's own
+                    // chart (style) actually gets (re)generated instead of just one of them.
+                    'ids_by_type'  => [],
                     'has_alert'    => false,
                     'first_obs'    => $a['obs_time'],
                     'last_obs'     => $a['obs_time'],
@@ -78,6 +83,7 @@ class AnomaliesController extends Controller
 
             $groups[$key]['anomaly_ids'][] = $a['id'];
             $groups[$key]['types'][]       = $a['anomaly_type'];
+            $groups[$key]['ids_by_type'][$a['anomaly_type']][] = $a['id'];
             if ($a['is_alert']) {
                 $groups[$key]['has_alert'] = true;
             }
@@ -119,7 +125,20 @@ class AnomaliesController extends Controller
 
     /**
      * POST /ui/anomalies/generate-charts — create a GENERATE_CHARTS task from selected groups.
-     * Each task item carries `source_id` and a `payload` with all anomaly_ids in that group.
+     *
+     * Builds one task item PER UNIQUE anomaly_type within each selected group — not one item per
+     * group. A source classified with more than one anomaly_type over its lifetime (e.g. an
+     * uncatalogued mover first seen with no history as UNKNOWN, then MOVING_UNKNOWN once it had
+     * moved) needs both its "track" and "stamp_strip" charts (re)generated, and
+     * observatory-pipeline's finder_chart.py renders one chart per distinct style, keyed by the
+     * anomaly_type each GENERATE_CHARTS item carries (see that module's docblock and
+     * SourceChartModel's, in the pipeline repo's CLAUDE.md). Submitting only one item per group —
+     * the previous behavior, picking a single arbitrary type — silently generated just one of the
+     * two charts (real incident, 2026-08-11: source_id 6a7be36b4d7578.98132403, 12 MOVING_UNKNOWN
+     * + 1 UNKNOWN anomalies, only ever produced a single chart).
+     *
+     * Each item's `payload.anomaly_ids` is scoped to just that type's own anomaly ids, for
+     * traceability, rather than the whole group's flattened list.
      */
     public function createTask(): ResponseInterface
     {
@@ -138,14 +157,16 @@ class AnomaliesController extends Controller
 
         $items = [];
         foreach ($groupsData as $g) {
-            $items[] = [
-                'source_id' => $g['source_id'],
-                'payload'   => [
-                    'anomaly_type' => $g['anomaly_type'],
-                    'designation'  => $g['designation'],
-                    'anomaly_ids'  => $g['anomaly_ids'],
-                ],
-            ];
+            foreach ($g['ids_by_type'] as $anomalyType => $anomalyIds) {
+                $items[] = [
+                    'source_id' => $g['source_id'],
+                    'payload'   => [
+                        'anomaly_type' => $anomalyType,
+                        'designation'  => $g['designation'],
+                        'anomaly_ids'  => $anomalyIds,
+                    ],
+                ];
+            }
         }
 
         $taskModel = new TaskModel();
@@ -161,8 +182,13 @@ class AnomaliesController extends Controller
 
         (new TaskItemModel())->insertForTask($taskId, $items);
 
+        // count($items) can now exceed count($groupsData) — a group with both MOVING_UNKNOWN and
+        // UNKNOWN anomalies contributes 2 items (one chart style each) from a single source — so
+        // the message reports item and source counts separately rather than a single ambiguous
+        // number.
         return redirect()->to('/ui/tasks/' . $taskId)
-            ->with('success', "Задача {$taskId} создана: GENERATE_CHARTS, " . count($items) . ' источник(ов).');
+            ->with('success', "Задача {$taskId} создана: GENERATE_CHARTS, " . count($items)
+                . ' чарт(ов) для ' . count($groupsData) . ' источник(ов).');
     }
 
     /**
@@ -200,13 +226,23 @@ class AnomaliesController extends Controller
 
         if (! empty($sourceIds)) {
             $chartModel = new SourceChartModel();
+            // A source_id may now have more than one chart row — one per style (see
+            // SourceChartModel's class docblock) — so this can return several rows per
+            // source_id; each is deleted individually below, by its own style-suffixed file.
             $charts     = $chartModel->whereIn('source_id', $sourceIds)->findAll();
 
             foreach ($charts as $chart) {
                 // Delete chart image file from disk.
-                $filePath = WRITEPATH . 'uploads/charts/' . $chart['source_id'] . '.png';
+                $filePath = WRITEPATH . 'uploads/charts/' . $chart['source_id'] . '_' . $chart['style'] . '.png';
                 if (is_file($filePath)) {
                     unlink($filePath);
+                }
+
+                // Also clean up a pre-migration, un-suffixed file left over from before
+                // 2026-08-11-000001_SourceChartsUniqueByStyle.php, if one still exists.
+                $legacyPath = WRITEPATH . 'uploads/charts/' . $chart['source_id'] . '.png';
+                if (is_file($legacyPath)) {
+                    unlink($legacyPath);
                 }
             }
 
@@ -230,9 +266,13 @@ class AnomaliesController extends Controller
 
     /**
      * Extract selected groups from POST data.
-     * Each group is submitted as group_data[] with JSON-encoded {source_id, anomaly_ids[]}.
      *
-     * @return array<array{source_id: ?string, anomaly_ids: string[]}>
+     * Each group is submitted as group_data[] with JSON-encoded
+     * {source_id, ids_by_type: {anomaly_type: [id, ...], ...}, designation} — see
+     * anomalies_index.php's checkbox value and createTask()'s docblock for why anomaly_ids are
+     * grouped by anomaly_type here rather than a single flat list.
+     *
+     * @return array<array{source_id: ?string, ids_by_type: array<string, string[]>, anomaly_ids: string[], designation: ?string}>
      */
     private function collectSelectedGroups(): array
     {
@@ -244,14 +284,29 @@ class AnomaliesController extends Controller
                 continue;
             }
             $decoded = json_decode($json, true);
-            if (! is_array($decoded) || empty($decoded['anomaly_ids'])) {
+            if (! is_array($decoded) || empty($decoded['ids_by_type']) || ! is_array($decoded['ids_by_type'])) {
                 continue;
             }
+
+            $idsByType  = [];
+            $anomalyIds = [];
+            foreach ($decoded['ids_by_type'] as $type => $ids) {
+                if (! is_string($type) || $type === '' || ! is_array($ids) || count($ids) === 0) {
+                    continue;
+                }
+                $idsByType[$type] = array_values($ids);
+                $anomalyIds       = array_merge($anomalyIds, $ids);
+            }
+
+            if (empty($idsByType)) {
+                continue;
+            }
+
             $groups[] = [
-                'source_id'    => $decoded['source_id'] ?? null,
-                'anomaly_ids'  => (array) $decoded['anomaly_ids'],
-                'anomaly_type' => $decoded['anomaly_type'] ?? null,
-                'designation'  => $decoded['designation'] ?? null,
+                'source_id'   => $decoded['source_id'] ?? null,
+                'ids_by_type' => $idsByType,
+                'anomaly_ids' => $anomalyIds,
+                'designation' => $decoded['designation'] ?? null,
             ];
         }
 

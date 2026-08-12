@@ -61,25 +61,67 @@ class ChartsController extends Controller
     }
 
     /**
-     * GET /ui/charts/{sourceId}/image — stream the stored chart PNG for inline display.
+     * GET /ui/charts/{id}/image?style=track — stream the stored chart PNG for inline display.
+     *
+     * `id` is a source_id OR a task_item_id (see this class's docblock — one filesystem id
+     * namespace serves both). `style` is optional and only meaningful for a source_id: since a
+     * source can now hold one chart per style (2026-08-11-000001_SourceChartsUniqueByStyle.php),
+     * an id with no style falls back through the legacy un-suffixed filename and then
+     * SourceChartModel::STYLE_DISPLAY_PRIORITY — same resolution Api\V1\SourcesController::chart()
+     * uses, duplicated here rather than shared since this controller intentionally reads straight
+     * off disk instead of calling into the API (see class docblock).
      */
-    public function image(string $sourceId): ResponseInterface
+    public function image(string $id): ResponseInterface
     {
         // Same whitelist as Api\V1\SourcesController::isValidSourceId() — the id ends up as a
         // filename on disk, so it must be constrained before it's ever concatenated into a path.
-        if (preg_match('/^[a-zA-Z0-9.]{1,64}$/', $sourceId) !== 1) {
+        if (preg_match('/^[a-zA-Z0-9.]{1,64}$/', $id) !== 1) {
             return $this->response->setStatusCode(400)->setBody('Invalid source id');
         }
 
-        $path = WRITEPATH . 'uploads/charts/' . $sourceId . '.png';
+        $style = trim((string) ($this->request->getGet('style') ?? ''));
+        $path  = $this->resolveChartPath($id, $style !== '' ? $style : null);
 
-        if (! is_file($path)) {
+        if ($path === null) {
             return $this->response->setStatusCode(404)->setBody('No chart available for this source');
         }
 
         return $this->response
             ->setContentType('image/png')
             ->setBody(file_get_contents($path));
+    }
+
+    /**
+     * Resolve the on-disk path for a chart PNG — mirrors
+     * Api\V1\SourcesController::resolveChartPath() (see this class's docblock for why the logic
+     * is duplicated rather than shared).
+     */
+    private function resolveChartPath(string $id, ?string $style): ?string
+    {
+        $dir = WRITEPATH . 'uploads/charts';
+
+        if ($style !== null) {
+            if (! in_array($style, SourceChartModel::ALLOWED_STYLES, true)) {
+                return null;
+            }
+            $path = $dir . '/' . $id . '_' . $style . '.png';
+
+            return is_file($path) ? $path : null;
+        }
+
+        $legacyPath = $dir . '/' . $id . '.png';
+        if (is_file($legacyPath)) {
+            return $legacyPath;
+        }
+
+        foreach (SourceChartModel::STYLE_DISPLAY_PRIORITY as $candidate) {
+            $path = $dir . '/' . $id . '_' . $candidate . '.png';
+            if (is_file($path)) {
+                return $path;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -94,14 +136,25 @@ class ChartsController extends Controller
             return redirect()->to('/ui/charts')->with('error', 'График не найден.');
         }
 
-        // Determine the filesystem key (source_id or task_item_id)
+        // Determine the filesystem key (source_id or task_item_id). A source-keyed chart's file
+        // carries a style suffix (see SourceChartModel's class docblock); a task_item-keyed one
+        // doesn't and never has.
         $fileKey = $chart['source_id'] ?? $chart['task_item_id'] ?? null;
 
         // Delete the PNG file from disk
         if ($fileKey !== null) {
-            $path = WRITEPATH . 'uploads/charts/' . $fileKey . '.png';
-            if (is_file($path)) {
-                unlink($path);
+            $suffixedPath = $chart['source_id'] !== null
+                ? WRITEPATH . 'uploads/charts/' . $fileKey . '_' . $chart['style'] . '.png'
+                : WRITEPATH . 'uploads/charts/' . $fileKey . '.png';
+            if (is_file($suffixedPath)) {
+                unlink($suffixedPath);
+            }
+
+            // Also clean up a pre-migration, un-suffixed file left over from before
+            // 2026-08-11-000001_SourceChartsUniqueByStyle.php, if one still exists.
+            $legacyPath = WRITEPATH . 'uploads/charts/' . $fileKey . '.png';
+            if ($legacyPath !== $suffixedPath && is_file($legacyPath)) {
+                unlink($legacyPath);
             }
         }
 
