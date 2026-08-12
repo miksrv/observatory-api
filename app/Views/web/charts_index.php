@@ -52,7 +52,15 @@
 
 <div class="row g-3">
 <?php foreach ($charts as $chart): ?>
-    <?php $chartId = $chart['source_id'] ?? $chart['task_item_id']; ?>
+    <?php
+        $chartId = $chart['source_id'] ?? $chart['task_item_id'];
+        // A source_id can now hold one chart per style (see SourceChartModel's class docblock),
+        // so the image URL must pin the exact style this card's row is — otherwise two cards for
+        // the same source_id (e.g. "track" and "stamp_strip") would both resolve to whichever
+        // style /ui/charts/{id}/image's own no-style fallback happens to prefer.
+        $imageUrl = '/ui/charts/' . rawurlencode($chartId)
+            . ($chart['source_id'] ? '/image?style=' . rawurlencode($chart['style']) : '/image');
+    ?>
     <div class="col-12 col-md-6 col-lg-4 col-xl-3">
         <div class="card shadow-sm h-100">
             <?php if ($chart['source_id']): ?>
@@ -62,8 +70,8 @@
                     <label class="form-check-label small" for="merge-<?= esc($chart['source_id']) ?>">выбрать</label>
                 </div>
             <?php endif; ?>
-            <a href="/ui/charts/<?= esc($chartId) ?>/image" target="_blank" rel="noopener">
-                <img src="/ui/charts/<?= esc($chartId) ?>/image" class="card-img-top chart-thumb p-2" loading="lazy" alt="chart">
+            <a href="<?= esc($imageUrl) ?>" target="_blank" rel="noopener">
+                <img src="<?= esc($imageUrl) ?>" class="card-img-top chart-thumb p-2" loading="lazy" alt="chart">
             </a>
             <div class="card-body">
                 <?php if ($chart['source_id']): ?>
