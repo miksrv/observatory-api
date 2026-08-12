@@ -179,7 +179,16 @@ class CreateFramesTable extends Migration
         $this->forge->addPrimaryKey('id');
         $this->forge->addKey(['ra_center', 'dec_center'], false, false, 'idx_frames_coords');
         $this->forge->addKey('obs_time', false, false, 'idx_frames_obs_time');
-        $this->forge->addKey('filename', false, false, 'idx_frames_filename');
+        // Unique, not just indexed: one FITS file = one `frames` row. Without this,
+        // re-running an ANALYZE task on a file that was already registered (e.g.
+        // re-analysis after improving the detection algorithm) mints a brand-new
+        // frame_id every time instead of updating the existing row — the exact bug
+        // FramesController::create()'s upsert-by-filename logic exists to close (real
+        // incident, 2026-08-12: one re-analyzed frame produced a second `frames` row
+        // and its `source_observations` piled up alongside the stale first run's
+        // instead of replacing them). This also doubles as the DB-level backstop for
+        // that upsert's own find-then-insert-or-update race.
+        $this->forge->addUniqueKey('filename', 'uniq_frames_filename');
 
         $this->forge->createTable('frames', true);
 

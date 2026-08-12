@@ -61,7 +61,7 @@ class ChartsController extends Controller
     }
 
     /**
-     * GET /ui/charts/{id}/image?style=track — stream the stored chart PNG for inline display.
+     * GET /ui/charts/{id}/image?style=track — stream the stored chart image for inline display.
      *
      * `id` is a source_id OR a task_item_id (see this class's docblock — one filesystem id
      * namespace serves both). `style` is optional and only meaningful for a source_id: since a
@@ -69,7 +69,9 @@ class ChartsController extends Controller
      * an id with no style falls back through the legacy un-suffixed filename and then
      * SourceChartModel::STYLE_DISPLAY_PRIORITY — same resolution Api\V1\SourcesController::chart()
      * uses, duplicated here rather than shared since this controller intentionally reads straight
-     * off disk instead of calling into the API (see class docblock).
+     * off disk instead of calling into the API (see class docblock). Content-Type is derived from
+     * the resolved file's own extension (image/gif for a SourceChartModel::GIF_STYLES chart,
+     * image/png otherwise) — same reasoning as Api\V1\SourcesController::chart().
      */
     public function image(string $id): ResponseInterface
     {
@@ -86,13 +88,15 @@ class ChartsController extends Controller
             return $this->response->setStatusCode(404)->setBody('No chart available for this source');
         }
 
+        $contentType = str_ends_with($path, '.gif') ? 'image/gif' : 'image/png';
+
         return $this->response
-            ->setContentType('image/png')
+            ->setContentType($contentType)
             ->setBody(file_get_contents($path));
     }
 
     /**
-     * Resolve the on-disk path for a chart PNG — mirrors
+     * Resolve the on-disk path for a chart image — mirrors
      * Api\V1\SourcesController::resolveChartPath() (see this class's docblock for why the logic
      * is duplicated rather than shared).
      */
@@ -104,7 +108,8 @@ class ChartsController extends Controller
             if (! in_array($style, SourceChartModel::ALLOWED_STYLES, true)) {
                 return null;
             }
-            $path = $dir . '/' . $id . '_' . $style . '.png';
+            $ext  = in_array($style, SourceChartModel::GIF_STYLES, true) ? 'gif' : 'png';
+            $path = $dir . '/' . $id . '_' . $style . '.' . $ext;
 
             return is_file($path) ? $path : null;
         }
@@ -114,6 +119,10 @@ class ChartsController extends Controller
             return $legacyPath;
         }
 
+        // STYLE_DISPLAY_PRIORITY deliberately excludes SourceChartModel::GIF_STYLES (see that
+        // constant's docblock) — a style-less request keeps resolving to the static chart, never
+        // an animation, so ".png" here is always correct rather than needing the same per-style
+        // extension lookup the explicit-$style branch above does.
         foreach (SourceChartModel::STYLE_DISPLAY_PRIORITY as $candidate) {
             $path = $dir . '/' . $id . '_' . $candidate . '.png';
             if (is_file($path)) {
@@ -141,11 +150,14 @@ class ChartsController extends Controller
         // doesn't and never has.
         $fileKey = $chart['source_id'] ?? $chart['task_item_id'] ?? null;
 
-        // Delete the PNG file from disk
+        // Delete the image file from disk
         if ($fileKey !== null) {
-            $suffixedPath = $chart['source_id'] !== null
-                ? WRITEPATH . 'uploads/charts/' . $fileKey . '_' . $chart['style'] . '.png'
-                : WRITEPATH . 'uploads/charts/' . $fileKey . '.png';
+            if ($chart['source_id'] !== null) {
+                $ext          = in_array($chart['style'], SourceChartModel::GIF_STYLES, true) ? 'gif' : 'png';
+                $suffixedPath = WRITEPATH . 'uploads/charts/' . $fileKey . '_' . $chart['style'] . '.' . $ext;
+            } else {
+                $suffixedPath = WRITEPATH . 'uploads/charts/' . $fileKey . '.png';
+            }
             if (is_file($suffixedPath)) {
                 unlink($suffixedPath);
             }
