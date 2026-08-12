@@ -205,14 +205,24 @@ class SourceModel extends BaseModel
             // Step 3 — charts: delete DB row + PNG file for every input AND the target (the
             // target is brand-new so it never has one yet, but staying uniform with the loop
             // above costs nothing and protects against a future caller passing an
-            // already-merged target back in).
+            // already-merged target back in). A single source_id may now have more than one
+            // chart row (one per style — see SourceChartModel's class docblock), so this
+            // whereIn() can return several rows per source_id; the loop below already handles
+            // that correctly since it deletes file-per-row rather than file-per-source_id.
             $chartSourceIds = [...$sourceIds, $targetId];
             $charts         = $chartModel->whereIn('source_id', $chartSourceIds)->findAll();
 
             foreach ($charts as $chart) {
-                $path = WRITEPATH . 'uploads/charts/' . $chart['source_id'] . '.png';
+                $path = WRITEPATH . 'uploads/charts/' . $chart['source_id'] . '_' . $chart['style'] . '.png';
                 if (is_file($path)) {
                     unlink($path);
+                }
+
+                // Also clean up a pre-migration, un-suffixed file left over from before
+                // 2026-08-11-000001_SourceChartsUniqueByStyle.php, if one still exists.
+                $legacyPath = WRITEPATH . 'uploads/charts/' . $chart['source_id'] . '.png';
+                if (is_file($legacyPath)) {
+                    unlink($legacyPath);
                 }
             }
             if (count($charts) > 0) {
