@@ -120,6 +120,19 @@ class CreateSourceObservationsTable extends Migration
         // table, since `sources` carries no ra/dec of its own — see
         // SourceModel and SourceObservationModel docblocks.
         $this->forge->addKey(['ra', 'dec'], false, false, 'idx_srcobs_coords');
+        // One photometric measurement per source per frame — enforced at the DB level rather than
+        // trusted to ingestion-side dedup alone. Without this, an uncatalogued object's own normal
+        // sep detection and its own image-subtraction candidate (which share no catalog identity
+        // for observatory-pipeline's pipeline.py _dedupe_by_catalog_identity() to collapse) both
+        // landed here as separate rows for the very same physical detection — inflating
+        // observation_count and producing duplicate anomalies for one real event (real incident,
+        // 2026-08-11, C_2020_R4_ATLAS frames; also independently hit two ordinary Gaia DR3 stars
+        // whose two same-frame detections both resolved to the same source_id via
+        // SourceModel::findByCoordinates()). observatory-pipeline's own fix
+        // (_dedupe_uncatalogued_subtraction_pair(), added the same day) stops new duplicates at the
+        // source; this key is the hard backstop for whatever ingestion path — this one or any
+        // future one — might still slip one through.
+        $this->forge->addUniqueKey(['frame_id', 'source_id'], 'uk_srcobs_frame_source');
 
         $this->forge->addForeignKey('source_id', 'sources', 'id', 'CASCADE', 'CASCADE');
         $this->forge->addForeignKey('frame_id', 'frames', 'id', 'CASCADE', 'CASCADE');
