@@ -135,6 +135,14 @@ All other errors use:
 Register a processed FITS frame. Returns a `frame_id` used by subsequent calls. If
 `observation.object` is present, also increments the corresponding `object_stats` row.
 
+**Idempotent by `filename`:** if a frame with this exact `filename` was already registered, this
+call UPDATEs that existing row in place (all fields, as if freshly re-analyzed) and returns its
+existing `id` instead of creating a duplicate — `filename` carries a `UNIQUE` constraint. This is
+what makes a re-run ANALYZE task on an already-processed file (e.g. after improving the detection
+algorithm) update the frame's record rather than minting a second one; `object_stats` is only
+incremented on the genuinely-new-row path, never on an update. See `POST /frames/{id}/sources`
+below for how the sources side of the same re-analysis is reconciled.
+
 **Required fields:** `filename`, `obs_time`, `ra_center`, `dec_center`, `fov_deg`, `quality_flag`.
 Everything else — `observation`, `instrument`, `sensor`, `observer`, `software`, `qc` — is optional;
 any missing sub-field is stored as `NULL`.
@@ -196,13 +204,17 @@ any missing sub-field is stored as `NULL`.
 ```
 </details>
 
-**Response `201 Created`:**
+**Response `201 Created`** (new frame) **or `200 OK`** (existing `filename` updated in place):
 ```json
 { "id": "42", "message": "Frame registered successfully" }
 ```
+```json
+{ "id": "42", "message": "Frame updated successfully" }
+```
+The `id` is the same value in both cases when `filename` matches an existing row.
 
 **Errors:** `400` missing required field · `422` a required numeric field (`ra_center`,
-`dec_center`, `fov_deg`) isn't numeric · `500` insert failed
+`dec_center`, `fov_deg`) isn't numeric · `500` insert/update failed
 
 ---
 
@@ -298,6 +310,20 @@ Catalog-identity matching is required for anything that moves between frames (an
 asteroid can shift tens of arcsec/hour) — position-only matching would otherwise mint a new
 `sources` row for it on every frame.
 
+**Reconciling by `frame_id` (idempotent re-analysis):** this call is safe to repeat for the same
+`frame_id` — e.g. an operator re-runs ANALYZE on an already-processed file after improving the
+detection algorithm. Each source in the batch upserts its `source_observations` row (keyed by
+`(frame_id, source_id)`) rather than always inserting. Then, any source that was linked to this
+`frame_id` *before* this call but is **not** present in this batch is retracted: its
+`source_observations`/`frame_sources` rows for this frame are deleted. If that retraction leaves
+the source with zero observations on *any* frame, the source itself is purged outright — its
+entire `anomalies` history and finder charts are deleted too, since a source with no observations
+left anywhere was itself a stale detection artifact from a superseded run, not a real object (see
+`SourceModel::purgeIfOrphaned()`). A source still observed on some other frame is left
+untouched — only this frame's own link is removed. An empty
+`sources: []` is a valid "found nothing this time" statement and retracts everything previously
+linked to this `frame_id`, mirroring `POST /frames/{id}/anomalies`'s replace semantics below.
+
 <details>
 <summary>Request example</summary>
 
@@ -337,7 +363,9 @@ subtraction-coverage-bypass rules for this observation from stored data alone �
   "count": 287,
   "new_sources": 12,
   "matched_sources": 275,
-  "source_ids": ["6612f8a5e3b9c9.12345678", "6612f8a5e3ba01.87654321", null]
+  "source_ids": ["6612f8a5e3b9c9.12345678", "6612f8a5e3ba01.87654321", null],
+  "retracted_sources": 3,
+  "purged_sources": 1
 }
 ```
 
@@ -345,6 +373,13 @@ subtraction-coverage-bypass rules for this observation from stored data alone �
 each entry is the resolved `sources.id`, or `null` for a skipped entry (invalid `ra`/`dec`, or an
 insert failure). Use this to populate `anomalies[].source_id` on a subsequent
 `POST /frames/{id}/anomalies` call for the same frame.
+
+`retracted_sources` is how many sources previously linked to this `frame_id` were NOT reconfirmed
+by this call and had their observation/link for this frame removed (see "Reconciling by
+`frame_id`" above) — `0` on a frame's first-ever `POST .../sources` call, since there's nothing yet
+to retract. `purged_sources` (always `<= retracted_sources`) is how many of those retracted sources
+had zero observations left on any frame afterwards and were deleted outright, along with their
+anomaly history and finder charts.
 
 **Errors:** `400` missing `filename`/`sources` · `404` frame not found · `422` every source was
 invalid (missing numeric `ra`/`dec`)
@@ -960,19 +995,30 @@ batch. `{"source_ids": []}` → `{"results": {}}`.
 
 ### POST /api/v1/sources/{id}/chart
 
-Store the finder-chart PNG for a source, fully replacing any previous one — the pipeline always
-regenerates the whole image from the source's current track (`GET .../track`) rather than
-patching an existing file. The request body is the **raw PNG bytes** — not JSON, not multipart —
-since the body is entirely consumed by the image; `style` and `frame_count` travel as query
-parameters instead.
+Store the finder-chart image for a source, fully replacing any previous chart of the **same**
+`style` for this source — a source can hold one chart per distinct style at once (see
+`source_charts`'s schema in docs/DATABASE.md: unique on `(source_id, style)`, not on `source_id`
+alone), since `modules/anomaly_detector.py` can classify a source with more than one anomaly_type
+over its lifetime. The pipeline always regenerates the whole image from the source's current track
+(`GET .../track`) rather than patching an existing file. The request body is the **raw image
+bytes** — not JSON, not multipart — since the body is entirely consumed by the image; `style` and
+`frame_count` travel as query parameters instead.
 
 | Parameter | Type | Required |
 |-----------|------|----------|
-| `style` | `track` \| `stamp_strip` \| `before_after` | yes |
+| `style` | `track` \| `stamp_strip` \| `before_after` \| `track_gif` \| `stamp_strip_gif` | yes |
 | `frame_count` | int (positive) | yes |
 
-**Request body:** raw PNG bytes, `Content-Type: image/png`. Validated by its 8-byte signature
-(`\x89PNG\r\n\x1a\n`) rather than fully decoded — the API does not otherwise inspect the image.
+`track_gif`/`stamp_strip_gif` are the animated GIF companions of `track`/`stamp_strip`
+(`CHART_GIF_ENABLED` on the pipeline side, `modules/finder_chart.py`) — one more epoch's marker per
+frame for `track_gif`, one epoch's own crop per frame ("blink") for `stamp_strip_gif`. There is no
+GIF companion for `before_after` (at most two still images already, nothing worth animating).
+
+**Request body:** raw image bytes. PNG (`Content-Type: image/png`, validated by its 8-byte
+signature `\x89PNG\r\n\x1a\n`) for every style except `track_gif`/`stamp_strip_gif`, which are GIF
+(`Content-Type: image/gif`, validated by a 6-byte `GIF87a`/`GIF89a` signature) — the signature
+check is against what `style` implies, not against the request's own `Content-Type` header, which
+the API never trusts either way. Neither format is otherwise decoded.
 
 **Response `200 OK`:**
 ```json
@@ -983,21 +1029,32 @@ parameters instead.
   "updated_at": "2024-03-15T22:05:00Z"
 }
 ```
-Stored on disk at `writable/uploads/charts/{source_id}.png`; tracked in the `source_charts` table
-(upserted by `source_id` — one row per source).
+Stored on disk at `writable/uploads/charts/{source_id}_{style}.{ext}` (`ext` is `gif` for
+`track_gif`/`stamp_strip_gif`, `png` otherwise); tracked in the `source_charts` table (upserted by
+`(source_id, style)` — one row per style per source).
 
-**Errors:** `400` invalid `{id}`, missing/invalid `style` or `frame_count`, or body is not a valid
-PNG · `404` source not found
+**Errors:** `400` invalid `{id}`, missing/invalid `style` or `frame_count`, or body doesn't match
+the signature `style` implies · `404` source not found
 
 ---
 
 
 ### GET /api/v1/sources/{id}/chart.png
 
-Serve the stored finder-chart PNG for a source as raw image bytes (`Content-Type: image/png`).
+Serve the stored finder-chart image for a source as raw image bytes, with `Content-Type` matching
+what's actually on disk (`image/gif` for a `track_gif`/`stamp_strip_gif` chart, `image/png`
+otherwise) rather than a Content-Type fixed by the URL's own `.png` suffix — that suffix is a
+historical artifact of the endpoint predating GIF charts, not a promise about the response format.
 Not called by the pipeline itself — served for a future consumer such as the observatory website.
 
-**Errors:** `400` malformed `{id}` · `404` no chart uploaded yet for this source
+`style` is an optional query parameter. Given, only that exact style is served (`404` if the
+source has no chart of that style yet). Omitted, the most informative *static* style wins
+(`track` over `stamp_strip` over `before_after`) — the animated styles are deliberately excluded
+from this fallback, so a style-less request never surprises an existing caller with an animation;
+fetch `track_gif`/`stamp_strip_gif` explicitly to get one.
+
+**Errors:** `400` malformed `{id}` · `404` no chart uploaded yet for this source (or for the
+requested `style`)
 
 ---
 

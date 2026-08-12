@@ -91,6 +91,21 @@ README.md's Architecture section for the full picture.
   task item PER DISTINCT `anomaly_type` within a selected group (not one item per group) so every
   style actually gets (re)generated. `task_item_id`-keyed rows are unaffected — that style
   (`catalog_preview`) never coexists with more than one per task_item_id anyway.
+- **`track_gif`/`stamp_strip_gif` are GIF, every other style is PNG — the file extension and
+  Content-Type follow `style`, never a hardcoded `.png`/`image/png`.** Added
+  (`2026-08-11-000002_AddGifStylesToSourceCharts.php`) when observatory-pipeline's
+  `modules/finder_chart.py` grew `CHART_GIF_ENABLED`: an animated companion chart uploaded via the
+  SAME `POST /sources/{id}/chart` endpoint as its static counterpart, keyed by its own style value
+  rather than overwriting it (same one-row-per-style mechanism as the bullet above).
+  `SourcesController::uploadChart()` validates the body's magic bytes against what `style` implies
+  (PNG's 8-byte signature, or GIF's 6-byte `GIF87a`/`GIF89a`) rather than trusting the request's own
+  `Content-Type` header; `extensionForStyle()`/`contentTypeForChartPath()` are the single place both
+  `uploadChart()` (write) and `chart()`/`resolveChartPath()` (read) derive `.gif` vs `.png` from, so
+  they can't disagree. `Web\ChartsController` duplicates this same style→extension logic rather than
+  sharing it (see that class's own docblock for why). `SourceChartModel::STYLE_DISPLAY_PRIORITY`
+  deliberately excludes both GIF styles — a style-less `GET .../chart.png` request must keep
+  resolving to a static chart, never surprise a caller written before GIF charts existed with an
+  animation; fetch `?style=track_gif`/`?style=stamp_strip_gif` explicitly to get one.
 - **`POST /tasks/{id}/items/progress`'s `payload` field is bidirectional**, not input-only despite
   `TasksController::create()` being where it's first mentioned: `GENERATE_CHARTS` reads it as input
   at task-creation time; `PREVIEW_CATALOG_MATCH` overwrites it with a result

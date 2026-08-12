@@ -76,9 +76,11 @@ CLI commands, see [`../README.md`](../README.md).
 - One **frame** can contain many sources and vice versa, via `frame_sources`.
 - **anomalies** link to a frame (cascade delete) and optionally to a source (`SET NULL` on
   delete — an anomaly's detection history outlives the source being removed from the catalog).
-- One **source_charts** row = the current chart PNG for one source (1:1, cascade-deleted with its
-  source) OR one task item (1:1, no cascade — see the table's own notes); the image bytes live on
-  disk at `writable/uploads/charts/{source_id|task_item_id}.png`, not in this table.
+- One **source_charts** row = the current chart image for one (source, style) pair
+  (cascade-deleted with its source) OR one task item (1:1, no cascade — see the table's own
+  notes); the image bytes live on disk at
+  `writable/uploads/charts/{source_id}_{style}.{png|gif}` or
+  `writable/uploads/charts/{task_item_id}.png`, not in this table.
 - **object_stats** = pre-aggregated statistics per object+filter, updated incrementally whenever
   a frame is registered (`POST /frames`).
 - One **task** = one stage's unit of work for observatory-pipeline's granular job queue (`ANALYZE`
@@ -210,19 +212,23 @@ Run `php spark recalculate:object-stats` to rebuild this table from scratch.
 
 One row per chart — either a per-source finder/discovery chart (`source_id` set) or a
 `PREVIEW_CATALOG_MATCH` diagnostic chart with no source at all (`task_item_id` set instead).
-Exactly one of the two is set per row, never both.
+Exactly one of the two is set per row, never both. A source can hold **one row per distinct
+style** (see `uq_source_charts_source_style` below) — not one row per source — since
+`modules/anomaly_detector.py` (observatory-pipeline) can classify the same source with more than
+one `anomaly_type` over its lifetime, each needing its own rendering (see
+2026-08-11-000001_SourceChartsUniqueByStyle.php).
 
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | CHAR(24) PK | |
-| `source_id` | CHAR(24) NULL UNIQUE FK→sources.id, `ON DELETE CASCADE` | One chart per source; set for `track`/`stamp_strip`/`before_after` |
+| `source_id` | CHAR(24) NULL FK→sources.id, `ON DELETE CASCADE` | Set for every style except `catalog_preview`; a source can have multiple rows (one per style) |
 | `task_item_id` | CHAR(24) NULL UNIQUE | One chart per task item; set for `catalog_preview`. **No FK** — this migration (2026-08-06) predates `CreateTasksTable` (2026-08-07) in migration order, so a FK to `task_items.id` here would fail at `CREATE TABLE` time on a fresh database; see the migration's docblock |
-| `style` | ENUM('track', 'stamp_strip', 'before_after', 'catalog_preview') NOT NULL | `catalog_preview` is the only style paired with `task_item_id` instead of `source_id` |
+| `style` | ENUM('track', 'stamp_strip', 'before_after', 'catalog_preview', 'track_gif', 'stamp_strip_gif') NOT NULL | `catalog_preview` is the only style paired with `task_item_id` instead of `source_id`. `track_gif`/`stamp_strip_gif` (2026-08-11-000002_AddGifStylesToSourceCharts.php) are the animated-GIF companions of `track`/`stamp_strip` — stored as `.gif` on disk instead of `.png`, see `SourcesController::extensionForStyle()` |
 | `frame_count` | INT DEFAULT 0 | Epochs actually included in the current image; always 1 for `catalog_preview` (a single-frame chart, not an epoch series) |
 | `updated_at` | DATETIME NULL | Set on every upload |
 | `created_at` | DATETIME | |
 
-**Indexes:** `source_id` (unique), `task_item_id` (unique)
+**Indexes:** `(source_id, style)` (unique, `uq_source_charts_source_style`), `task_item_id` (unique)
 
 ### `tasks` (Pipeline Job Queue)
 
