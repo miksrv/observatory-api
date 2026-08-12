@@ -96,6 +96,168 @@ class SourceModel extends BaseModel
      * @return array List of source records, each merged with its matched
      *               ra/dec, e.g. [['id'=>, 'ra'=>, 'dec'=>, 'catalog_name'=>, ...]]
      */
+    /**
+     * Merge several fragmented `sources` rows into one freshly-created source.
+     *
+     * Exists for objects catalog-matching could never give a stable identity to across frames —
+     * typically an uncatalogued, fast-moving object (e.g. a comet SkyBot/MPC doesn't carry
+     * ephemeris data for at all — see observatory-pipeline's CLAUDE.md, Known Issues) whose
+     * on-sky motion between exposures exceeds findByCoordinates()'s own ~2" dedup radius, so
+     * every single frame it's detected on mints a brand-new `sources` row instead of
+     * accumulating observations against one. This is an *operator-driven, retroactive* fix for
+     * that fragmentation (via the /ui/charts bulk action) — it does not change
+     * findByCoordinates()'s own radius, so a *future* frame of the same still-uncatalogued
+     * object will fragment again and need re-merging.
+     *
+     * Mechanics, in order (see this method's own inline comments for why this order matters):
+     *   1. Create a brand-new target `sources` row — deliberately never one of the inputs
+     *      reused as a "winner", so every input source is treated identically below (no special
+     *      case for "the row that already had rows attached to it").
+     *   2. For each input source: re-point (UPDATE, not copy-then-delete) its
+     *      `source_observations` and `frame_sources` rows onto the target id, and delete its
+     *      `anomalies` rows outright (not reassign — see below).
+     *   3. Delete every chart (DB row + PNG file) for the target AND every input source — a
+     *      merged source's finder chart is stale the instant its track gains new epochs, and
+     *      `source_charts.source_id` carries a UNIQUE key, so a raw reassignment onto the target
+     *      would collide the moment a second input source already had its own chart row.
+     *   4. Delete the now-empty input `sources` rows — safe only because every row that
+     *      mattered was already moved off them in step 2; nothing here relies on
+     *      ON DELETE CASCADE to do the data migration.
+     *   5. Recompute the target's own `observation_count`/`first_observed_at`/`last_observed_at`
+     *      from its (now complete) `source_observations`.
+     *
+     * Anomalies are deleted, never reassigned, and this method never creates a replacement
+     * anomaly for the target itself — `POST /frames/{id}/anomalies` (observatory-pipeline's
+     * anomaly_detector.py via a DETECT_ANOMALIES task) REPLACES a frame's entire anomaly set on
+     * every real run anyway, so a hand-crafted "merged" anomaly here would just get silently
+     * overwritten the next time that task runs — and that real run, now seeing every merged
+     * epoch under one source_id, is far better positioned to classify it correctly than this
+     * method guessing. The caller (SourcesController::merge()) is expected to tell the operator
+     * to submit DETECT_ANOMALIES for the returned frame_ids, then GENERATE_CHARTS for the
+     * returned target_id — same decoupled-task convention as everywhere else in this app.
+     *
+     * @param string[] $sourceIds At least 2 distinct, existing source ids to merge
+     *
+     * @return array{target_id: string, frame_ids: string[], merged_count: int}
+     *
+     * @throws \RuntimeException if fewer than 2 distinct, existing sources are given
+     */
+    public function mergeSources(array $sourceIds): array
+    {
+        $sourceIds = array_values(array_unique($sourceIds));
+
+        $existing   = $this->whereIn('id', $sourceIds)->findAll();
+        $foundIds   = array_column($existing, 'id');
+        $missingIds = array_values(array_diff($sourceIds, $foundIds));
+
+        if (count($foundIds) < 2) {
+            throw new \RuntimeException(
+                'Нужно минимум 2 существующих источника для объединения (найдено: ' . count($foundIds) . ').'
+            );
+        }
+
+        $sourceIds = $foundIds; // ignore any stale/unknown ids rather than failing the whole merge
+
+        $frameSourceModel = new FrameSourceModel();
+        $obsModel         = new SourceObservationModel();
+        $anomalyModel     = new AnomalyModel();
+        $chartModel       = new SourceChartModel();
+
+        $this->db->transStart();
+
+        try {
+            // Step 1 — brand-new target, never one of the inputs (see docblock above for why).
+            $targetId = $this->insert([
+                'catalog_name' => null,
+                'catalog_id'   => null,
+                'catalog_mag'  => null,
+                'object_type'  => null,
+            ]);
+
+            $touchedFrameIds = [];
+
+            foreach ($sourceIds as $oldId) {
+                // Step 2a — frame_sources: re-link via the existing idempotent helper (guards the
+                // uk_frame_source unique key if two inputs both touched the same frame_id), then
+                // drop the old rows explicitly rather than relying on the FK cascade to do it
+                // before step 4 — at this point in the loop the cascade would be a no-op anyway
+                // once the rows are gone, but doing it here keeps this step and step 2b symmetrical.
+                foreach ($frameSourceModel->getFrameIdsForSource($oldId) as $frameId) {
+                    $frameSourceModel->linkSourceToFrame($frameId, $targetId);
+                    $touchedFrameIds[$frameId] = true;
+                }
+                $frameSourceModel->where('source_id', $oldId)->delete();
+
+                // Step 2b — source_observations: re-point in place. `source_observations` carries
+                // its own uk_srcobs_frame_source UNIQUE(frame_id, source_id) — added specifically
+                // to stop a duplicate detection on one frame from ever being stored as two rows
+                // again (see that migration's own comment for the real incident this closes). If
+                // two of the INPUT sources being merged here already had a row on the very same
+                // frame_id (a pre-existing, pre-this-constraint fragmentation this merge feature
+                // itself wasn't designed to resolve), this UPDATE would violate it — caught below
+                // and reported as a normal merge failure rather than an uncaught 500.
+                $obsModel->where('source_id', $oldId)->set('source_id', $targetId)->update();
+
+                // Step 2c — anomalies: delete outright (see docblock — never reassigned).
+                $anomalyModel->where('source_id', $oldId)->delete();
+            }
+
+            // Step 3 — charts: delete DB row + PNG file for every input AND the target (the
+            // target is brand-new so it never has one yet, but staying uniform with the loop
+            // above costs nothing and protects against a future caller passing an
+            // already-merged target back in).
+            $chartSourceIds = [...$sourceIds, $targetId];
+            $charts         = $chartModel->whereIn('source_id', $chartSourceIds)->findAll();
+
+            foreach ($charts as $chart) {
+                $path = WRITEPATH . 'uploads/charts/' . $chart['source_id'] . '.png';
+                if (is_file($path)) {
+                    unlink($path);
+                }
+            }
+            if (count($charts) > 0) {
+                $chartModel->whereIn('source_id', $chartSourceIds)->delete();
+            }
+
+            // Step 4 — delete the now-empty input sources. Safe: everything that mattered was
+            // already moved off them above.
+            $this->whereIn('id', $sourceIds)->delete();
+
+            // Step 5 — recompute the target's own aggregates from its complete observation set.
+            $stats = $obsModel
+                ->select('COUNT(*) AS cnt, MIN(obs_time) AS first_t, MAX(obs_time) AS last_t')
+                ->where('source_id', $targetId)
+                ->first();
+
+            $this->update($targetId, [
+                'observation_count' => (int) ($stats['cnt'] ?? 0),
+                'first_observed_at' => $stats['first_t'] ?? null,
+                'last_observed_at'  => $stats['last_t'] ?? null,
+            ]);
+
+            $this->db->transComplete();
+        } catch (\Throwable $e) {
+            $this->db->transRollback();
+
+            throw new \RuntimeException(
+                'Объединение источников не удалось: ' . $e->getMessage(),
+                0,
+                $e
+            );
+        }
+
+        if ($this->db->transStatus() === false) {
+            throw new \RuntimeException('Объединение источников не удалось (транзакция откатена).');
+        }
+
+        return [
+            'target_id'    => $targetId,
+            'frame_ids'    => array_keys($touchedFrameIds),
+            'merged_count' => count($sourceIds),
+            'missing_ids'  => $missingIds,
+        ];
+    }
+
     public function coneSearch(float $ra, float $dec, float $radiusArcsec): array
     {
         $nearest = (new SourceObservationModel())->coneSearchDistinctSources($ra, $dec, $radiusArcsec);

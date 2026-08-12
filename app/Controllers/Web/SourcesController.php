@@ -113,4 +113,48 @@ class SourcesController extends Controller
         return redirect()->to('/ui/tasks/' . $taskId)
             ->with('success', "Задача {$taskId} создана: GENERATE_CHARTS для источника {$sourceId}.");
     }
+
+    /**
+     * POST /ui/sources/merge — merge several fragmented source_ids (selected via checkboxes on
+     * /ui/charts — see that page's own bulk-action bar) into one freshly-created source. See
+     * SourceModel::mergeSources() for the actual mechanics and rationale.
+     *
+     * Deliberately does NOT queue any follow-up task itself — same decoupled-task convention as
+     * ANALYZE -> DETECT_ANOMALIES -> GENERATE_CHARTS elsewhere in this app (see
+     * observatory-pipeline's CLAUDE.md "Job queue" section): the merged source's old
+     * charts/anomalies are simply gone after this call. The success message tells the operator
+     * exactly which frame_ids and which new source_id to submit next, via the existing
+     * /ui/frames (DETECT_ANOMALIES) and /ui/sources/generate-charts (GENERATE_CHARTS) actions.
+     */
+    public function merge(): ResponseInterface
+    {
+        $sourceIds = array_values(array_unique(array_filter(
+            (array) ($this->request->getPost('source_ids') ?? []),
+            static fn ($v): bool => is_string($v) && $v !== ''
+        )));
+
+        if (count($sourceIds) < 2) {
+            return redirect()->back()->with('error', 'Выберите минимум 2 источника для объединения.');
+        }
+
+        try {
+            $result = (new SourceModel())->mergeSources($sourceIds);
+        } catch (\RuntimeException $e) {
+            return redirect()->back()->with('error', $e->getMessage());
+        }
+
+        $frameCount = count($result['frame_ids']);
+        $frameList  = implode(', ', $result['frame_ids']);
+
+        $msg = "Объединено {$result['merged_count']} источник(ов) в новый источник {$result['target_id']} "
+            . "({$frameCount} кадр(ов): {$frameList}). "
+            . 'Старые графики/аномалии удалены. Не забудьте создать задачу DETECT_ANOMALIES '
+            . 'для затронутых кадров (страница «Кадры») и GENERATE_CHARTS для нового источника.';
+
+        if (! empty($result['missing_ids'])) {
+            $msg .= ' Проигнорированы не найденные id: ' . implode(', ', $result['missing_ids']) . '.';
+        }
+
+        return redirect()->to('/ui/charts')->with('success', $msg);
+    }
 }
