@@ -76,6 +76,21 @@ README.md's Architecture section for the full picture.
   one would fail `CREATE TABLE` on a fresh database. Don't "fix" that by adding the FK in place —
   either move this migration's timestamp after `CreateTasksTable`'s, or add the FK via a follow-up
   migration.
+- **A `source_id` can hold one `source_charts` row PER STYLE**, not one row total — unique key is
+  `(source_id, style)` (`2026-08-11-000001_SourceChartsUniqueByStyle.php`), not `source_id` alone.
+  observatory-pipeline's `modules/anomaly_detector.py` classifies a source independently on every
+  frame it appears on, so the same source can collect anomalies of more than one `anomaly_type`
+  over its lifetime (e.g. `UNKNOWN` on first detection, `MOVING_UNKNOWN` once it had moved) — real
+  incident, 2026-08-11: source_id `6a7be36b4d7578.98132403`, 12 `MOVING_UNKNOWN` + 1 `UNKNOWN`
+  anomalies, but the old `source_id`-only unique key meant only ONE chart ever survived, whichever
+  style was uploaded last. `SourceChartModel::upsertForSource()` now upserts by `(source_id,
+  style)`; the on-disk filename carries the style too (`{source_id}_{style}.png` —
+  `SourcesController::uploadChart()`/`chart()`, `Web\ChartsController::image()`), with a fallback
+  to the old un-suffixed `{source_id}.png` path for any chart uploaded before this migration and
+  never re-rendered since. `Web\AnomaliesController::createTask()` submits one `GENERATE_CHARTS`
+  task item PER DISTINCT `anomaly_type` within a selected group (not one item per group) so every
+  style actually gets (re)generated. `task_item_id`-keyed rows are unaffected — that style
+  (`catalog_preview`) never coexists with more than one per task_item_id anyway.
 - **`POST /tasks/{id}/items/progress`'s `payload` field is bidirectional**, not input-only despite
   `TasksController::create()` being where it's first mentioned: `GENERATE_CHARTS` reads it as input
   at task-creation time; `PREVIEW_CATALOG_MATCH` overwrites it with a result

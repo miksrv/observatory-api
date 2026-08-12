@@ -553,9 +553,13 @@ class SourcesController extends BaseApiController
      * POST /api/v1/sources/{id}/chart?style=track&frame_count=5
      *
      * Store the finder-chart PNG for a source, fully replacing any previous
-     * one. observatory-pipeline's modules/finder_chart.py always regenerates
-     * the whole image from the current track (see GET .../track) rather than
-     * patching an existing file, so this endpoint always fully overwrites.
+     * chart of the SAME style for this source (a different style already
+     * stored for this source_id is untouched — see SourceChartModel's class
+     * docblock: one row per (source_id, style) pair, not per source_id
+     * alone). observatory-pipeline's modules/finder_chart.py always
+     * regenerates the whole image from the current track (see GET
+     * .../track) rather than patching an existing file, so this endpoint
+     * always fully overwrites within that one style.
      *
      * The request body is the raw PNG bytes — not JSON, not multipart —
      * since the body is entirely consumed by the image; `style` and
@@ -605,7 +609,11 @@ class SourcesController extends BaseApiController
             return $this->respondError(500, 'Failed to create chart storage directory');
         }
 
-        if (file_put_contents($dir . '/' . $id . '.png', $body) === false) {
+        // Filename carries the style so a second style for the same source_id
+        // (e.g. "stamp_strip" uploaded after "track" already exists) lands in
+        // its own file instead of overwriting it — see SourceChartModel's
+        // class docblock.
+        if (file_put_contents($dir . '/' . $id . '_' . $style . '.png', $body) === false) {
             return $this->respondError(500, 'Failed to store chart image');
         }
 
@@ -623,9 +631,19 @@ class SourcesController extends BaseApiController
     }
 
     /**
-     * GET /api/v1/sources/{id}/chart.png
+     * GET /api/v1/sources/{id}/chart.png?style=track
      *
      * Serve the stored finder-chart PNG for a source as raw image bytes.
+     *
+     * `style` is optional. When given, only that exact style is served (404
+     * if the source has no chart of that style). When omitted — a consumer
+     * that predates multi-style charts, or one that genuinely doesn't care
+     * which — the most informative available style wins, per
+     * SourceChartModel::STYLE_DISPLAY_PRIORITY. A pre-migration file still
+     * sitting at the old un-suffixed path ({id}.png, from before
+     * 2026-08-11-000001_SourceChartsUniqueByStyle.php) is tried first in
+     * that no-style case, so an old chart nobody has re-rendered since stays
+     * reachable without a backfill.
      */
     public function chart(string $id): ResponseInterface
     {
@@ -633,9 +651,11 @@ class SourcesController extends BaseApiController
             return $this->respondError(400, 'Invalid source id');
         }
 
-        $path = WRITEPATH . 'uploads/charts/' . $id . '.png';
+        $style = $this->request->getGet('style');
 
-        if (! is_file($path)) {
+        $path = $this->resolveChartPath($id, is_string($style) && $style !== '' ? $style : null);
+
+        if ($path === null) {
             return $this->respondError(404, 'No chart available for this source', ['source_id' => $id]);
         }
 
@@ -643,6 +663,42 @@ class SourcesController extends BaseApiController
             ->setStatusCode(200)
             ->setContentType('image/png')
             ->setBody(file_get_contents($path));
+    }
+
+    /**
+     * Resolve the on-disk path for a source's chart PNG.
+     *
+     * @param string      $id    Source id (already validated by the caller)
+     * @param string|null $style Exact style to require, or null to fall back
+     *                           through the legacy un-suffixed filename and
+     *                           then SourceChartModel::STYLE_DISPLAY_PRIORITY
+     */
+    private function resolveChartPath(string $id, ?string $style): ?string
+    {
+        $dir = WRITEPATH . 'uploads/charts';
+
+        if ($style !== null) {
+            if (! in_array($style, SourceChartModel::ALLOWED_STYLES, true)) {
+                return null;
+            }
+            $path = $dir . '/' . $id . '_' . $style . '.png';
+
+            return is_file($path) ? $path : null;
+        }
+
+        $legacyPath = $dir . '/' . $id . '.png';
+        if (is_file($legacyPath)) {
+            return $legacyPath;
+        }
+
+        foreach (SourceChartModel::STYLE_DISPLAY_PRIORITY as $candidate) {
+            $path = $dir . '/' . $id . '_' . $candidate . '.png';
+            if (is_file($path)) {
+                return $path;
+            }
+        }
+
+        return null;
     }
 
     /**
