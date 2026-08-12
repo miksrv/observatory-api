@@ -24,6 +24,10 @@ final class SourceChartsTest extends CIUnitTestCase
     // check without needing a real rendering library in these tests.
     private const MINIMAL_PNG = "\x89PNG\r\n\x1a\n" . "rest-of-a-fake-but-signed-png-body";
 
+    // Same idea for the animated-GIF chart styles (SourceChartModel::GIF_STYLES)
+    // — only the 6-byte GIF89a signature matters to uploadChart()'s check.
+    private const MINIMAL_GIF = 'GIF89a' . 'rest-of-a-fake-but-signed-gif-body';
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -288,6 +292,79 @@ final class SourceChartsTest extends CIUnitTestCase
     }
 
     // -------------------------------------------------------------------------
+    // POST /api/v1/sources/{id}/chart — animated GIF styles (SourceChartModel::GIF_STYLES)
+    // -------------------------------------------------------------------------
+
+    public function testUploadChartAcceptsGifStyleWithGifSignature(): void
+    {
+        [$sourceId] = $this->createSourceWithEpochs(2);
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBody(self::MINIMAL_GIF)
+            ->post("/api/v1/sources/{$sourceId}/chart?style=track_gif&frame_count=2");
+
+        $result->assertStatus(200);
+        $json = json_decode($result->getJSON(), true);
+        $this->assertSame('track_gif', $json['style']);
+
+        $this->assertFileExists(WRITEPATH . 'uploads/charts/' . $sourceId . '_track_gif.gif');
+        $this->assertSame(self::MINIMAL_GIF, file_get_contents(WRITEPATH . 'uploads/charts/' . $sourceId . '_track_gif.gif'));
+        // Must NOT also land at the .png path a non-GIF style would use.
+        $this->assertFileDoesNotExist(WRITEPATH . 'uploads/charts/' . $sourceId . '_track_gif.png');
+
+        @unlink(WRITEPATH . 'uploads/charts/' . $sourceId . '_track_gif.gif');
+    }
+
+    public function testUploadChartRejectsGifStyleWithPngBody(): void
+    {
+        [$sourceId] = $this->createSourceWithEpochs(2);
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBody(self::MINIMAL_PNG)
+            ->post("/api/v1/sources/{$sourceId}/chart?style=track_gif&frame_count=2");
+
+        $result->assertStatus(400);
+    }
+
+    public function testUploadChartRejectsPngStyleWithGifBody(): void
+    {
+        [$sourceId] = $this->createSourceWithEpochs(2);
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBody(self::MINIMAL_GIF)
+            ->post("/api/v1/sources/{$sourceId}/chart?style=track&frame_count=2");
+
+        $result->assertStatus(400);
+    }
+
+    /**
+     * The animated companion coexists with its static counterpart — same
+     * (source_id, style) uniqueness guarantee 2026-08-11-000001_
+     * SourceChartsUniqueByStyle.php already gives 'track' vs 'stamp_strip',
+     * now also covering 'track' vs 'track_gif'.
+     */
+    public function testGifStyleCoexistsWithItsStaticCounterpart(): void
+    {
+        [$sourceId] = $this->createSourceWithEpochs(3);
+
+        $this->withHeaders($this->authHeaders())->withBody(self::MINIMAL_PNG)
+            ->post("/api/v1/sources/{$sourceId}/chart?style=track&frame_count=3");
+        $this->withHeaders($this->authHeaders())->withBody(self::MINIMAL_GIF)
+            ->post("/api/v1/sources/{$sourceId}/chart?style=track_gif&frame_count=3");
+
+        $db     = \Config\Database::connect('default');
+        $styles = array_column($db->table('source_charts')->where('source_id', $sourceId)->get()->getResultArray(), 'style');
+        sort($styles);
+        $this->assertSame(['track', 'track_gif'], $styles);
+
+        $this->assertFileExists(WRITEPATH . 'uploads/charts/' . $sourceId . '_track.png');
+        $this->assertFileExists(WRITEPATH . 'uploads/charts/' . $sourceId . '_track_gif.gif');
+
+        @unlink(WRITEPATH . 'uploads/charts/' . $sourceId . '_track.png');
+        @unlink(WRITEPATH . 'uploads/charts/' . $sourceId . '_track_gif.gif');
+    }
+
+    // -------------------------------------------------------------------------
     // GET /api/v1/sources/{id}/chart.png
     // -------------------------------------------------------------------------
 
@@ -370,6 +447,45 @@ final class SourceChartsTest extends CIUnitTestCase
 
         @unlink(WRITEPATH . 'uploads/charts/' . $sourceId . '_track.png');
         @unlink(WRITEPATH . 'uploads/charts/' . $sourceId . '_stamp_strip.png');
+    }
+
+    public function testChartServesGifStyleWithGifContentType(): void
+    {
+        [$sourceId] = $this->createSourceWithEpochs(2);
+
+        $this->withHeaders($this->authHeaders())->withBody(self::MINIMAL_GIF)
+            ->post("/api/v1/sources/{$sourceId}/chart?style=track_gif&frame_count=2");
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->get("/api/v1/sources/{$sourceId}/chart.png?style=track_gif");
+
+        $result->assertStatus(200);
+        $this->assertSame(self::MINIMAL_GIF, $result->response()->getBody());
+        $this->assertStringContainsString('image/gif', $result->response()->getHeaderLine('Content-Type'));
+
+        @unlink(WRITEPATH . 'uploads/charts/' . $sourceId . '_track_gif.gif');
+    }
+
+    /**
+     * SourceChartModel::STYLE_DISPLAY_PRIORITY deliberately excludes the GIF
+     * styles — a style-less request must keep resolving to the static
+     * chart, and 404 (not the GIF) when only a GIF chart exists for this
+     * source, since animating unprompted would surprise any caller written
+     * before GIF charts existed.
+     */
+    public function testChartWithNoStyleNeverFallsBackToGifStyle(): void
+    {
+        [$sourceId] = $this->createSourceWithEpochs(2);
+
+        $this->withHeaders($this->authHeaders())->withBody(self::MINIMAL_GIF)
+            ->post("/api/v1/sources/{$sourceId}/chart?style=track_gif&frame_count=2");
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->get("/api/v1/sources/{$sourceId}/chart.png");
+
+        $result->assertStatus(404);
+
+        @unlink(WRITEPATH . 'uploads/charts/' . $sourceId . '_track_gif.gif');
     }
 
     public function testChartWithUnknownStyleReturns404(): void

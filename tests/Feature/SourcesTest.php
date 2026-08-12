@@ -32,6 +32,7 @@ final class SourcesTest extends CIUnitTestCase
     private function emptyAppTables(): void
     {
         $db = \Config\Database::connect('default');
+        $db->query('DELETE FROM source_charts');
         $db->query('DELETE FROM anomalies');
         $db->query('DELETE FROM frame_sources');
         $db->query('DELETE FROM source_observations');
@@ -498,5 +499,191 @@ final class SourcesTest extends CIUnitTestCase
         $result->assertStatus(200);
         $json = json_decode($result->getJSON(), true);
         $this->assertNotEmpty($json['data'], 'Source near the pole must still be found despite the large RA delta.');
+    }
+
+    // -------------------------------------------------------------------------
+    // POST /api/v1/frames/{id}/sources — reconciliation for the SAME frame_id
+    // (idempotent re-analysis, e.g. after improving the detection algorithm)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Regression test for a real incident (2026-08-12): re-POSTing sources
+     * for a frame_id that was already saved once (a re-analysis) must be
+     * idempotent for a batch that hasn't actually changed — no duplicate
+     * source_observations rows, no double-counted observation_count.
+     */
+    public function testResubmittingIdenticalBatchToSameFrameIsIdempotent(): void
+    {
+        $frameId = $this->createFrame();
+
+        $post = fn () => $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->sourcesEndpoint($frameId), [
+                'filename' => 'test.fits',
+                'sources'  => $this->threeSources(),
+            ]);
+
+        $first = $post();
+        $first->assertStatus(201);
+        $json1 = json_decode($first->getJSON(), true);
+        $this->assertSame(3, $json1['new_sources']);
+        $this->assertSame(0, $json1['retracted_sources']);
+
+        $second = $post();
+        $second->assertStatus(201);
+        $json2 = json_decode($second->getJSON(), true);
+        $this->assertSame(0, $json2['new_sources']);
+        $this->assertSame(3, $json2['matched_sources']);
+        $this->assertSame(0, $json2['retracted_sources']);
+        $this->assertSame(0, $json2['purged_sources']);
+        $this->assertSame($json1['source_ids'], $json2['source_ids']);
+
+        $db = \Config\Database::connect('default');
+        $this->assertSame(
+            3,
+            $db->table('source_observations')->where('frame_id', $frameId)->countAllResults(),
+            'Re-posting the identical batch must not create duplicate observation rows.'
+        );
+
+        foreach ($json1['source_ids'] as $sourceId) {
+            $row = $db->table('sources')->where('id', $sourceId)->get()->getRowArray();
+            $this->assertSame(1, (int) $row['observation_count'], 'observation_count must not be double-counted on an idempotent re-run.');
+        }
+    }
+
+    /**
+     * A re-analysis that no longer detects a source it used to (e.g. an
+     * improved algorithm now correctly rejects a false detection) must
+     * retract that source's observation for this frame. If the source has no
+     * observations left on any frame afterwards, it must be purged outright.
+     */
+    public function testResubmittingWithFewerSourcesRetractsAndPurgesTheMissingOne(): void
+    {
+        $frameId = $this->createFrame();
+        $sources = $this->threeSources();
+
+        $first = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->sourcesEndpoint($frameId), [
+                'filename' => 'test.fits',
+                'sources'  => $sources,
+            ]);
+        $first->assertStatus(201);
+        $droppedSourceId = json_decode($first->getJSON(), true)['source_ids'][1];
+
+        // Re-analysis: the same frame, minus the middle source.
+        unset($sources[1]);
+        $second = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->sourcesEndpoint($frameId), [
+                'filename' => 'test.fits',
+                'sources'  => array_values($sources),
+            ]);
+
+        $second->assertStatus(201);
+        $json2 = json_decode($second->getJSON(), true);
+        $this->assertSame(2, $json2['count']);
+        $this->assertSame(1, $json2['retracted_sources']);
+        $this->assertSame(1, $json2['purged_sources'], 'The dropped source has no observations left on any frame and must be purged.');
+
+        $db = \Config\Database::connect('default');
+        $this->assertNull($db->table('sources')->where('id', $droppedSourceId)->get()->getRowArray());
+        $this->assertNull($db->table('source_observations')->where('source_id', $droppedSourceId)->get()->getRowArray());
+        $this->assertNull($db->table('frame_sources')->where('source_id', $droppedSourceId)->get()->getRowArray());
+    }
+
+    /**
+     * A retracted source that is still observed on a DIFFERENT frame must
+     * only lose its link/observation for the re-analyzed frame — it must
+     * survive, untouched, everywhere else.
+     */
+    public function testRetractedSourceStillObservedOnAnotherFrameIsNotPurged(): void
+    {
+        $sharedSource = ['ra' => 202.461, 'dec' => 47.182, 'mag' => 14.23, 'object_type' => 'STAR'];
+
+        $frameA = $this->createFrame(['obs_time' => '2024-01-01 00:00:00']);
+        $resultA = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->sourcesEndpoint($frameA), ['filename' => 'a.fits', 'sources' => [$sharedSource]]);
+        $resultA->assertStatus(201);
+        $sourceId = json_decode($resultA->getJSON(), true)['source_ids'][0];
+
+        $frameB = $this->createFrame(['obs_time' => '2024-01-02 00:00:00']);
+        $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->sourcesEndpoint($frameB), ['filename' => 'b.fits', 'sources' => [$sharedSource]])
+            ->assertStatus(201);
+
+        // Re-analysis of frame B finds nothing this time.
+        $resultB2 = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->sourcesEndpoint($frameB), ['filename' => 'b.fits', 'sources' => []]);
+
+        $resultB2->assertStatus(201);
+        $json = json_decode($resultB2->getJSON(), true);
+        $this->assertSame(1, $json['retracted_sources']);
+        $this->assertSame(0, $json['purged_sources'], 'Still observed on frame A — must not be purged.');
+
+        $db = \Config\Database::connect('default');
+        $this->assertNotNull($db->table('sources')->where('id', $sourceId)->get()->getRowArray(), 'Source row must survive.');
+        $this->assertNotNull(
+            $db->table('source_observations')->where('frame_id', $frameA)->where('source_id', $sourceId)->get()->getRowArray(),
+            "Frame A's observation must be untouched."
+        );
+        $this->assertNull(
+            $db->table('source_observations')->where('frame_id', $frameB)->where('source_id', $sourceId)->get()->getRowArray(),
+            "Frame B's observation must be retracted."
+        );
+    }
+
+    /**
+     * A source purged for being fully orphaned by a re-analysis must take its
+     * entire anomaly history and finder chart with it — not just be detached
+     * (unlike anomalies.source_id's normal ON DELETE SET NULL behavior, see
+     * AnomaliesTest::testDeletingSourceDetachesAnomalyInsteadOfDeletingIt —
+     * a purge is a stronger, deliberate "this was never real" statement).
+     */
+    public function testPurgingOrphanedSourceDeletesItsAnomaliesAndCharts(): void
+    {
+        $frameId = $this->createFrame();
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->sourcesEndpoint($frameId), [
+                'filename' => 'test.fits',
+                'sources'  => [['ra' => 202.461, 'dec' => 47.182, 'mag' => 14.23]],
+            ]);
+        $result->assertStatus(201);
+        $sourceId = json_decode($result->getJSON(), true)['source_ids'][0];
+
+        $db = \Config\Database::connect('default');
+        $db->table('anomalies')->insert([
+            'id'           => uniqid('', true),
+            'frame_id'     => $frameId,
+            'source_id'    => $sourceId,
+            'anomaly_type' => 'UNKNOWN',
+            'ra'           => 202.461,
+            'dec'          => 47.182,
+            'is_alert'     => 1,
+        ]);
+        $db->table('source_charts')->insert([
+            'id'          => uniqid('', true),
+            'source_id'   => $sourceId,
+            'style'       => 'before_after',
+            'frame_count' => 1,
+        ]);
+
+        // Re-analysis of the same frame no longer detects this source.
+        $result2 = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->sourcesEndpoint($frameId), ['filename' => 'test.fits', 'sources' => []]);
+
+        $result2->assertStatus(201);
+        $json2 = json_decode($result2->getJSON(), true);
+        $this->assertSame(1, $json2['purged_sources']);
+
+        $this->assertNull($db->table('sources')->where('id', $sourceId)->get()->getRowArray());
+        $this->assertNull($db->table('anomalies')->where('source_id', $sourceId)->get()->getRowArray());
+        $this->assertNull($db->table('source_charts')->where('source_id', $sourceId)->get()->getRowArray());
     }
 }

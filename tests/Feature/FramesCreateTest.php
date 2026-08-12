@@ -253,4 +253,64 @@ final class FramesCreateTest extends CIUnitTestCase
 
         $result->assertStatus(401);
     }
+
+    // -------------------------------------------------------------------------
+    // Idempotent upsert-by-filename (re-analysis)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Regression test for a real incident (2026-08-12): re-running an ANALYZE
+     * task on an already-registered file (e.g. after improving the detection
+     * algorithm) must UPDATE the existing `frames` row in place, not create a
+     * second one with a new frame_id.
+     */
+    public function testResubmittingSameFilenameUpdatesExistingFrameInsteadOfDuplicating(): void
+    {
+        $first = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post(self::ENDPOINT, $this->validPayload(['ra_center' => 202.4696, 'quality_flag' => 'OK']));
+
+        $first->assertStatus(201);
+        $firstId = json_decode($first->getJSON(), true)['id'];
+
+        // Re-analysis: same filename, different measured values (as if a
+        // re-plate-solve/QC pass produced slightly different numbers).
+        $second = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post(self::ENDPOINT, $this->validPayload(['ra_center' => 202.5000, 'quality_flag' => 'OK']));
+
+        $second->assertStatus(200);
+        $json2 = json_decode($second->getJSON(), true);
+        $this->assertSame($firstId, $json2['id'], 'Re-analysis of the same filename must return the same frame_id.');
+        $this->assertSame('Frame updated successfully', $json2['message']);
+
+        $db    = \Config\Database::connect('default');
+        $count = $db->table('frames')->where('filename', $this->validPayload()['filename'])->countAllResults();
+        $this->assertSame(1, $count, 'Exactly one frames row must exist for this filename, not two.');
+
+        $row = $db->table('frames')->where('id', $firstId)->get()->getRowArray();
+        $this->assertSame(202.5, (float) $row['ra_center']);
+    }
+
+    /**
+     * Re-analyzing an already-registered frame must not double-count it in
+     * object_stats — only a genuinely new frame increments frame_count.
+     */
+    public function testResubmittingSameFilenameDoesNotDoubleCountObjectStats(): void
+    {
+        $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post(self::ENDPOINT, $this->validPayload())
+            ->assertStatus(201);
+
+        $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post(self::ENDPOINT, $this->validPayload())
+            ->assertStatus(200);
+
+        $db  = \Config\Database::connect('default');
+        $row = $db->table('object_stats')->where('object', 'M51')->get()->getRowArray();
+        $this->assertNotNull($row);
+        $this->assertSame(1, (int) $row['frame_count'], 'A re-analysis of the same file must not increment frame_count again.');
+    }
 }
