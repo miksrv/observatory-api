@@ -136,6 +136,12 @@ class SourceModel extends BaseModel
      * to submit DETECT_ANOMALIES for the returned frame_ids, then GENERATE_CHARTS for the
      * returned target_id — same decoupled-task convention as everywhere else in this app.
      *
+     * The actual anomaly/chart/row deletion (originally inline here) now lives in
+     * {@see self::deleteSourcesAndDependents()}/{@see self::purgeChartsForSources()}, shared with
+     * {@see self::purgeIfOrphaned()} — FramesController::saveSources()'s reconciliation pass uses
+     * the exact same "delete anomalies + charts (row and file) + the source row itself" mechanics
+     * for a source a re-analysis no longer detects anywhere.
+     *
      * @param string[] $sourceIds At least 2 distinct, existing source ids to merge
      *
      * @return array{target_id: string, frame_ids: string[], merged_count: int}
@@ -160,8 +166,6 @@ class SourceModel extends BaseModel
 
         $frameSourceModel = new FrameSourceModel();
         $obsModel         = new SourceObservationModel();
-        $anomalyModel     = new AnomalyModel();
-        $chartModel       = new SourceChartModel();
 
         $this->db->transStart();
 
@@ -197,41 +201,19 @@ class SourceModel extends BaseModel
                 // itself wasn't designed to resolve), this UPDATE would violate it — caught below
                 // and reported as a normal merge failure rather than an uncaught 500.
                 $obsModel->where('source_id', $oldId)->set('source_id', $targetId)->update();
-
-                // Step 2c — anomalies: delete outright (see docblock — never reassigned).
-                $anomalyModel->where('source_id', $oldId)->delete();
             }
 
-            // Step 3 — charts: delete DB row + PNG file for every input AND the target (the
-            // target is brand-new so it never has one yet, but staying uniform with the loop
-            // above costs nothing and protects against a future caller passing an
-            // already-merged target back in). A single source_id may now have more than one
-            // chart row (one per style — see SourceChartModel's class docblock), so this
-            // whereIn() can return several rows per source_id; the loop below already handles
-            // that correctly since it deletes file-per-row rather than file-per-source_id.
-            $chartSourceIds = [...$sourceIds, $targetId];
-            $charts         = $chartModel->whereIn('source_id', $chartSourceIds)->findAll();
+            // Step 2c/3/4 — anomalies (deleted outright, never reassigned — see docblock above),
+            // charts (DB row + on-disk file), and the now-empty input `sources` rows themselves.
+            // Shared with FramesController::saveSources()'s reconciliation pass, which purges a
+            // source the same way once a re-analysis leaves it with zero observations anywhere.
+            $this->deleteSourcesAndDependents($sourceIds);
 
-            foreach ($charts as $chart) {
-                $path = WRITEPATH . 'uploads/charts/' . $chart['source_id'] . '_' . $chart['style'] . '.png';
-                if (is_file($path)) {
-                    unlink($path);
-                }
-
-                // Also clean up a pre-migration, un-suffixed file left over from before
-                // 2026-08-11-000001_SourceChartsUniqueByStyle.php, if one still exists.
-                $legacyPath = WRITEPATH . 'uploads/charts/' . $chart['source_id'] . '.png';
-                if (is_file($legacyPath)) {
-                    unlink($legacyPath);
-                }
-            }
-            if (count($charts) > 0) {
-                $chartModel->whereIn('source_id', $chartSourceIds)->delete();
-            }
-
-            // Step 4 — delete the now-empty input sources. Safe: everything that mattered was
-            // already moved off them above.
-            $this->whereIn('id', $sourceIds)->delete();
+            // Defensive: also purge any chart the brand-new target might already carry. It never
+            // should (it was just created above), but this protects against a future caller
+            // passing an already-merged target back in, and mirrors the original uniform
+            // treatment of "every id involved in this merge, including the target".
+            $this->purgeChartsForSources([$targetId]);
 
             // Step 5 — recompute the target's own aggregates from its complete observation set.
             $stats = $obsModel
@@ -266,6 +248,113 @@ class SourceModel extends BaseModel
             'merged_count' => count($sourceIds),
             'missing_ids'  => $missingIds,
         ];
+    }
+
+    /**
+     * Delete a source outright if — and only if — it no longer has any
+     * `source_observations` on any frame.
+     *
+     * Used by FramesController::saveSources()'s reconciliation pass: when a
+     * re-analysis of an already-registered frame (e.g. after improving the
+     * detection algorithm) no longer confirms a source it used to observe on
+     * THAT frame, and retracting that one observation leaves the source with
+     * zero observations anywhere else either, the source never really
+     * existed as a real object — it was itself a stale detection artifact
+     * from a now-superseded analysis run. So it's removed outright, along
+     * with everything that only makes sense in relation to it: its anomaly
+     * history and its finder charts (see deleteSourcesAndDependents()).
+     *
+     * A source that still has at least one observation elsewhere (a
+     * different frame, or even a different epoch of this same frame that
+     * this exact call didn't touch) is left completely untouched — this
+     * method is a no-op for it.
+     *
+     * @return bool True if the source was actually purged; false if it
+     *              still has observations (or doesn't exist) and was left
+     *              alone.
+     */
+    public function purgeIfOrphaned(string $sourceId): bool
+    {
+        $remaining = (new SourceObservationModel())
+            ->where('source_id', $sourceId)
+            ->countAllResults();
+
+        if ($remaining > 0) {
+            return false;
+        }
+
+        $this->deleteSourcesAndDependents([$sourceId]);
+
+        return true;
+    }
+
+    /**
+     * Delete one or more `sources` rows outright, along with everything that
+     * only makes sense in relation to a source that actually exists:
+     * `anomalies` (deleted, not reassigned — an anomaly detached from any
+     * real source is unhelpful noise, not history worth keeping) and every
+     * `source_charts` row + its on-disk PNG/GIF file (see
+     * purgeChartsForSources() — `ON DELETE CASCADE` cleans up the DB row,
+     * but never the file).
+     *
+     * Callers must have already moved off (or otherwise accounted for)
+     * anything about these sources that SHOULD survive — mergeSources()
+     * re-points `source_observations`/`frame_sources` onto its new target
+     * before calling this, and purgeIfOrphaned() only calls this once a
+     * source has zero `source_observations` left anywhere.
+     *
+     * @param string[] $sourceIds
+     */
+    private function deleteSourcesAndDependents(array $sourceIds): void
+    {
+        if ($sourceIds === []) {
+            return;
+        }
+
+        (new AnomalyModel())->whereIn('source_id', $sourceIds)->delete();
+
+        $this->purgeChartsForSources($sourceIds);
+
+        $this->whereIn('id', $sourceIds)->delete();
+    }
+
+    /**
+     * Delete every `source_charts` row (DB row + on-disk PNG/GIF file) for
+     * the given source ids. Split out from deleteSourcesAndDependents() so
+     * mergeSources() can also purge the brand-new target's own (normally
+     * nonexistent) chart defensively, without touching anomalies or the
+     * source row for it.
+     *
+     * @param string[] $sourceIds
+     */
+    private function purgeChartsForSources(array $sourceIds): void
+    {
+        if ($sourceIds === []) {
+            return;
+        }
+
+        $chartModel = new SourceChartModel();
+        $charts     = $chartModel->whereIn('source_id', $sourceIds)->findAll();
+
+        foreach ($charts as $chart) {
+            $ext  = in_array($chart['style'], SourceChartModel::GIF_STYLES, true) ? 'gif' : 'png';
+            $path = WRITEPATH . 'uploads/charts/' . $chart['source_id'] . '_' . $chart['style'] . '.' . $ext;
+
+            if (is_file($path)) {
+                unlink($path);
+            }
+
+            // Also clean up a pre-migration, un-suffixed file left over from before
+            // 2026-08-11-000001_SourceChartsUniqueByStyle.php, if one still exists.
+            $legacyPath = WRITEPATH . 'uploads/charts/' . $chart['source_id'] . '.png';
+            if (is_file($legacyPath)) {
+                unlink($legacyPath);
+            }
+        }
+
+        if (count($charts) > 0) {
+            $chartModel->whereIn('source_id', $sourceIds)->delete();
+        }
     }
 
     public function coneSearch(float $ra, float $dec, float $radiusArcsec): array

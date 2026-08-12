@@ -53,4 +53,21 @@ class FrameModel extends BaseModel
         'qc_star_count',
         'qc_eccentricity',
     ];
+
+    /**
+     * Find the frame previously registered for a given FITS filename, if any.
+     *
+     * `filename` carries a UNIQUE constraint (see the migration) precisely
+     * so this lookup is meaningful: one FITS file corresponds to exactly one
+     * `frames` row, no matter how many times ANALYZE re-processes it (e.g.
+     * after improving the detection algorithm). Used by
+     * FramesController::create() to upsert instead of always inserting.
+     *
+     * @return array|null The existing frame row, or null if this filename
+     *                     has never been registered.
+     */
+    public function findByFilename(string $filename): ?array
+    {
+        return $this->where('filename', $filename)->first();
+    }
 }

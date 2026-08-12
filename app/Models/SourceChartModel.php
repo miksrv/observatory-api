@@ -15,13 +15,14 @@ namespace App\Models;
  * moved) needs both the "track" and "stamp_strip" charts to coexist, not
  * one silently overwriting the other. Tracks only the style/frame_count of
  * the chart currently on disk at
- * writable/uploads/charts/{source_id}_{style}.png (or
+ * writable/uploads/charts/{source_id}_{style}.{ext} (or
  * writable/uploads/charts/{task_item_id}.png for the task-item-keyed kind,
  * which never had a multi-style problem to begin with and keeps its
  * original un-suffixed filename); the image bytes themselves are
  * regenerated from scratch by observatory-pipeline on every request, so a
  * row is always fully replaced (upsertForSource()/upsertForTaskItem()),
- * never partially patched.
+ * never partially patched. `{ext}` is 'gif' for a GIF_STYLES member, 'png'
+ * for every other style — see SourcesController::extensionForStyle().
  */
 class SourceChartModel extends BaseModel
 {
@@ -33,13 +34,29 @@ class SourceChartModel extends BaseModel
 
     /**
      * Must match the ENUM constraint on the `style` column
-     * (2026-08-06-000001_CreateSourceChartsTable.php). 'track'/'stamp_strip'/
-     * 'before_after' are the three rendering paths in observatory-pipeline's
-     * modules/finder_chart.py (source_id-keyed); 'catalog_preview' is
-     * modules/catalog_preview.py's diagnostic (task_item_id-keyed) — the
-     * only style that doesn't pair with a source_id.
+     * (2026-08-06-000001_CreateSourceChartsTable.php, widened by
+     * 2026-08-11-000002_AddGifStylesToSourceCharts.php). 'track'/'stamp_strip'/
+     * 'before_after' are the three static rendering paths in
+     * observatory-pipeline's modules/finder_chart.py (source_id-keyed);
+     * 'catalog_preview' is modules/catalog_preview.py's diagnostic
+     * (task_item_id-keyed) — the only style that doesn't pair with a
+     * source_id. 'track_gif'/'stamp_strip_gif' are the animated GIF
+     * counterparts of 'track'/'stamp_strip' (CHART_GIF_ENABLED) — see
+     * GIF_STYLES below for the subset this applies to.
      */
-    public const ALLOWED_STYLES = ['track', 'stamp_strip', 'before_after', 'catalog_preview'];
+    public const ALLOWED_STYLES = [
+        'track', 'stamp_strip', 'before_after', 'catalog_preview',
+        'track_gif', 'stamp_strip_gif',
+    ];
+
+    /**
+     * The subset of ALLOWED_STYLES stored as an animated GIF rather than a
+     * PNG — used by SourcesController to pick the right magic-byte
+     * validation, file extension, and Content-Type for a given style,
+     * instead of hardcoding "PNG" everywhere the way this table did before
+     * GIF charts existed.
+     */
+    public const GIF_STYLES = ['track_gif', 'stamp_strip_gif'];
 
     /**
      * Display priority for a source-id chart lookup that doesn't name a
@@ -73,7 +90,7 @@ class SourceChartModel extends BaseModel
      * 2026-08-11-000001_SourceChartsUniqueByStyle.php for why.
      *
      * @param string $sourceId   Source ID
-     * @param string $style      'track', 'stamp_strip', or 'before_after'
+     * @param string $style      One of ALLOWED_STYLES except 'catalog_preview' (task_item_id-keyed only)
      * @param int    $frameCount Number of epochs included in the current image
      *
      * @return array The resulting row
