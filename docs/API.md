@@ -1030,7 +1030,7 @@ the appropriate type on its side, same as it does with `os.getenv()` today). `AP
     "CHART_MAX_EPOCHS": "12",
     "CHART_STAMP_SIZE_ARCSEC": "60.0",
     "DELTA_MAG_ALERT": "0.5",
-    "EDGE_MARGIN_FRAC": "0.1",
+    "EDGE_MARGIN_FRAC": "0.05",
     "FITS_ARCHIVE": "/fits/archive",
     "FITS_INCOMING": "/fits/incoming",
     "FITS_REJECTED": "/fits/rejected",

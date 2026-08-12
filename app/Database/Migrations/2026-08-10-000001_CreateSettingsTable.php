@@ -126,7 +126,7 @@ class CreateSettingsTable extends Migration
             ['param' => 'MPC_MAG_LIMIT', 'value' => '19.0', 'description' => 'Faintest predicted visual magnitude (V) for an MPC/SkyBot object to be eligible for source matching'],
 
             // Edge-of-frame geometry
-            ['param' => 'EDGE_MARGIN_FRAC', 'value' => '0.1', 'description' => 'Fraction of the frame\'s width/height treated as "near the edge"'],
+            ['param' => 'EDGE_MARGIN_FRAC', 'value' => '0.05', 'description' => 'Fraction of the frame\'s width/height treated as "near the edge"'],
             ['param' => 'SPACE_DEBRIS_ELONGATION_MIN', 'value' => '3.0', 'description' => 'Elongation threshold for single-exposure trail classification'],
             ['param' => 'SPACE_DEBRIS_EDGE_ELONGATION_MIN', 'value' => '6.0', 'description' => 'Elongation threshold for single-exposure trail classification near frame edges'],
 
