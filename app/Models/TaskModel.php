@@ -6,7 +6,10 @@ namespace App\Models;
  * Model for the `tasks` table — the granular pipeline job queue.
  *
  * A task is one stage's unit of work (ANALYZE / DETECT_ANOMALIES / GENERATE_CHARTS /
- * PREVIEW_CATALOG_MATCH) over an explicit, itemized scope — see TaskItemModel. RESTART is a
+ * PREVIEW_CATALOG_MATCH / DELETE_FRAME) over an explicit, itemized scope — see TaskItemModel.
+ * DELETE_FRAME is operator-initiated frame deletion: the pipeline moves the frame's file from
+ * FITS_ARCHIVE to FITS_REJECTED (never deleting it), and TasksController::postItemsProgress()
+ * performs the actual DB-side cascade delete once an item is reported DONE. RESTART is a
  * signal task with no items — the pipeline worker marks it completed and exits so Docker restarts
  * the container with fresh remote settings. This is what observatory-pipeline's worker (and any
  * other consumer) polls to know what's active and how far along it is.
@@ -19,7 +22,7 @@ class TaskModel extends BaseModel
     // created_at is handled by the DB DEFAULT — no CI timestamp management needed.
     protected $useTimestamps = false;
 
-    public const TYPES = ['ANALYZE', 'DETECT_ANOMALIES', 'GENERATE_CHARTS', 'PREVIEW_CATALOG_MATCH', 'RESTART'];
+    public const TYPES = ['ANALYZE', 'DETECT_ANOMALIES', 'GENERATE_CHARTS', 'PREVIEW_CATALOG_MATCH', 'DELETE_FRAME', 'RESTART'];
 
     public const STATUSES = ['PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED'];
 

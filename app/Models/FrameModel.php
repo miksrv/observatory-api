@@ -70,4 +70,74 @@ class FrameModel extends BaseModel
     {
         return $this->where('filename', $filename)->first();
     }
+
+    /**
+     * Delete this frame and everything that only makes sense in relation to
+     * it, then purge any source left with zero observations anywhere as a
+     * result.
+     *
+     * Backs the DELETE_FRAME task type (see observatory-pipeline's
+     * worker.py::_run_delete_frame_task() and that repo's CLAUDE.md
+     * job-queue table) — called from
+     * TasksController::postItemsProgress() once the pipeline reports the
+     * frame's file successfully relocated to FITS_REJECTED. The file itself
+     * is never touched here — only DB rows.
+     *
+     * Order, and why it's safe to lean on `ON DELETE CASCADE` here (unlike
+     * SourceModel::mergeSources()/purgeIfOrphaned(), which delete anomalies/
+     * charts by hand — see that model's docblocks for why a source needs
+     * that extra care and a frame doesn't):
+     *   1. Snapshot every source_id currently linked to this frame via
+     *      FrameSourceModel::getSourceIdsForFrame() — needed *before* the
+     *      delete below, since this frame's own frame_sources rows are
+     *      about to disappear.
+     *   2. Delete the `frames` row itself. `source_observations`,
+     *      `frame_sources`, and `anomalies` all carry `frame_id` foreign
+     *      keys with `ON DELETE CASCADE` (see the migrations), so deleting
+     *      the frame row cascades all three automatically — no need to
+     *      delete them by hand first.
+     *   3. For each snapshotted source_id: SourceModel::purgeIfOrphaned() —
+     *      the exact same helper FramesController::saveSources()'s
+     *      reconciliation pass already calls when a re-analysis stops
+     *      detecting a source anywhere. Deletes the source (+ its own
+     *      anomalies/charts) only if this frame was its last remaining
+     *      observation; a source still observed on another frame is left
+     *      completely untouched.
+     *
+     * Wrapped in a transaction: either the frame and every now-orphaned
+     * source disappear together, or nothing changes.
+     *
+     * @return array{deleted: bool, purged_source_ids: string[]}
+     *
+     * @throws \RuntimeException if the transaction fails
+     */
+    public function deleteWithDependents(string $frameId): array
+    {
+        $frameSourceModel = new FrameSourceModel();
+        $sourceModel      = new SourceModel();
+
+        $sourceIds = $frameSourceModel->getSourceIdsForFrame($frameId);
+
+        $this->db->transStart();
+
+        $deleted = $this->delete($frameId);
+
+        $purgedSourceIds = [];
+        foreach ($sourceIds as $sourceId) {
+            if ($sourceModel->purgeIfOrphaned($sourceId)) {
+                $purgedSourceIds[] = $sourceId;
+            }
+        }
+
+        $this->db->transComplete();
+
+        if ($this->db->transStatus() === false) {
+            throw new \RuntimeException("Failed to delete frame {$frameId} (transaction rolled back).");
+        }
+
+        return [
+            'deleted'           => (bool) $deleted,
+            'purged_source_ids' => $purgedSourceIds,
+        ];
+    }
 }
