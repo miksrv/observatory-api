@@ -552,18 +552,25 @@ class SourcesController extends BaseApiController
     /**
      * POST /api/v1/sources/{id}/chart?style=track&frame_count=5
      *
-     * Store the finder-chart PNG for a source, fully replacing any previous
-     * chart of the SAME style for this source (a different style already
-     * stored for this source_id is untouched — see SourceChartModel's class
-     * docblock: one row per (source_id, style) pair, not per source_id
-     * alone). observatory-pipeline's modules/finder_chart.py always
-     * regenerates the whole image from the current track (see GET
-     * .../track) rather than patching an existing file, so this endpoint
-     * always fully overwrites within that one style.
+     * Store the finder-chart image for a source, fully replacing any
+     * previous chart of the SAME style for this source (a different style
+     * already stored for this source_id is untouched — see
+     * SourceChartModel's class docblock: one row per (source_id, style)
+     * pair, not per source_id alone). observatory-pipeline's
+     * modules/finder_chart.py always regenerates the whole image from the
+     * current track (see GET .../track) rather than patching an existing
+     * file, so this endpoint always fully overwrites within that one style.
      *
-     * The request body is the raw PNG bytes — not JSON, not multipart —
+     * The request body is the raw image bytes — not JSON, not multipart —
      * since the body is entirely consumed by the image; `style` and
-     * `frame_count` travel as query parameters instead.
+     * `frame_count` travel as query parameters instead. The body is PNG for
+     * every style except SourceChartModel::GIF_STYLES ('track_gif',
+     * 'stamp_strip_gif' — the animated companions of 'track'/'stamp_strip'),
+     * which are GIF. The client (api_client.upload_source_chart() in
+     * observatory-pipeline) sets Content-Type from the bytes' own magic
+     * number, but this endpoint doesn't trust that header either way — same
+     * as it never trusted it for PNG — it validates the body's own magic
+     * bytes against what `style` implies.
      */
     public function uploadChart(string $id): ResponseInterface
     {
@@ -593,14 +600,24 @@ class SourcesController extends BaseApiController
         $body = $this->request->getBody();
 
         if ($body === null || $body === '') {
-            return $this->respondError(400, 'Request body must contain PNG image bytes');
+            return $this->respondError(400, 'Request body must contain image bytes');
         }
 
-        // Minimal sanity check — the 8-byte PNG signature — instead of fully
-        // decoding the image; catches "wrong content" mistakes (e.g. an
-        // error page proxied through, or a client bug sending JSON here)
-        // without pulling an image library into the API.
-        if (substr($body, 0, 8) !== "\x89PNG\r\n\x1a\n") {
+        $isGif = in_array($style, SourceChartModel::GIF_STYLES, true);
+
+        // Minimal sanity check — the format's own magic bytes — instead of
+        // fully decoding the image; catches "wrong content" mistakes (e.g.
+        // an error page proxied through, or a client bug sending JSON here)
+        // without pulling an image library into the API. GIF87a and GIF89a
+        // are both valid (Pillow, which produces these on the pipeline
+        // side, writes GIF89a; the 87a check is cheap insurance against any
+        // other encoder ever landing here).
+        if ($isGif) {
+            $signature = substr($body, 0, 6);
+            if ($signature !== 'GIF87a' && $signature !== 'GIF89a') {
+                return $this->respondError(400, 'Request body is not a valid GIF image');
+            }
+        } elseif (substr($body, 0, 8) !== "\x89PNG\r\n\x1a\n") {
             return $this->respondError(400, 'Request body is not a valid PNG image');
         }
 
@@ -612,8 +629,11 @@ class SourcesController extends BaseApiController
         // Filename carries the style so a second style for the same source_id
         // (e.g. "stamp_strip" uploaded after "track" already exists) lands in
         // its own file instead of overwriting it — see SourceChartModel's
-        // class docblock.
-        if (file_put_contents($dir . '/' . $id . '_' . $style . '.png', $body) === false) {
+        // class docblock. Extension follows the actual format, not a
+        // hardcoded ".png" — chart()/resolveChartPath() rely on this same
+        // mapping to find the file back and pick the right Content-Type.
+        $ext = $isGif ? 'gif' : 'png';
+        if (file_put_contents($dir . '/' . $id . '_' . $style . '.' . $ext, $body) === false) {
             return $this->respondError(500, 'Failed to store chart image');
         }
 
@@ -633,14 +653,21 @@ class SourcesController extends BaseApiController
     /**
      * GET /api/v1/sources/{id}/chart.png?style=track
      *
-     * Serve the stored finder-chart PNG for a source as raw image bytes.
+     * Serve the stored finder-chart image for a source as raw image bytes,
+     * with a Content-Type matching what's actually on disk (image/gif for
+     * SourceChartModel::GIF_STYLES, image/png otherwise) — not a hardcoded
+     * "image/png" regardless of content, which would make a browser refuse
+     * to animate a 'track_gif'/'stamp_strip_gif' chart served this way.
      *
      * `style` is optional. When given, only that exact style is served (404
      * if the source has no chart of that style). When omitted — a consumer
      * that predates multi-style charts, or one that genuinely doesn't care
      * which — the most informative available style wins, per
-     * SourceChartModel::STYLE_DISPLAY_PRIORITY. A pre-migration file still
-     * sitting at the old un-suffixed path ({id}.png, from before
+     * SourceChartModel::STYLE_DISPLAY_PRIORITY (which deliberately excludes
+     * the GIF styles — see that constant's docblock — so a style-less
+     * request keeps returning the static chart; a GIF must be requested
+     * explicitly via ?style=track_gif/stamp_strip_gif). A pre-migration file
+     * still sitting at the old un-suffixed path ({id}.png, from before
      * 2026-08-11-000001_SourceChartsUniqueByStyle.php) is tried first in
      * that no-style case, so an old chart nobody has re-rendered since stays
      * reachable without a backfill.
@@ -661,12 +688,12 @@ class SourcesController extends BaseApiController
 
         return $this->response
             ->setStatusCode(200)
-            ->setContentType('image/png')
+            ->setContentType($this->contentTypeForChartPath($path))
             ->setBody(file_get_contents($path));
     }
 
     /**
-     * Resolve the on-disk path for a source's chart PNG.
+     * Resolve the on-disk path for a source's chart image.
      *
      * @param string      $id    Source id (already validated by the caller)
      * @param string|null $style Exact style to require, or null to fall back
@@ -681,7 +708,7 @@ class SourcesController extends BaseApiController
             if (! in_array($style, SourceChartModel::ALLOWED_STYLES, true)) {
                 return null;
             }
-            $path = $dir . '/' . $id . '_' . $style . '.png';
+            $path = $dir . '/' . $id . '_' . $style . '.' . $this->extensionForStyle($style);
 
             return is_file($path) ? $path : null;
         }
@@ -692,13 +719,34 @@ class SourcesController extends BaseApiController
         }
 
         foreach (SourceChartModel::STYLE_DISPLAY_PRIORITY as $candidate) {
-            $path = $dir . '/' . $id . '_' . $candidate . '.png';
+            $path = $dir . '/' . $id . '_' . $candidate . '.' . $this->extensionForStyle($candidate);
             if (is_file($path)) {
                 return $path;
             }
         }
 
         return null;
+    }
+
+    /**
+     * File extension a given chart `style` is stored under — 'gif' for
+     * SourceChartModel::GIF_STYLES, 'png' for every other ALLOWED_STYLES
+     * value. Shared by uploadChart() (writes the file) and
+     * resolveChartPath() (finds it again), so the two can never disagree.
+     */
+    private function extensionForStyle(string $style): string
+    {
+        return in_array($style, SourceChartModel::GIF_STYLES, true) ? 'gif' : 'png';
+    }
+
+    /**
+     * HTTP Content-Type for an already-resolved chart file path, from its
+     * own extension (see extensionForStyle()) rather than re-deriving the
+     * style from the filename.
+     */
+    private function contentTypeForChartPath(string $path): string
+    {
+        return str_ends_with($path, '.gif') ? 'image/gif' : 'image/png';
     }
 
     /**

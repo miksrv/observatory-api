@@ -17,7 +17,23 @@ class FramesController extends BaseApiController
     /**
      * POST /api/v1/frames
      *
-     * Register a newly processed FITS frame and return its generated ID.
+     * Register a processed FITS frame and return its ID — or, if this exact
+     * `filename` was already registered before, UPDATE that existing row in
+     * place and return its existing ID instead of minting a duplicate.
+     *
+     * This makes the endpoint idempotent for the "re-analysis" use case: an
+     * operator re-runs an ANALYZE task on a file already sitting in the
+     * archive (e.g. after improving the detection algorithm), and
+     * observatory-pipeline's analyze_frame() has no notion of "this frame
+     * already exists" of its own — it just POSTs the freshly computed frame
+     * metadata unconditionally every time (see that repo's CLAUDE.md,
+     * pipeline.py step 6). Without this upsert, every re-analysis of the
+     * same file created a second `frames` row with a new frame_id, and the
+     * subsequent POST /frames/{id}/sources call for it was then purely
+     * additive against that new, empty row — piling up duplicate
+     * `source_observations` for the same physical detections alongside the
+     * stale first run's instead of ever superseding them (real incident,
+     * 2026-08-12).
      */
     public function create(): ResponseInterface
     {
@@ -116,21 +132,36 @@ class FramesController extends BaseApiController
         ];
 
         // ----------------------------------------------------------------
-        // Persist
+        // Persist — upsert by filename (see docblock above for why)
         // ----------------------------------------------------------------
-        $model    = new FrameModel();
-        $insertId = $model->insert($data, true);
+        $model      = new FrameModel();
+        $existing   = $model->findByFilename($data['filename']);
+        $isNewFrame = $existing === null;
 
-        if ($insertId === false) {
-            log_message('error', 'FramesController::create — insert failed: ' . implode(', ', $model->errors()));
+        if ($isNewFrame) {
+            $insertId = $model->insert($data, true);
 
-            return $this->respondError(500, 'Failed to register frame');
+            if ($insertId === false) {
+                log_message('error', 'FramesController::create — insert failed: ' . implode(', ', $model->errors()));
+
+                return $this->respondError(500, 'Failed to register frame');
+            }
+        } else {
+            $insertId = $existing['id'];
+
+            if ($model->update($insertId, $data) === false) {
+                log_message('error', 'FramesController::create — update failed for existing frame_id=' . $insertId . ': ' . implode(', ', $model->errors()));
+
+                return $this->respondError(500, 'Failed to update frame');
+            }
         }
 
         // ----------------------------------------------------------------
-        // Update object statistics (if object is specified)
+        // Update object statistics (if object is specified) — only for a
+        // genuinely new frame. Re-analyzing an already-registered file must
+        // not double-count it in object_stats.frame_count/total_exposure_sec.
         // ----------------------------------------------------------------
-        if (!empty($data['object'])) {
+        if ($isNewFrame && !empty($data['object'])) {
             $objectStatsModel = new ObjectStatsModel();
             $objectStatsModel->incrementStats(
                 object:  $data['object'],
@@ -142,28 +173,54 @@ class FramesController extends BaseApiController
             );
         }
 
-        return $this->respondCreated([
-            'id'      => (string) $insertId,
-            'message' => 'Frame registered successfully',
-        ]);
+        return $isNewFrame
+            ? $this->respondCreated([
+                'id'      => (string) $insertId,
+                'message' => 'Frame registered successfully',
+            ])
+            : $this->respondOk([
+                'id'      => (string) $insertId,
+                'message' => 'Frame updated successfully',
+            ]);
     }
 
     /**
      * POST /api/v1/frames/{id}/sources
      *
-     * Save detected sources for a frame with proper source catalog management.
+     * Save all detected sources for a frame, reconciling against whatever
+     * was already saved for this exact `frame_id` on a previous call.
      *
-     * For each source:
+     * For each source in the request:
      * 1. Check if a matching source exists in the catalog — by stable
      *    catalog identity (catalog_name + catalog_id) when the source was
      *    actually catalog-matched, falling back to position (within 2
      *    arcsec) only for uncatalogued sources, which have no identity to
      *    match on. Catalog identity is required for anything that moves
      *    between frames (e.g. an MPC-matched asteroid) — see SourceModel.
-     * 2. If found: use existing source, update observation count
-     * 3. If not found: create new source in catalog
-     * 4. Create observation record with photometry data
-     * 5. Link source to frame
+     * 2. If found: use existing source; bump observation count/last_observed_at
+     *    only the first time THIS frame ever contributes an observation of it.
+     * 3. If not found: create new source in catalog.
+     * 4. Upsert (not blind-insert) the observation record with photometry data,
+     *    keyed by (frame_id, source_id) — see uk_srcobs_frame_source.
+     * 5. Link source to frame (idempotent).
+     *
+     * Then — the reconciliation this method is named for — retract every
+     * source that was linked to this `frame_id` before this call but wasn't
+     * reconfirmed by it. Without this, a repeat call for the SAME frame_id
+     * (exactly what happens when an operator re-runs ANALYZE on an
+     * already-processed file, e.g. after improving the detection algorithm)
+     * was purely additive: a source the old run found and the new run no
+     * longer does — a false detection the improved algorithm now correctly
+     * rejects — just sat there forever as stale history, and the old run's
+     * `source_observations` row for it would in fact silently fail to
+     * duplicate (uk_srcobs_frame_source) rather than ever being replaced. A
+     * retracted source that ends up with zero `source_observations` left on
+     * ANY frame is purged outright, along with its anomaly history and
+     * finder charts — see SourceModel::purgeIfOrphaned(). A source still
+     * observed elsewhere is left alone; only this frame's own link is
+     * removed. An empty `sources[]` is a valid "found nothing this time"
+     * statement and still retracts everything previously linked to this
+     * frame_id, same as `POST /frames/{id}/anomalies`'s replace semantics.
      *
      * The response includes `source_ids`, positionally parallel to the
      * request's `sources` array (null for a skipped/invalid entry), so the
@@ -204,21 +261,7 @@ class FramesController extends BaseApiController
         }
 
         $obsTime = $frame['obs_time'];
-
-        // ----------------------------------------------------------------
-        // Short-circuit for empty source list
-        // ----------------------------------------------------------------
         $sources = $body['sources'];
-
-        if (count($sources) === 0) {
-            return $this->respondCreated([
-                'message'         => 'Sources saved successfully',
-                'count'           => 0,
-                'new_sources'     => 0,
-                'matched_sources' => 0,
-                'source_ids'      => [],
-            ]);
-        }
 
         // ----------------------------------------------------------------
         // Process each source
@@ -226,6 +269,11 @@ class FramesController extends BaseApiController
         $sourceModel      = new SourceModel();
         $observationModel = new SourceObservationModel();
         $frameSourceModel = new FrameSourceModel();
+
+        // Snapshot of source_ids currently linked to this frame BEFORE
+        // processing this batch — the reconciliation pass below diffs this
+        // against what the batch actually confirms.
+        $previousSourceIds = $frameSourceModel->getSourceIdsForFrame($id);
 
         $newSources     = 0;
         $matchedSources = 0;
@@ -238,6 +286,11 @@ class FramesController extends BaseApiController
         // call. `null` marks a source that was skipped (invalid ra/dec, or
         // an insert failure) and therefore has no resolved id.
         $sourceIds = [];
+
+        // Every source_id this call actually confirmed (new or re-matched) —
+        // used below to compute which of $previousSourceIds were NOT
+        // reconfirmed and must be retracted.
+        $confirmedSourceIds = [];
 
         foreach ($sources as $source) {
             // Validate required fields
@@ -288,16 +341,29 @@ class FramesController extends BaseApiController
                 $existingSource = $sourceModel->findByCoordinates($ra, $dec, 2.0);
             }
 
+            // Does a source_observations row already exist for this exact
+            // (frame_id, source_id) pairing? Decides both whether to bump
+            // `sources.observation_count` (only on this pairing's FIRST
+            // appearance — never again on a later idempotent re-run of the
+            // same frame) and whether to insert or update the observation
+            // row itself below.
+            $existingObsRow = null;
+
             if ($existingSource !== null) {
-                // Use existing source
                 $sourceId = $existingSource['id'];
                 $matchedSources++;
 
-                // Update observation stats
-                $sourceModel->update($sourceId, [
-                    'last_observed_at'  => $obsTime,
-                    'observation_count' => $existingSource['observation_count'] + 1,
-                ]);
+                $existingObsRow = $observationModel
+                    ->where('frame_id', $id)
+                    ->where('source_id', $sourceId)
+                    ->first();
+
+                if ($existingObsRow === null) {
+                    $sourceModel->update($sourceId, [
+                        'last_observed_at'  => $obsTime,
+                        'observation_count' => $existingSource['observation_count'] + 1,
+                    ]);
+                }
             } else {
                 // Create new source
                 $newSourceData = [
@@ -322,9 +388,13 @@ class FramesController extends BaseApiController
                 $newSources++;
             }
 
-            $sourceIds[] = $sourceId;
+            $sourceIds[]                     = $sourceId;
+            $confirmedSourceIds[$sourceId]    = true;
 
-            // Create observation record
+            // Upsert the observation record (not a blind insert — see
+            // uk_srcobs_frame_source and this method's own docblock: a
+            // repeat call for the same frame_id must update, not violate
+            // that unique key or silently fail to persist anything new).
             $mag = $source['mag'] ?? $source['mag_calibrated'] ?? null;
 
             $observationData = [
@@ -349,23 +419,62 @@ class FramesController extends BaseApiController
                 'obs_time'         => $obsTime,
             ];
 
-            $observationModel->insert($observationData);
+            if ($existingObsRow !== null) {
+                $observationModel->update($existingObsRow['id'], $observationData);
+            } else {
+                $observationModel->insert($observationData);
+            }
 
             // Link source to frame
             $frameSourceModel->linkSourceToFrame($id, $sourceId);
         }
 
-        // All sources were invalid
-        if ($newSources + $matchedSources === 0 && $skipped > 0) {
+        // All sources were invalid (only meaningful for a non-empty batch —
+        // an empty batch is a valid "found nothing this time" statement, see
+        // the reconciliation pass below).
+        if (count($sources) > 0 && $newSources + $matchedSources === 0 && $skipped > 0) {
             return $this->respondError(422, 'No valid sources: every source was missing a numeric ra or dec');
         }
 
+        // ----------------------------------------------------------------
+        // Reconciliation — retract sources linked to this frame before this
+        // call but not reconfirmed by it (see this method's docblock).
+        // ----------------------------------------------------------------
+        $vacatedSourceIds = array_diff($previousSourceIds, array_keys($confirmedSourceIds));
+        $retractedCount   = 0;
+        $purgedCount      = 0;
+
+        if ($vacatedSourceIds !== []) {
+            $db = \Config\Database::connect();
+            $db->transStart();
+
+            foreach ($vacatedSourceIds as $vacatedId) {
+                $observationModel->where('frame_id', $id)->where('source_id', $vacatedId)->delete();
+                $frameSourceModel->where('frame_id', $id)->where('source_id', $vacatedId)->delete();
+                $retractedCount++;
+
+                if ($sourceModel->purgeIfOrphaned($vacatedId)) {
+                    $purgedCount++;
+                }
+            }
+
+            $db->transComplete();
+
+            if ($db->transStatus() === false) {
+                log_message('error', 'FramesController::saveSources — reconciliation transaction failed for frame_id=' . $id);
+
+                return $this->respondError(500, 'Failed to reconcile stale sources for this frame');
+            }
+        }
+
         return $this->respondCreated([
-            'message'         => 'Sources saved successfully',
-            'count'           => $newSources + $matchedSources,
-            'new_sources'     => $newSources,
-            'matched_sources' => $matchedSources,
-            'source_ids'      => $sourceIds,
+            'message'           => 'Sources saved successfully',
+            'count'             => $newSources + $matchedSources,
+            'new_sources'       => $newSources,
+            'matched_sources'   => $matchedSources,
+            'source_ids'        => $sourceIds,
+            'retracted_sources' => $retractedCount,
+            'purged_sources'    => $purgedCount,
         ]);
     }
 
