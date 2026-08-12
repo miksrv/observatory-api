@@ -145,7 +145,9 @@ final class SourceMergeTest extends CIUnitTestCase
             'updated_at'  => date('Y-m-d H:i:s'),
         ]);
 
-        file_put_contents(WRITEPATH . 'uploads/charts/' . $sourceId . '.png', self::MINIMAL_PNG);
+        // Style-suffixed filename — see SourceChartModel's class docblock
+        // and 2026-08-11-000001_SourceChartsUniqueByStyle.php.
+        file_put_contents(WRITEPATH . 'uploads/charts/' . $sourceId . '_track.png', self::MINIMAL_PNG);
     }
 
     // -------------------------------------------------------------------------
@@ -239,8 +241,8 @@ final class SourceMergeTest extends CIUnitTestCase
         $this->createChartFor($a['source_id']);
         $this->createChartFor($b['source_id']);
 
-        $this->assertFileExists(WRITEPATH . 'uploads/charts/' . $a['source_id'] . '.png');
-        $this->assertFileExists(WRITEPATH . 'uploads/charts/' . $b['source_id'] . '.png');
+        $this->assertFileExists(WRITEPATH . 'uploads/charts/' . $a['source_id'] . '_track.png');
+        $this->assertFileExists(WRITEPATH . 'uploads/charts/' . $b['source_id'] . '_track.png');
 
         $result = $this->post('/ui/sources/merge', [
             'source_ids' => [$a['source_id'], $b['source_id']],
@@ -258,8 +260,8 @@ final class SourceMergeTest extends CIUnitTestCase
         // Old charts (DB rows AND files) gone; no chart exists for the new
         // target either (it's brand new — nothing has rendered one yet).
         $this->assertSame(0, $db->table('source_charts')->countAllResults());
-        $this->assertFileDoesNotExist(WRITEPATH . 'uploads/charts/' . $a['source_id'] . '.png');
-        $this->assertFileDoesNotExist(WRITEPATH . 'uploads/charts/' . $b['source_id'] . '.png');
+        $this->assertFileDoesNotExist(WRITEPATH . 'uploads/charts/' . $a['source_id'] . '_track.png');
+        $this->assertFileDoesNotExist(WRITEPATH . 'uploads/charts/' . $b['source_id'] . '_track.png');
     }
 
     public function testMergeIgnoresUnknownIdsButProceedsWithTheValidRest(): void

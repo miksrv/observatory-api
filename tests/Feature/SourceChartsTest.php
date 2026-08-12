@@ -229,25 +229,62 @@ final class SourceChartsTest extends CIUnitTestCase
         $this->assertSame(3, $json['frame_count']);
         $this->assertNotNull($json['updated_at']);
 
-        $this->assertFileExists(WRITEPATH . 'uploads/charts/' . $sourceId . '.png');
-        $this->assertSame(self::MINIMAL_PNG, file_get_contents(WRITEPATH . 'uploads/charts/' . $sourceId . '.png'));
+        $this->assertFileExists(WRITEPATH . 'uploads/charts/' . $sourceId . '_track.png');
+        $this->assertSame(self::MINIMAL_PNG, file_get_contents(WRITEPATH . 'uploads/charts/' . $sourceId . '_track.png'));
 
-        // A second upload for the same source overwrites in place — exactly
-        // one source_charts row, not a growing history table.
+        // Re-uploading the SAME style for the same source overwrites in
+        // place — exactly one row for that (source_id, style) pair, not a
+        // growing history table.
         $result2 = $this->withHeaders($this->authHeaders())
             ->withBody(self::MINIMAL_PNG)
-            ->post("/api/v1/sources/{$sourceId}/chart?style=stamp_strip&frame_count=4");
+            ->post("/api/v1/sources/{$sourceId}/chart?style=track&frame_count=5");
 
         $result2->assertStatus(200);
         $json2 = json_decode($result2->getJSON(), true);
-        $this->assertSame('stamp_strip', $json2['style']);
-        $this->assertSame(4, $json2['frame_count']);
+        $this->assertSame('track', $json2['style']);
+        $this->assertSame(5, $json2['frame_count']);
 
         $db    = \Config\Database::connect('default');
         $count = $db->table('source_charts')->where('source_id', $sourceId)->countAllResults();
         $this->assertSame(1, $count);
 
-        @unlink(WRITEPATH . 'uploads/charts/' . $sourceId . '.png');
+        @unlink(WRITEPATH . 'uploads/charts/' . $sourceId . '_track.png');
+    }
+
+    /**
+     * Regression for the 2026-08-11 UI report (source_id
+     * 6a7be36b4d7578.98132403, 12 MOVING_UNKNOWN + 1 UNKNOWN anomalies): a
+     * second STYLE uploaded for the same source must coexist alongside the
+     * first, not silently overwrite it — see
+     * 2026-08-11-000001_SourceChartsUniqueByStyle.php.
+     */
+    public function testUploadingASecondStyleForTheSameSourceCoexistsWithTheFirst(): void
+    {
+        [$sourceId] = $this->createSourceWithEpochs(3);
+
+        $this->withHeaders($this->authHeaders())
+            ->withBody(self::MINIMAL_PNG)
+            ->post("/api/v1/sources/{$sourceId}/chart?style=track&frame_count=12");
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBody(self::MINIMAL_PNG)
+            ->post("/api/v1/sources/{$sourceId}/chart?style=stamp_strip&frame_count=1");
+
+        $result->assertStatus(200);
+        $json = json_decode($result->getJSON(), true);
+        $this->assertSame('stamp_strip', $json['style']);
+        $this->assertSame(1, $json['frame_count']);
+
+        $db     = \Config\Database::connect('default');
+        $styles = array_column($db->table('source_charts')->where('source_id', $sourceId)->get()->getResultArray(), 'style');
+        sort($styles);
+        $this->assertSame(['stamp_strip', 'track'], $styles);
+
+        $this->assertFileExists(WRITEPATH . 'uploads/charts/' . $sourceId . '_track.png');
+        $this->assertFileExists(WRITEPATH . 'uploads/charts/' . $sourceId . '_stamp_strip.png');
+
+        @unlink(WRITEPATH . 'uploads/charts/' . $sourceId . '_track.png');
+        @unlink(WRITEPATH . 'uploads/charts/' . $sourceId . '_stamp_strip.png');
     }
 
     // -------------------------------------------------------------------------
@@ -273,13 +310,81 @@ final class SourceChartsTest extends CIUnitTestCase
             ->post("/api/v1/sources/{$sourceId}/chart?style=track&frame_count=2");
 
         $result = $this->withHeaders($this->authHeaders())
-            ->get("/api/v1/sources/{$sourceId}/chart.png");
+            ->get("/api/v1/sources/{$sourceId}/chart.png?style=track");
 
         $result->assertStatus(200);
         $this->assertSame(self::MINIMAL_PNG, $result->response()->getBody());
         $this->assertStringContainsString('image/png', $result->response()->getHeaderLine('Content-Type'));
 
-        @unlink(WRITEPATH . 'uploads/charts/' . $sourceId . '.png');
+        @unlink(WRITEPATH . 'uploads/charts/' . $sourceId . '_track.png');
+    }
+
+    public function testChartWithExplicitStyleServesOnlyThatStyle(): void
+    {
+        [$sourceId] = $this->createSourceWithEpochs(2);
+
+        $trackBytes = self::MINIMAL_PNG . '-track';
+        $stripBytes = self::MINIMAL_PNG . '-strip';
+
+        $this->withHeaders($this->authHeaders())->withBody($trackBytes)
+            ->post("/api/v1/sources/{$sourceId}/chart?style=track&frame_count=2");
+        $this->withHeaders($this->authHeaders())->withBody($stripBytes)
+            ->post("/api/v1/sources/{$sourceId}/chart?style=stamp_strip&frame_count=1");
+
+        // Asserted immediately after each request rather than batched at the
+        // end — FeatureTestTrait's request/response objects share framework
+        // singleton state (e.g. the current Request's query bag), so a
+        // second get() issued before the first result's body is actually
+        // read back can make that first assertion observe the SECOND
+        // request's state instead of its own.
+        $trackResult = $this->withHeaders($this->authHeaders())
+            ->get("/api/v1/sources/{$sourceId}/chart.png?style=track");
+        $this->assertSame($trackBytes, $trackResult->response()->getBody());
+
+        $stripResult = $this->withHeaders($this->authHeaders())
+            ->get("/api/v1/sources/{$sourceId}/chart.png?style=stamp_strip");
+        $this->assertSame($stripBytes, $stripResult->response()->getBody());
+
+        @unlink(WRITEPATH . 'uploads/charts/' . $sourceId . '_track.png');
+        @unlink(WRITEPATH . 'uploads/charts/' . $sourceId . '_stamp_strip.png');
+    }
+
+    public function testChartWithNoStyleFallsBackToTrackOverStampStrip(): void
+    {
+        [$sourceId] = $this->createSourceWithEpochs(2);
+
+        // Upload stamp_strip FIRST, track SECOND — the fallback priority
+        // must still prefer "track" regardless of upload order, since it's
+        // the more informative style for an ambiguous/legacy request (see
+        // SourceChartModel::STYLE_DISPLAY_PRIORITY).
+        $this->withHeaders($this->authHeaders())->withBody(self::MINIMAL_PNG . '-strip')
+            ->post("/api/v1/sources/{$sourceId}/chart?style=stamp_strip&frame_count=1");
+        $this->withHeaders($this->authHeaders())->withBody(self::MINIMAL_PNG . '-track')
+            ->post("/api/v1/sources/{$sourceId}/chart?style=track&frame_count=2");
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->get("/api/v1/sources/{$sourceId}/chart.png");
+
+        $result->assertStatus(200);
+        $this->assertSame(self::MINIMAL_PNG . '-track', $result->response()->getBody());
+
+        @unlink(WRITEPATH . 'uploads/charts/' . $sourceId . '_track.png');
+        @unlink(WRITEPATH . 'uploads/charts/' . $sourceId . '_stamp_strip.png');
+    }
+
+    public function testChartWithUnknownStyleReturns404(): void
+    {
+        [$sourceId] = $this->createSourceWithEpochs(2);
+
+        $this->withHeaders($this->authHeaders())->withBody(self::MINIMAL_PNG)
+            ->post("/api/v1/sources/{$sourceId}/chart?style=track&frame_count=2");
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->get("/api/v1/sources/{$sourceId}/chart.png?style=before_after");
+
+        $result->assertStatus(404);
+
+        @unlink(WRITEPATH . 'uploads/charts/' . $sourceId . '_track.png');
     }
 
     public function testChartRejectsPathTraversalAttemptInIdSegment(): void
