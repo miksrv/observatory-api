@@ -92,7 +92,7 @@ All other errors use:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/tasks` | Create a task (ANALYZE / DETECT_ANOMALIES / GENERATE_CHARTS / PREVIEW_CATALOG_MATCH / RESTART) with its item list |
+| `POST` | `/tasks` | Create a task (ANALYZE / DETECT_ANOMALIES / GENERATE_CHARTS / PREVIEW_CATALOG_MATCH / DELETE_FRAME / RESTART) with its item list |
 | `GET` | `/tasks` | List tasks, filtered by status/type/object |
 | `GET` | `/tasks/{id}` | Task detail, including its full item list |
 | `PATCH` | `/tasks/{id}` | Update a task's status |
@@ -146,6 +146,12 @@ below for how the sources side of the same re-analysis is reconciled.
 **Required fields:** `filename`, `obs_time`, `ra_center`, `dec_center`, `fov_deg`, `quality_flag`.
 Everything else — `observation`, `instrument`, `sensor`, `observer`, `software`, `qc` — is optional;
 any missing sub-field is stored as `NULL`.
+
+`quality_flag` is **not** guaranteed to be `"OK"` — observatory-pipeline registers a frame that
+failed its own QC too (`BLUR`/`TRAIL`/`HIGH_BACKGROUND`/`LOW_STARS`/`BAD`), with the `qc` block
+still populated so an operator can see why, but with `POST /frames/{id}/sources` called separately
+with an empty `sources: []` (see that endpoint below) — a QC-failed frame never has sources,
+astrometry, or photometry run against it.
 
 <details>
 <summary>Request example</summary>
@@ -576,10 +582,10 @@ remote settings.
 Create a task with its full, fixed item list.
 
 **Required:** `type` (one of `ANALYZE`, `DETECT_ANOMALIES`, `GENERATE_CHARTS`,
-`PREVIEW_CATALOG_MATCH`, `RESTART`). For all types except `RESTART`: `items` (array, at least one
-entry — each entry needs exactly one of `filename` / `frame_id` / `source_id`, matching what the
-task's `type` operates over). `RESTART` is a signal task — `items` may be omitted or empty; any
-items passed for this type are silently ignored.
+`PREVIEW_CATALOG_MATCH`, `DELETE_FRAME`, `RESTART`). For all types except `RESTART`: `items`
+(array, at least one entry — each entry needs exactly one of `filename` / `frame_id` /
+`source_id`, matching what the task's `type` operates over). `RESTART` is a signal task —
+`items` may be omitted or empty; any items passed for this type are silently ignored.
 **Optional:** `scope` (`object`, `date_from`, `date_to` — descriptive only, not queried against;
 the `items` array is the authoritative scope), `parent_task_id` (links a re-run to the task it
 re-runs — must refer to an existing task).
@@ -592,6 +598,18 @@ docs/DATABASE.md) and writes its summary back onto each item's own `payload`
 (`{"matched", "total", "quality_flag", "chart_uploaded"}`) via `POST /tasks/{id}/items/progress`
 below rather than just logging it, since the whole point is a result an operator goes and looks
 at.
+
+`DELETE_FRAME` is operator-initiated frame deletion — its items use `frame_id` like
+`DETECT_ANOMALIES`. The pipeline never deletes the file: it relocates it from
+`FITS_ARCHIVE/{object}/` to `FITS_REJECTED/{object}/` and reports the item `DONE` via
+`POST /tasks/{id}/items/progress` below. That report is what actually triggers the DB-side
+deletion — `TasksController::postItemsProgress()` calls `FrameModel::deleteWithDependents()` for
+the item's `frame_id` the moment it sees `DONE` on a `DELETE_FRAME` item, cascading to that
+frame's `source_observations`/`frame_sources`/`anomalies` (via existing `ON DELETE CASCADE` FKs)
+and purging any source left with zero observations anywhere as a result (same
+`SourceModel::purgeIfOrphaned()` used by `POST /frames/{id}/sources`'s own reconciliation, below).
+A missing file (already relocated/deleted out-of-band) does not block this — the pipeline still
+reports `DONE`, since the DB-side deletion is the actual goal.
 
 <details>
 <summary>Request example</summary>
@@ -706,7 +724,7 @@ item has resolved.
 {
   "items": [
     { "item_id": "6612fa...", "status": "DONE", "frame_id": "42" },
-    { "item_id": "6612fb...", "status": "FAILED", "error": "QC rejected: BLUR" },
+    { "item_id": "6612fb...", "status": "FAILED", "error": "Astrometry solve raised an exception" },
     { "item_id": "6612fc...", "status": "DONE", "payload": { "matched": 82, "total": 98, "quality_flag": "OK", "chart_uploaded": true } }
   ]
 }
@@ -716,6 +734,15 @@ one for it — `DETECT_ANOMALIES`/`GENERATE_CHARTS` items already carry their `f
 from task creation. `payload` here is a RESULT overwriting the item's stored payload (e.g. a
 `PREVIEW_CATALOG_MATCH` item's summary, shown above) — the same column `GENERATE_CHARTS` reads as
 *input* at task-creation time; which direction depends on the task type, not the field itself.
+
+A QC rejection is no longer a `FAILED` `ANALYZE` item — the pipeline still registers the frame
+(with its QC metrics) and reports the item `DONE` with a `frame_id`, same as any other frame; see
+`POST /frames`'s `quality_flag` note above. `FAILED` on an `ANALYZE` item now means the pipeline
+itself errored (astrometry crashed, the API call failed, etc.), not "QC didn't pass".
+
+For a `DELETE_FRAME` item specifically, reporting `status: "DONE"` is what triggers the actual
+DB-side cascade delete (see `POST /tasks` above) — `frame_id`/`payload` aren't meaningful for this
+task type since the item already carries its `frame_id` from task creation.
 
 **Response `200 OK`** — positionally parallel to the request's `items[]`:
 ```json

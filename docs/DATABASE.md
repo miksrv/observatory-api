@@ -235,7 +235,7 @@ one `anomaly_type` over its lifetime, each needing its own rendering (see
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | CHAR(24) PK | |
-| `type` | ENUM('ANALYZE', 'DETECT_ANOMALIES', 'GENERATE_CHARTS', 'PREVIEW_CATALOG_MATCH', 'RESTART') NOT NULL | `PREVIEW_CATALOG_MATCH` is a diagnostic tool; `RESTART` is a signal task (no items) — see observatory-pipeline's CLAUDE.md |
+| `type` | ENUM('ANALYZE', 'DETECT_ANOMALIES', 'GENERATE_CHARTS', 'PREVIEW_CATALOG_MATCH', 'DELETE_FRAME', 'RESTART') NOT NULL | `PREVIEW_CATALOG_MATCH` is a diagnostic tool; `DELETE_FRAME` is operator-initiated frame deletion (see below); `RESTART` is a signal task (no items) — see observatory-pipeline's CLAUDE.md |
 | `status` | ENUM('PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED') DEFAULT 'PENDING' | |
 | `scope_object` | VARCHAR(100) NULL | Descriptive only — `task_items` is the authoritative scope |
 | `scope_date_from`, `scope_date_to` | DATETIME NULL | Descriptive only, same as above |
@@ -259,7 +259,7 @@ Status reaches `COMPLETED` automatically once `completed_items + failed_items >=
 | `task_id` | CHAR(24) NOT NULL FK→tasks.id, cascade | |
 | `seq` | INT NOT NULL | Position within the task, UNIQUE with `task_id` |
 | `filename` | VARCHAR(255) NULL | Populated for `ANALYZE` items before a frame exists, and for `PREVIEW_CATALOG_MATCH` items (which never resolve a frame at all) |
-| `frame_id` | CHAR(24) NULL FK→frames.id, `ON DELETE SET NULL` | Populated for `DETECT_ANOMALIES` items, or once an `ANALYZE` item resolves a frame |
+| `frame_id` | CHAR(24) NULL FK→frames.id, `ON DELETE SET NULL` | Populated for `DETECT_ANOMALIES` and `DELETE_FRAME` items, or once an `ANALYZE` item resolves a frame |
 | `source_id` | CHAR(24) NULL FK→sources.id, `ON DELETE SET NULL` | Populated for `GENERATE_CHARTS` items |
 | `payload` | TEXT NULL (JSON) | Bidirectional: `GENERATE_CHARTS` reads it as *input* at creation time (`{"anomaly_type", "designation"}`); `PREVIEW_CATALOG_MATCH` writes it as a *result* at completion time (`{"output_path", "matched", "total", "quality_flag"}`) via `POST /tasks/{id}/items/progress`. Opaque to the API either way — stored and echoed back, never inspected |
 | `status` | ENUM('PENDING', 'DONE', 'FAILED') DEFAULT 'PENDING' | |

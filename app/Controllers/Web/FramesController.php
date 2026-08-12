@@ -26,6 +26,10 @@ class FramesController extends Controller
      * PREVIEW_CATALOG_MATCH (task_items.filename is just the name — PREVIEW_CATALOG_MATCH never
      * resolves a frame_id at all, see CLAUDE.md's task_items scope note; re-submitting an
      * already-registered frame's filename to it here is a debug convenience, not its usual input).
+     * DELETE_FRAME uses 'frame_id' like DETECT_ANOMALIES — the pipeline resolves filename/object
+     * itself via GET /frames/{id} (see observatory-pipeline's worker.py::_run_delete_frame_task()),
+     * moves the file to FITS_REJECTED, and TasksController::postItemsProgress() performs the
+     * actual DB-side cascade delete once the item is reported DONE.
      * GENERATE_CHARTS is deliberately not offered here — it scopes by source_id, not
      * frame_id/filename, so it doesn't fit a frame checklist at all.
      */
@@ -33,6 +37,7 @@ class FramesController extends Controller
         'DETECT_ANOMALIES'      => ['item_key' => 'frame_id', 'frame_column' => 'id'],
         'ANALYZE'               => ['item_key' => 'filename', 'frame_column' => 'filename'],
         'PREVIEW_CATALOG_MATCH' => ['item_key' => 'filename', 'frame_column' => 'filename'],
+        'DELETE_FRAME'          => ['item_key' => 'frame_id', 'frame_column' => 'id'],
     ];
 
     public function index(): ResponseInterface

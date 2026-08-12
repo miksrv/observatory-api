@@ -3,6 +3,7 @@
 namespace App\Controllers\Api\V1;
 
 use App\Controllers\BaseApiController;
+use App\Models\FrameModel;
 use App\Models\SourceChartModel;
 use App\Models\TaskItemModel;
 use App\Models\TaskModel;
@@ -16,6 +17,9 @@ use CodeIgniter\HTTP\ResponseInterface;
  * later for an explicit scope (an object, a date range, or exactly the frame/source ids a prior
  * stage produced) without re-running whatever came before it. RESTART is a signal task (no items)
  * — the worker marks it completed and exits so Docker restarts the container with fresh settings.
+ * DELETE_FRAME is operator-initiated frame deletion — the pipeline only relocates the frame's file
+ * (FITS_ARCHIVE -> FITS_REJECTED, never deleted); postItemsProgress() below performs the actual
+ * DB-side cascade delete (FrameModel::deleteWithDependents()) once an item is reported DONE.
  */
 class TasksController extends BaseApiController
 {
@@ -339,6 +343,23 @@ class TasksController extends BaseApiController
             }
 
             $itemModel->update($itemId, $update);
+
+            // DELETE_FRAME's own DB-side cascade delete runs here, the moment the pipeline reports
+            // the file successfully relocated to FITS_REJECTED (status DONE) — see
+            // FrameModel::deleteWithDependents() and observatory-pipeline's
+            // worker.py::_run_delete_frame_task(). A failure here is logged but does not turn this
+            // item's own progress report into an error: the file move itself already succeeded,
+            // which is what DONE is reporting; only the follow-up DB cleanup failed.
+            if ($task['type'] === 'DELETE_FRAME' && $status === 'DONE' && $item['frame_id'] !== null) {
+                try {
+                    (new FrameModel())->deleteWithDependents($item['frame_id']);
+                } catch (\Throwable $e) {
+                    log_message('error', 'DELETE_FRAME cascade failed for frame_id=' . $item['frame_id'] . ': ' . $e->getMessage());
+                    $results[] = ['item_id' => $itemId, 'status' => 'ok', 'note' => 'File relocated, but DB cleanup failed: ' . $e->getMessage()];
+                    $status === 'DONE' ? $completedIncr++ : $failedIncr++;
+                    continue;
+                }
+            }
 
             $status === 'DONE' ? $completedIncr++ : $failedIncr++;
 
