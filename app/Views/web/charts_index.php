@@ -28,11 +28,40 @@
     <p class="text-muted">Графиков не найдено.</p>
 <?php endif; ?>
 
+<!--
+    NOTE: checkboxes below are deliberately NOT inside a <form> — each card already has its own
+    per-card "Удалить" <form> in the footer, and nested <form> elements are invalid HTML (the
+    browser would silently mis-close them). #chartMergeForm below stays empty except for the
+    CSRF field; the JS at the bottom builds hidden inputs into it from the checked boxes right
+    before submit.
+-->
+<form method="post" id="chartMergeForm" action="/ui/sources/merge">
+<?= csrf_field() ?>
+</form>
+
+<div class="mb-2 d-flex align-items-center gap-2">
+    <button type="button" class="btn btn-sm btn-warning" id="btnMerge" disabled>
+        🔗 Объединить источники
+    </button>
+    <span class="text-muted small" id="selectedCount">Выбрано: 0</span>
+    <button type="button" class="btn btn-sm btn-outline-secondary" id="btnSelectAll">Выбрать все</button>
+    <button type="button" class="btn btn-sm btn-outline-secondary" id="btnDeselectAll">Снять все</button>
+    <span class="text-muted small">— отметьте 2+ карточки одного и того же объекта (напр. кометы,
+        распознанной SkyBot как разные source_id) и объедините их в один источник.</span>
+</div>
+
 <div class="row g-3">
 <?php foreach ($charts as $chart): ?>
     <?php $chartId = $chart['source_id'] ?? $chart['task_item_id']; ?>
     <div class="col-12 col-md-6 col-lg-4 col-xl-3">
         <div class="card shadow-sm h-100">
+            <?php if ($chart['source_id']): ?>
+                <div class="form-check position-absolute top-0 start-0 m-2 bg-white bg-opacity-75 rounded px-1">
+                    <input type="checkbox" value="<?= esc($chart['source_id']) ?>"
+                           class="form-check-input merge-check" id="merge-<?= esc($chart['source_id']) ?>">
+                    <label class="form-check-label small" for="merge-<?= esc($chart['source_id']) ?>">выбрать</label>
+                </div>
+            <?php endif; ?>
             <a href="/ui/charts/<?= esc($chartId) ?>/image" target="_blank" rel="noopener">
                 <img src="/ui/charts/<?= esc($chartId) ?>/image" class="card-img-top chart-thumb p-2" loading="lazy" alt="chart">
             </a>
@@ -83,5 +112,54 @@
     </div>
 <?php endforeach; ?>
 </div>
+
+<script>
+(function() {
+    const mergeForm  = document.getElementById('chartMergeForm');
+    const btnMerge    = document.getElementById('btnMerge');
+    const countEl     = document.getElementById('selectedCount');
+    const boxes       = () => document.querySelectorAll('.merge-check');
+
+    function updateState() {
+        const count = document.querySelectorAll('.merge-check:checked').length;
+        btnMerge.disabled = count < 2;
+        countEl.textContent = 'Выбрано: ' + count;
+    }
+
+    document.querySelector('.row.g-3').addEventListener('change', function(e) {
+        if (e.target.classList.contains('merge-check')) updateState();
+    });
+
+    document.getElementById('btnSelectAll').addEventListener('click', function() {
+        boxes().forEach(cb => cb.checked = true);
+        updateState();
+    });
+
+    document.getElementById('btnDeselectAll').addEventListener('click', function() {
+        boxes().forEach(cb => cb.checked = false);
+        updateState();
+    });
+
+    btnMerge.addEventListener('click', function() {
+        const checked = [...document.querySelectorAll('.merge-check:checked')].map(cb => cb.value);
+        if (checked.length < 2) return;
+        if (!confirm('Объединить ' + checked.length + ' источник(ов) в один новый? '
+            + 'Старые графики и аномалии этих источников будут удалены. Это действие необратимо.')) return;
+
+        // Clear any hidden inputs left over from a previous click, then rebuild.
+        mergeForm.querySelectorAll('input[name="source_ids[]"]').forEach(el => el.remove());
+        checked.forEach(function(sourceId) {
+            const input = document.createElement('input');
+            input.type  = 'hidden';
+            input.name  = 'source_ids[]';
+            input.value = sourceId;
+            mergeForm.appendChild(input);
+        });
+        mergeForm.submit();
+    });
+
+    updateState();
+})();
+</script>
 
 <?= view('web/partials/footer') ?>

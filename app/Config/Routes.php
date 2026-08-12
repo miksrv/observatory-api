@@ -91,6 +91,7 @@ $routes->group('ui', static function (RouteCollection $routes): void {
 
     $routes->get('sources', 'Web\SourcesController::index');
     $routes->post('sources/generate-charts', 'Web\SourcesController::createTask');
+    $routes->post('sources/merge', 'Web\SourcesController::merge');
 
     $routes->get('tasks', 'Web\TasksController::index');
     $routes->post('tasks', 'Web\FramesController::createTask');
