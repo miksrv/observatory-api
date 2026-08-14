@@ -44,6 +44,7 @@
                     <th>Filter</th>
                     <th>Exptime</th>
                     <th>FOV°</th>
+                    <th>QC</th>
                     <th>Stars</th>
                     <th>FWHM</th>
                     <th>SNR</th>
@@ -52,9 +53,17 @@
             </thead>
             <tbody>
             <?php if (empty($frames)): ?>
-                <tr><td colspan="11" class="text-center text-muted py-4">Ничего не найдено по заданному фильтру.</td></tr>
+                <tr><td colspan="12" class="text-center text-muted py-4">Ничего не найдено по заданному фильтру.</td></tr>
             <?php endif; ?>
             <?php foreach ($frames as $frame): ?>
+                <?php
+                $qcBadge = match ($frame['quality_flag'] ?? null) {
+                    'OK'    => 'bg-success',
+                    'BAD'   => 'bg-danger',
+                    'BLUR', 'TRAIL', 'HIGH_BACKGROUND', 'LOW_STARS' => 'bg-warning text-dark',
+                    default => 'bg-secondary',
+                };
+                ?>
                 <tr>
                     <td><input type="checkbox" class="frame-checkbox" name="frame_ids[]" value="<?= esc($frame['id']) ?>"></td>
                     <td class="text-break small"><?= esc($frame['filename']) ?></td>
@@ -63,6 +72,7 @@
                     <td><?= esc($frame['filter'] ?? '—') ?></td>
                     <td><?= $frame['exptime'] !== null ? esc((string) $frame['exptime']) : '—' ?></td>
                     <td><?= esc((string) $frame['fov_deg']) ?></td>
+                    <td><span class="badge <?= $qcBadge ?>"><?= esc($frame['quality_flag'] ?? '—') ?></span></td>
                     <td><?= $frame['qc_star_count'] !== null ? esc((string) $frame['qc_star_count']) : '—' ?> / <?= esc((string) $frame['recognized_star_count']) ?></td>
                     <td><?= $frame['qc_fwhm_median'] !== null ? esc((string) round((float) $frame['qc_fwhm_median'], 2)) : '—' ?></td>
                     <td><?= $frame['qc_snr_median'] !== null ? esc((string) round((float) $frame['qc_snr_median'], 1)) : '—' ?></td>
