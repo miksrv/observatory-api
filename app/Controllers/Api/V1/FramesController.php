@@ -141,7 +141,20 @@ class FramesController extends BaseApiController
         $existing   = $model->findByFilename($data['filename']);
         $isNewFrame = $existing === null;
 
+        // Mount pointing error (see the migration's docblock) is the one set of
+        // fields in this payload that must NOT be refreshed by a re-analysis of
+        // an already-registered filename — it characterizes the mount's pointing
+        // behavior at this frame's ORIGINAL capture time, not this particular
+        // re-run. Only added to $data on the genuinely-new-row path; left out of
+        // the update path entirely below so FrameModel::update() never touches
+        // these three columns on an existing row, whatever value the pipeline
+        // (which has no notion of "already stored" and recomputes/sends this on
+        // every call regardless) happens to submit this time.
         if ($isNewFrame) {
+            $data['pointing_error_arcsec']     = isset($body['pointing_error_arcsec']) ? (float) $body['pointing_error_arcsec'] : null;
+            $data['pointing_error_ra_arcsec']  = isset($body['pointing_error_ra_arcsec']) ? (float) $body['pointing_error_ra_arcsec'] : null;
+            $data['pointing_error_dec_arcsec'] = isset($body['pointing_error_dec_arcsec']) ? (float) $body['pointing_error_dec_arcsec'] : null;
+
             $insertId = $model->insert($data, true);
 
             if ($insertId === false) {
@@ -1122,6 +1135,9 @@ class FramesController extends BaseApiController
             'dec_center'            => (float) $frame['dec_center'],
             'fov_deg'               => (float) $frame['fov_deg'],
             'position_angle_deg'    => $frame['position_angle_deg'] !== null ? (float) $frame['position_angle_deg'] : null,
+            'pointing_error_arcsec'     => $frame['pointing_error_arcsec'] !== null ? (float) $frame['pointing_error_arcsec'] : null,
+            'pointing_error_ra_arcsec'  => $frame['pointing_error_ra_arcsec'] !== null ? (float) $frame['pointing_error_ra_arcsec'] : null,
+            'pointing_error_dec_arcsec' => $frame['pointing_error_dec_arcsec'] !== null ? (float) $frame['pointing_error_dec_arcsec'] : null,
             'quality_flag'          => $frame['quality_flag'],
             'object'                => $frame['object'],
             'exptime'               => $frame['exptime'] !== null ? (float) $frame['exptime'] : null,

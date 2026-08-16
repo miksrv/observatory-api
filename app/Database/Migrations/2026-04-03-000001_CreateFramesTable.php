@@ -52,6 +52,38 @@ class CreateFramesTable extends Migration
                 'type' => 'FLOAT',
                 'null' => true,
             ],
+            // Mount pointing error for this frame: the angular distance between the
+            // mount's own reported target position (RA/DEC or OBJCTRA/OBJCTDEC FITS
+            // header keywords) and this frame's actual plate-solved centre
+            // (ra_center/dec_center) — i.e. how far off the mount's pointing was at
+            // capture time. Computed by observatory-pipeline's
+            // pipeline._compute_pointing_error() — see that repo's CLAUDE.md, pipeline.py
+            // step 11. Nullable for the same reasons as position_angle_deg: no
+            // mount-reported target in the header, or astrometry never solved this frame.
+            //
+            // Unlike every other column here, these three are NOT overwritten by a later
+            // re-analysis of the same filename (see FramesController::create()) — they
+            // characterize the mount's pointing behavior at the frame's ORIGINAL capture
+            // time, and a re-analysis re-solving the same archived pixels would just
+            // report substantially the same number again, not a meaningful update.
+            'pointing_error_arcsec' => [
+                'type' => 'FLOAT',
+                'null' => true,
+            ],
+            // Signed East-West component of the same offset (positive = solve is East
+            // of the mount's reported position) — diagnostic only, e.g. characterizing a
+            // systematic polar-alignment drift direction. Same preserve-on-re-analysis
+            // rule as pointing_error_arcsec.
+            'pointing_error_ra_arcsec' => [
+                'type' => 'FLOAT',
+                'null' => true,
+            ],
+            // Signed North-South component of the same offset. Same preserve-on-re-analysis
+            // rule as pointing_error_arcsec.
+            'pointing_error_dec_arcsec' => [
+                'type' => 'FLOAT',
+                'null' => true,
+            ],
             'quality_flag' => [
                 'type'       => 'VARCHAR',
                 'constraint' => 20,

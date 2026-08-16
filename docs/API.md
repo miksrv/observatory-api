@@ -136,16 +136,24 @@ Register a processed FITS frame. Returns a `frame_id` used by subsequent calls. 
 `observation.object` is present, also increments the corresponding `object_stats` row.
 
 **Idempotent by `filename`:** if a frame with this exact `filename` was already registered, this
-call UPDATEs that existing row in place (all fields, as if freshly re-analyzed) and returns its
+call UPDATEs that existing row in place (as if freshly re-analyzed) and returns its
 existing `id` instead of creating a duplicate — `filename` carries a `UNIQUE` constraint. This is
 what makes a re-run ANALYZE task on an already-processed file (e.g. after improving the detection
 algorithm) update the frame's record rather than minting a second one; `object_stats` is only
 incremented on the genuinely-new-row path, never on an update. See `POST /frames/{id}/sources`
 below for how the sources side of the same re-analysis is reconciled.
 
+**Exception — `pointing_error_arcsec`/`pointing_error_ra_arcsec`/`pointing_error_dec_arcsec` are
+NOT part of "all fields" above.** They're only ever written on the genuinely-new-row path; a
+re-analysis update leaves whatever was stored on first registration untouched, even though the
+pipeline recomputes and submits a (near-identical) value on every call regardless — these three
+fields characterize the mount's pointing behavior at the frame's *original* capture time, not
+whichever run happens to be re-processing it.
+
 **Required fields:** `filename`, `obs_time`, `ra_center`, `dec_center`, `fov_deg`, `quality_flag`.
-Everything else — `observation`, `instrument`, `sensor`, `observer`, `software`, `qc` — is optional;
-any missing sub-field is stored as `NULL`.
+Everything else — `observation`, `instrument`, `sensor`, `observer`, `software`, `qc`,
+`position_angle_deg`, `pointing_error_arcsec`, `pointing_error_ra_arcsec`,
+`pointing_error_dec_arcsec` — is optional; any missing field is stored as `NULL`.
 
 `quality_flag` is **not** guaranteed to be `"OK"` — observatory-pipeline registers a frame that
 failed its own QC too (`BLUR`/`TRAIL`/`HIGH_BACKGROUND`/`LOW_STARS`/`BAD`), with the `qc` block
@@ -163,6 +171,10 @@ astrometry, or photometry run against it.
   "ra_center": 202.4696,
   "dec_center": 47.1952,
   "fov_deg": 1.25,
+  "position_angle_deg": 0.0,
+  "pointing_error_arcsec": 12.4,
+  "pointing_error_ra_arcsec": -8.1,
+  "pointing_error_dec_arcsec": -9.4,
   "quality_flag": "OK",
 
   "observation": {

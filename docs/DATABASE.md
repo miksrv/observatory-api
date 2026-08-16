@@ -104,6 +104,8 @@ CLI commands, see [`../README.md`](../README.md).
 | `obs_time` | DATETIME NOT NULL | Observation start time UTC |
 | `ra_center`, `dec_center` | DOUBLE NOT NULL | Frame center (degrees) |
 | `fov_deg` | FLOAT NOT NULL | Field of view (degrees) |
+| `position_angle_deg` | FLOAT NULL | Frame orientation on the sky, from the solved WCS |
+| `pointing_error_arcsec`, `pointing_error_ra_arcsec`, `pointing_error_dec_arcsec` | FLOAT NULL | Mount pointing error vs. this frame's plate-solved centre (total / signed RA / signed Dec, arcsec). Set only when the frame is first registered — a later re-analysis of the same `filename` never overwrites them (see `FramesController::create()`) |
 | `quality_flag` | VARCHAR(20) DEFAULT 'OK' | |
 | `object`, `filter`, `frame_type` | VARCHAR | Target name / filter name / Light-Dark-Flat-Bias |
 | `exptime`, `airmass` | FLOAT | Exposure time (s) / atmospheric airmass |

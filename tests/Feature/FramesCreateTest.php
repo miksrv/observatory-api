@@ -313,4 +313,117 @@ final class FramesCreateTest extends CIUnitTestCase
         $this->assertNotNull($row);
         $this->assertSame(1, (int) $row['frame_count'], 'A re-analysis of the same file must not increment frame_count again.');
     }
+
+    // -------------------------------------------------------------------------
+    // Mount pointing error — stored on first registration, preserved on re-analysis
+    // -------------------------------------------------------------------------
+
+    public function testPointingErrorFieldsAreStoredOnFirstRegistration(): void
+    {
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post(self::ENDPOINT, $this->validPayload([
+                'pointing_error_arcsec'     => 12.4,
+                'pointing_error_ra_arcsec'  => -8.1,
+                'pointing_error_dec_arcsec' => -9.4,
+            ]));
+
+        $result->assertStatus(201);
+        $id = json_decode($result->getJSON(), true)['id'];
+
+        $db  = \Config\Database::connect('default');
+        $row = $db->table('frames')->where('id', $id)->get()->getRowArray();
+        $this->assertSame(12.4, (float) $row['pointing_error_arcsec']);
+        $this->assertSame(-8.1, (float) $row['pointing_error_ra_arcsec']);
+        $this->assertSame(-9.4, (float) $row['pointing_error_dec_arcsec']);
+    }
+
+    public function testPointingErrorFieldsDefaultToNullWhenOmitted(): void
+    {
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post(self::ENDPOINT, $this->validPayload());
+
+        $result->assertStatus(201);
+        $id = json_decode($result->getJSON(), true)['id'];
+
+        $db  = \Config\Database::connect('default');
+        $row = $db->table('frames')->where('id', $id)->get()->getRowArray();
+        $this->assertNull($row['pointing_error_arcsec']);
+        $this->assertNull($row['pointing_error_ra_arcsec']);
+        $this->assertNull($row['pointing_error_dec_arcsec']);
+    }
+
+    /**
+     * The one exception to "re-analysis updates all fields": pointing error
+     * characterizes the mount's pointing behavior at ORIGINAL capture time, so
+     * a re-analysis of the same filename must leave whatever was stored first
+     * completely untouched — even though the pipeline recomputes and submits
+     * a fresh value on every call regardless (it has no notion of "already
+     * stored" — see observatory-pipeline's CLAUDE.md, pipeline.py step 11).
+     */
+    public function testResubmittingSameFilenameDoesNotOverwritePointingError(): void
+    {
+        $first = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post(self::ENDPOINT, $this->validPayload([
+                'pointing_error_arcsec'     => 12.4,
+                'pointing_error_ra_arcsec'  => -8.1,
+                'pointing_error_dec_arcsec' => -9.4,
+            ]));
+
+        $first->assertStatus(201);
+        $firstId = json_decode($first->getJSON(), true)['id'];
+
+        // Re-analysis: same filename, a freshly (re)computed — and different —
+        // pointing error, as if the file were re-solved from scratch.
+        $second = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post(self::ENDPOINT, $this->validPayload([
+                'pointing_error_arcsec'     => 99.9,
+                'pointing_error_ra_arcsec'  => 50.0,
+                'pointing_error_dec_arcsec' => 60.0,
+            ]));
+
+        $second->assertStatus(200);
+        $this->assertSame($firstId, json_decode($second->getJSON(), true)['id']);
+
+        $db  = \Config\Database::connect('default');
+        $row = $db->table('frames')->where('id', $firstId)->get()->getRowArray();
+        $this->assertSame(12.4, (float) $row['pointing_error_arcsec'], 'Re-analysis must not overwrite the original pointing_error_arcsec.');
+        $this->assertSame(-8.1, (float) $row['pointing_error_ra_arcsec'], 'Re-analysis must not overwrite the original pointing_error_ra_arcsec.');
+        $this->assertSame(-9.4, (float) $row['pointing_error_dec_arcsec'], 'Re-analysis must not overwrite the original pointing_error_dec_arcsec.');
+    }
+
+    /**
+     * A frame first registered with no pointing error available (e.g.
+     * astrometry failed that run) stays NULL forever, even if a later
+     * re-analysis manages to compute one — same preserve-first-value rule,
+     * just starting from NULL instead of a real number.
+     */
+    public function testResubmittingSameFilenameDoesNotBackfillPointingErrorFromNull(): void
+    {
+        $first = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post(self::ENDPOINT, $this->validPayload());
+
+        $first->assertStatus(201);
+        $firstId = json_decode($first->getJSON(), true)['id'];
+
+        $second = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post(self::ENDPOINT, $this->validPayload([
+                'pointing_error_arcsec'     => 12.4,
+                'pointing_error_ra_arcsec'  => -8.1,
+                'pointing_error_dec_arcsec' => -9.4,
+            ]));
+
+        $second->assertStatus(200);
+
+        $db  = \Config\Database::connect('default');
+        $row = $db->table('frames')->where('id', $firstId)->get()->getRowArray();
+        $this->assertNull($row['pointing_error_arcsec']);
+        $this->assertNull($row['pointing_error_ra_arcsec']);
+        $this->assertNull($row['pointing_error_dec_arcsec']);
+    }
 }
