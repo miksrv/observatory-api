@@ -40,6 +40,18 @@ class CreateFramesTable extends Migration
                 'type' => 'FLOAT',
                 'null' => false,
             ],
+            // This frame's own orientation on the sky (0 = North up, increasing
+            // clockwise toward the image's +X pixel axis), derived by the pipeline
+            // from the solved WCS — see observatory-pipeline's CLAUDE.md, "camera
+            // rotation" discussion. Nullable: astrometry may never have run (a
+            // QC-rejected frame) or its WCS round-trip may have failed. Purely
+            // diagnostic (e.g. spotting a ~180 deg difference between sessions,
+            // such as a meridian flip, without re-opening archived FITS files) —
+            // nothing in this schema enforces anything based on its value.
+            'position_angle_deg' => [
+                'type' => 'FLOAT',
+                'null' => true,
+            ],
             'quality_flag' => [
                 'type'       => 'VARCHAR',
                 'constraint' => 20,

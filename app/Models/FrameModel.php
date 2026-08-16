@@ -22,6 +22,7 @@ class FrameModel extends BaseModel
         'ra_center',
         'dec_center',
         'fov_deg',
+        'position_angle_deg',
         'quality_flag',
         'object',
         'exptime',

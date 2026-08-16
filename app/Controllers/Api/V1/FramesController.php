@@ -87,6 +87,9 @@ class FramesController extends BaseApiController
             'ra_center'         => (float) $body['ra_center'],
             'dec_center'        => (float) $body['dec_center'],
             'fov_deg'           => (float) $body['fov_deg'],
+            // Optional — see the migration's docblock. null/omitted when the
+            // pipeline never solved a WCS for this frame at all.
+            'position_angle_deg' => isset($body['position_angle_deg']) ? (float) $body['position_angle_deg'] : null,
             'quality_flag'      => $body['quality_flag'],
 
             // observation.*
@@ -1118,6 +1121,7 @@ class FramesController extends BaseApiController
             'ra_center'             => (float) $frame['ra_center'],
             'dec_center'            => (float) $frame['dec_center'],
             'fov_deg'               => (float) $frame['fov_deg'],
+            'position_angle_deg'    => $frame['position_angle_deg'] !== null ? (float) $frame['position_angle_deg'] : null,
             'quality_flag'          => $frame['quality_flag'],
             'object'                => $frame['object'],
             'exptime'               => $frame['exptime'] !== null ? (float) $frame['exptime'] : null,
