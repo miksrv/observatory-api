@@ -725,11 +725,12 @@ class FramesController extends BaseApiController
 
         // ----------------------------------------------------------------
         // Bounding-box pre-filter. The margin is the widest fov_deg on
-        // record — deliberately wider than any single frame needs, since
-        // Haversine below trims it to each frame's exact fov_deg/2 coverage.
-        // The margin is declination-scaled and split across the RA=0/360
-        // seam (SkyMath) so real coverage near the poles or the seam is
-        // never silently dropped by the pre-filter.
+        // record — deliberately wider than any single frame needs (a frame's
+        // coverage radius is at most fov_deg * sqrt(2) / 2), since Haversine
+        // below trims it to each frame's exact coverage circle. The margin is
+        // declination-scaled and split across the RA=0/360 seam (SkyMath) so
+        // real coverage near the poles or the seam is never silently dropped
+        // by the pre-filter.
         // ----------------------------------------------------------------
         $db        = \Config\Database::connect();
         $maxFovDeg = (float) ($db->query('SELECT MAX(fov_deg) AS max_fov FROM frames')->getRow()->max_fov ?? 0.0);
@@ -750,7 +751,7 @@ class FramesController extends BaseApiController
             $params[]    = $max;
         }
 
-        $sql = 'SELECT id, filename, obs_time, ra_center, dec_center, fov_deg
+        $sql = 'SELECT id, filename, obs_time, ra_center, dec_center, fov_deg, width_px, height_px
                    FROM frames
                   WHERE obs_time < ?
                     AND (' . implode(' OR ', $raClauses) . ')
@@ -762,13 +763,19 @@ class FramesController extends BaseApiController
 
         // ----------------------------------------------------------------
         // Haversine precision filter: keep only frames that truly cover the
-        // query point (angular distance from frame center <= fov_deg / 2)
+        // query point — angular distance from the frame centre within the
+        // frame's half-diagonal (SkyMath::coverageRadiusArcsec), not within
+        // fov_deg / 2, which misses every corner of a rectangular frame.
         // ----------------------------------------------------------------
         $results = [];
 
         foreach ($candidates as $frame) {
             $distArcsec    = SkyMath::haversineArcsec($ra, $dec, (float) $frame->ra_center, (float) $frame->dec_center);
-            $radiusArcsec  = ((float) $frame->fov_deg / 2.0) * 3600.0;
+            $radiusArcsec  = SkyMath::coverageRadiusArcsec(
+                (float) $frame->fov_deg,
+                $frame->width_px !== null ? (int) $frame->width_px : null,
+                $frame->height_px !== null ? (int) $frame->height_px : null,
+            );
 
             if ($distArcsec <= $radiusArcsec) {
                 $results[] = [
@@ -886,7 +893,7 @@ class FramesController extends BaseApiController
             $params[]    = $max;
         }
 
-        $sql = 'SELECT id, filename, obs_time, ra_center, dec_center, fov_deg
+        $sql = 'SELECT id, filename, obs_time, ra_center, dec_center, fov_deg, width_px, height_px
                    FROM frames
                   WHERE obs_time < ?
                     AND (' . implode(' OR ', $raClauses) . ')
@@ -897,7 +904,8 @@ class FramesController extends BaseApiController
         $candidates = $db->query($sql, $params)->getResultObject();
 
         // ----------------------------------------------------------------
-        // For each position, check which frames cover it
+        // For each position, check which frames cover it — same half-diagonal
+        // coverage circle as covering() above (SkyMath::coverageRadiusArcsec).
         // ----------------------------------------------------------------
         $results = [];
         $totalMatches = 0;
@@ -909,7 +917,11 @@ class FramesController extends BaseApiController
 
             foreach ($candidates as $frame) {
                 $distArcsec   = SkyMath::haversineArcsec($ra, $dec, (float) $frame->ra_center, (float) $frame->dec_center);
-                $radiusArcsec = ((float) $frame->fov_deg / 2.0) * 3600.0;
+                $radiusArcsec = SkyMath::coverageRadiusArcsec(
+                    (float) $frame->fov_deg,
+                    $frame->width_px !== null ? (int) $frame->width_px : null,
+                    $frame->height_px !== null ? (int) $frame->height_px : null,
+                );
 
                 if ($distArcsec <= $radiusArcsec) {
                     $posResults[] = [

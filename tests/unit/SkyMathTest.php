@@ -36,6 +36,34 @@ final class SkyMathTest extends CIUnitTestCase
     }
 
     #[Test]
+    public function coverageRadiusIsTheHalfDiagonalOfTheFrame(): void
+    {
+        // 4656x3520 px, longest axis 1.0 deg: half-diagonal = 0.5 * sqrt(1 + (3520/4656)^2) ≈ 0.627 deg.
+        $radius   = SkyMath::coverageRadiusArcsec(1.0, 4656, 3520);
+        $expected = 0.5 * sqrt(1.0 + (3520.0 / 4656.0) ** 2) * 3600.0;
+
+        $this->assertEqualsWithDelta($expected, $radius, 0.01);
+        // Always beyond the inscribed circle the old test used.
+        $this->assertGreaterThan(0.5 * 3600.0, $radius);
+    }
+
+    #[Test]
+    public function coverageRadiusAssumesASquareFrameWhenDimensionsAreUnknown(): void
+    {
+        $this->assertEqualsWithDelta(0.5 * M_SQRT2 * 3600.0, SkyMath::coverageRadiusArcsec(1.0, null, null), 0.01);
+        $this->assertEqualsWithDelta(0.5 * M_SQRT2 * 3600.0, SkyMath::coverageRadiusArcsec(1.0, 0, 3520), 0.01);
+    }
+
+    #[Test]
+    public function coverageRadiusNeverExceedsTheSquareCase(): void
+    {
+        $this->assertLessThanOrEqual(
+            SkyMath::coverageRadiusArcsec(1.0, null, null),
+            SkyMath::coverageRadiusArcsec(1.0, 4656, 3520),
+        );
+    }
+
+    #[Test]
     public function raMarginEqualsInputMarginAtEquator(): void
     {
         $this->assertEqualsWithDelta(0.001, SkyMath::raMargin(0.0, 0.001), 0.00001);

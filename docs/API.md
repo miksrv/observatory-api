@@ -240,7 +240,12 @@ The `id` is the same value in both cases when `filename` matches an existing row
 
 Returns frames whose field of view covered a sky point, observed before a given time. A frame
 covers a point if the angular distance from its center `(ra_center, dec_center)` to the point is
-`<= fov_deg / 2`. See [Implementation Notes](#implementation-notes) for how the search works.
+within the frame's **half-diagonal** — `fov_deg / 2 × sqrt(1 + (short/long)²)` from `width_px`/
+`height_px`, or `fov_deg / 2 × sqrt(2)` when the pixel dimensions are unknown. `fov_deg` is the
+frame's longest axis, so the earlier `fov_deg / 2` test was the inscribed circle and never reached
+the frame's corners; the circumscribed circle errs toward "covered", the safe direction for this
+check (see `SkyMath::coverageRadiusArcsec()`). See [Implementation Notes](#implementation-notes)
+for how the search works.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -1221,6 +1226,10 @@ cheap bounding-box pre-filter on an indexed column (fast, uses the index), then 
   as `|dec|` grows (meridians converge toward the poles).
 - **The RA=0°/360° seam** (`raRanges()` / `combinedRaRanges()`) — a query near RA=0 must also
   match sources near RA=360, which a plain `BETWEEN` silently misses.
+- **Frame coverage radius** (`coverageRadiusArcsec()`) — a frame covers a point within its
+  half-diagonal, derived from `fov_deg` (the longest axis) and the `width_px`/`height_px` aspect
+  ratio. The bounding-box margin (`MAX(fov_deg)`) is wider than any frame's radius
+  (`fov_deg × √2 / 2` at most), so the pre-filter never drops a frame the exact test would keep.
 
 **Batch response key typing.** `.../near/batch`, `.../covering/batch`, and `.../tracks/batch`
 return `results` as a JSON **object** keyed by position index or source id (e.g.
