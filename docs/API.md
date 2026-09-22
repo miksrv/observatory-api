@@ -723,9 +723,17 @@ also set it directly (e.g. a zero-item task) or force a state.
 **Required:** `status` (one of `PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `CANCELLED`).
 **Optional:** `error` (message, typically set alongside `status: "FAILED"`).
 
+`status: "RUNNING"` is a **claim** and is atomic: it succeeds only if the task is still `PENDING`
+at the moment of the update (`UPDATE ... WHERE status = 'PENDING'`). A worker that receives `409`
+lost the claim to another worker (or the task was cancelled/completed meanwhile) and must not
+process the task. Every other transition is unconditional — an operator can still reset a stuck
+`RUNNING` task to `PENDING`, and a worker can still mark its own task `FAILED`/`COMPLETED`.
+
 **Response `200 OK`:** `{ "task": { "...": "same shape as GET /tasks/{id}'s task" } }`
 
-**Errors:** `400` invalid/missing `status` · `404` task not found
+**Errors:** `400` invalid/missing `status` · `404` task not found · `409` `status: "RUNNING"`
+requested but the task is no longer `PENDING` (`details.status` carries its current status,
+`details.task` the task)
 
 ---
 
@@ -773,8 +781,11 @@ task type since the item already carries its `frame_id` from task creation.
 }
 ```
 An item already resolved (retry, duplicate delivery) reports back `status: "ok"` without
-double-counting the task's counters. An unknown `item_id`, or one belonging to a different task,
-fails only that entry (`status: "error"`) — it never blocks the rest of the batch.
+double-counting the task's counters — the resolution is a single conditional
+`UPDATE ... WHERE status = 'PENDING'`, so of two concurrent reports for the same item exactly one
+counts (and, for `DELETE_FRAME`, exactly one runs the cascade). An unknown `item_id`, or one
+belonging to a different task, fails only that entry (`status: "error"`) — it never blocks the
+rest of the batch.
 
 **Errors:** `400` missing `items` (must be an array) · `404` task not found
 

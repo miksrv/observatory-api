@@ -257,6 +257,37 @@ class TasksController extends BaseApiController
             $data['error'] = (string) $body['error'];
         }
 
+        // ----------------------------------------------------------------
+        // PENDING -> RUNNING is a CLAIM and must be atomic. GET /tasks is a
+        // plain SELECT, so two workers polling concurrently (a deploy overlap,
+        // an accidentally scaled worker service) both see the same PENDING
+        // task; with an unconditional update both flipped it to RUNNING and
+        // both dispatched the whole item list — duplicate astrometry,
+        // photometry and catalog traffic for every item, last writer wins
+        // (API audit 2026-08-20, finding C2). The status guard in the WHERE
+        // clause lets exactly one of them through; the other gets 409 and
+        // must not process the task.
+        // ----------------------------------------------------------------
+        if ($status === 'RUNNING') {
+            $db = \Config\Database::connect();
+            $db->table('tasks')
+                ->where('id', $id)
+                ->where('status', 'PENDING')
+                ->update($data);
+
+            if ($db->affectedRows() !== 1) {
+                $current = $model->find($id);
+
+                return $this->respondError(409, 'Task is not claimable', [
+                    'task_id' => $id,
+                    'status'  => $current['status'] ?? null,
+                    'task'    => $current !== null ? $this->formatTask($current) : null,
+                ]);
+            }
+
+            return $this->respondOk(['task' => $this->formatTask($model->find($id))]);
+        }
+
         $model->update($id, $data);
 
         return $this->respondOk(['task' => $this->formatTask($model->find($id))]);
@@ -317,13 +348,6 @@ class TasksController extends BaseApiController
                 continue;
             }
 
-            // A previously-resolved item being re-reported (retry, duplicate delivery) must not
-            // double-count the parent task's completed/failed totals.
-            if ($item['status'] !== 'PENDING') {
-                $results[] = ['item_id' => $itemId, 'status' => 'ok', 'note' => 'Already resolved, counters unchanged'];
-                continue;
-            }
-
             $update = ['status' => $status, 'processed_at' => date('Y-m-d H:i:s')];
 
             if (isset($entry['frame_id'])) {
@@ -342,7 +366,25 @@ class TasksController extends BaseApiController
                 $update['payload'] = json_encode($entry['payload']);
             }
 
-            $itemModel->update($itemId, $update);
+            // Resolve the item atomically: only the report that flips it from PENDING counts
+            // toward the parent task's totals (and, for DELETE_FRAME, runs the cascade). The
+            // guard used to be a read-then-write — two concurrent reports for the same item
+            // (a retry racing the original, or the two workers finding C2 allowed) could both
+            // read PENDING and both increment, leaving completed + failed above total_items
+            // for good (API audit 2026-08-20, finding H1). A previously-resolved item being
+            // re-reported (retry, duplicate delivery) therefore affects no row and stays
+            // uncounted, which is the same "ok, counters unchanged" answer as before.
+            $db = \Config\Database::connect();
+            $db->table('task_items')
+                ->where('id', $itemId)
+                ->where('task_id', $id)
+                ->where('status', 'PENDING')
+                ->update($update);
+
+            if ($db->affectedRows() !== 1) {
+                $results[] = ['item_id' => $itemId, 'status' => 'ok', 'note' => 'Already resolved, counters unchanged'];
+                continue;
+            }
 
             // DELETE_FRAME's own DB-side cascade delete runs here, the moment the pipeline reports
             // the file successfully relocated to FITS_REJECTED (status DONE) — see
