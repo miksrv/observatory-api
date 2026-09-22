@@ -371,6 +371,30 @@ class FramesController extends BaseApiController
                 $existingSource = $sourceModel->findByCatalogIdentity($catalogName, $catalogId);
             } else {
                 $existingSource = $sourceModel->findByCoordinates($ra, $dec, 2.0);
+
+                // A position match to a source this SAME batch has already
+                // confirmed is not a re-observation — it is a second, distinct
+                // detection the pipeline deliberately sent as its own entry
+                // (its own dedup passes leave two ordinary uncatalogued
+                // sources alone, since they may be two real faint objects: a
+                // supernova candidate beside an unrelated faint star, a
+                // deblended pair). The loop runs synchronously with no
+                // transaction, so the earlier entry's freshly inserted
+                // observation is already visible to this lookup; merging onto
+                // it made this entry's photometry overwrite the earlier one's
+                // with no unique-key violation and no log line (API audit
+                // 2026-08-20, finding M1). Give it its own row instead. On a
+                // later frame each detection then matches its own row, since
+                // findByCoordinates() returns the nearest one.
+                if ($existingSource !== null && isset($confirmedSourceIds[$existingSource['id']])) {
+                    log_message('info', sprintf(
+                        'FramesController::saveSources — frame_id=%s: uncatalogued source at ra=%.5f dec=%.5f '
+                        . 'lies within 2" of source_id=%s already confirmed earlier in this batch; '
+                        . 'keeping it as a distinct source rather than merging',
+                        $id, $ra, $dec, $existingSource['id'],
+                    ));
+                    $existingSource = null;
+                }
             }
 
             // Does a source_observations row already exist for this exact

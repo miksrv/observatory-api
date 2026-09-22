@@ -332,7 +332,11 @@ identity (`catalog_name` + `catalog_id`) when both are present, then fall back t
 position match (against `source_observations`) only when there's no catalog identity to match on.
 Catalog-identity matching is required for anything that moves between frames (an MPC-matched
 asteroid can shift tens of arcsec/hour) — position-only matching would otherwise mint a new
-`sources` row for it on every frame.
+`sources` row for it on every frame. The position fallback never merges an entry onto a source
+that an *earlier entry of the same batch* already confirmed: two uncatalogued sources within 2″
+of each other in one batch are two distinct detections (the pipeline's own dedup deliberately
+keeps such pairs), and each gets its own row — merging them made the second's photometry silently
+overwrite the first's.
 
 **Reconciling by `frame_id` (idempotent re-analysis):** this call is safe to repeat for the same
 `frame_id` — e.g. an operator re-runs ANALYZE on an already-processed file after improving the

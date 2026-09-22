@@ -286,6 +286,69 @@ final class SourcesTest extends DatabaseTestCase
         $this->assertSame(1, (int) $star['observation_count']);
     }
 
+    /**
+     * API audit 2026-08-20, finding M1: two distinct uncatalogued sources
+     * within the 2" position-matching radius, sent in the SAME batch, used to
+     * collapse into one `sources` row — the second's photometry overwrote the
+     * first's with nothing logged. Each must keep its own row and its own
+     * observation, and on a later frame each must match its own row again.
+     */
+    public function testTwoCloseUncataloguedSourcesInOneBatchStayDistinct(): void
+    {
+        $frameId1 = $this->createFrame(['obs_time' => '2024-01-01 00:00:00']);
+        // ~1.0" apart (dec offset of 1/3600 deg), no catalog identity on either.
+        $pair = [
+            ['ra' => 202.4610, 'dec' => 47.1820,             'mag' => 18.20, 'flux' => 1200.0],
+            ['ra' => 202.4610, 'dec' => 47.1820 + 1 / 3600, 'mag' => 19.50, 'flux' => 350.0],
+        ];
+
+        $result1 = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->sourcesEndpoint($frameId1), ['filename' => 'pair1.fits', 'sources' => $pair]);
+
+        $result1->assertStatus(201);
+        $json1 = json_decode($result1->getJSON(), true);
+        $this->assertSame(2, $json1['new_sources']);
+        $this->assertSame(0, $json1['matched_sources']);
+        [$idA, $idB] = $json1['source_ids'];
+        $this->assertNotSame($idA, $idB);
+
+        $db   = \Config\Database::connect();
+        $mags = $db->table('source_observations')->where('frame_id', $frameId1)
+            ->orderBy('mag')->get()->getResultArray();
+        $this->assertSame([18.2, 19.5], array_map(static fn ($r) => round((float) $r['mag'], 2), $mags));
+
+        // A later frame of the same field: each detection re-matches ITS OWN row.
+        $frameId2 = $this->createFrame(['obs_time' => '2024-01-02 00:00:00']);
+        $result2  = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->sourcesEndpoint($frameId2), ['filename' => 'pair2.fits', 'sources' => $pair]);
+
+        $json2 = json_decode($result2->getJSON(), true);
+        $this->assertSame(0, $json2['new_sources']);
+        $this->assertSame(2, $json2['matched_sources']);
+        $this->assertSame([$idA, $idB], $json2['source_ids']);
+    }
+
+    /**
+     * The ordinary cross-frame case is untouched: one uncatalogued source
+     * re-observed on a second frame still matches its existing row.
+     */
+    public function testUncataloguedSourceStillMatchesAcrossFrames(): void
+    {
+        $one = [['ra' => 202.4610, 'dec' => 47.1820, 'mag' => 18.2]];
+
+        $r1 = $this->withHeaders($this->authHeaders())->withBodyFormat('json')
+            ->post($this->sourcesEndpoint($this->createFrame(['obs_time' => '2024-01-01 00:00:00'])), ['filename' => 'a.fits', 'sources' => $one]);
+        $r2 = $this->withHeaders($this->authHeaders())->withBodyFormat('json')
+            ->post($this->sourcesEndpoint($this->createFrame(['obs_time' => '2024-01-02 00:00:00'])), ['filename' => 'b.fits', 'sources' => $one]);
+
+        $j1 = json_decode($r1->getJSON(), true);
+        $j2 = json_decode($r2->getJSON(), true);
+        $this->assertSame(1, $j2['matched_sources']);
+        $this->assertSame($j1['source_ids'], $j2['source_ids']);
+    }
+
     public function testSourceIdsAlignPositionallyAndNullOutSkippedEntries(): void
     {
         $frameId = $this->createFrame();
