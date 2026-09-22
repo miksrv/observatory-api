@@ -231,6 +231,69 @@ final class AnomaliesTest extends CIUnitTestCase
     }
 
     // -------------------------------------------------------------------------
+    // Replace is atomic (API audit 2026-08-20, finding C1)
+    // -------------------------------------------------------------------------
+
+    /**
+     * The delete-then-insert replace must not be able to half-succeed: an
+     * insert that fails after the delete (here: a source_id that violates the
+     * anomalies.source_id FK) must leave the frame's previous anomalies in
+     * place and answer 500, so the pipeline retries instead of believing the
+     * frame has no anomalies.
+     */
+    public function testFailedInsertKeepsThePreviousAnomalies(): void
+    {
+        $frameId = $this->createFrame();
+
+        $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->anomaliesEndpoint($frameId), [
+                'filename'  => 'test.fits',
+                'anomalies' => [$this->anomalyOf('UNKNOWN'), $this->anomalyOf('ASTEROID')],
+            ])
+            ->assertStatus(201);
+
+        $bad              = $this->anomalyOf('SUPERNOVA_CANDIDATE');
+        $bad['source_id'] = 'no-such-source-' . uniqid();
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->anomaliesEndpoint($frameId), [
+                'filename'  => 'test.fits',
+                'anomalies' => [$this->anomalyOf('MOVING_UNKNOWN'), $bad],
+            ]);
+
+        $result->assertStatus(500);
+
+        $kept  = \Config\Database::connect('default')->table('anomalies')
+            ->where('frame_id', $frameId)->get()->getResultArray();
+        $types = array_column($kept, 'anomaly_type');
+        sort($types);  // anomaly_type is an ENUM — ORDER BY would sort by enum index, not name
+        $this->assertSame(['ASTEROID', 'UNKNOWN'], $types);
+    }
+
+    public function testEmptyListStillReplacesThePreviousAnomalies(): void
+    {
+        $frameId = $this->createFrame();
+
+        $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->anomaliesEndpoint($frameId), [
+                'filename'  => 'test.fits',
+                'anomalies' => [$this->anomalyOf('UNKNOWN')],
+            ])
+            ->assertStatus(201);
+
+        $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->anomaliesEndpoint($frameId), ['filename' => 'test.fits', 'anomalies' => []])
+            ->assertStatus(201);
+
+        $this->assertSame(0, \Config\Database::connect('default')->table('anomalies')
+            ->where('frame_id', $frameId)->countAllResults());
+    }
+
+    // -------------------------------------------------------------------------
     // source_id linkage (FK to sources.id — see CreateAnomaliesTable migration)
     // -------------------------------------------------------------------------
 

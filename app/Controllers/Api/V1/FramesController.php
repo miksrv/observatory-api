@@ -559,21 +559,32 @@ class FramesController extends BaseApiController
         // previous run's anomalies sitting alongside the new ones instead of
         // superseding them. A frame classified for the first time simply has
         // nothing to delete here.
+        //
+        // Delete and insert run in ONE transaction. As two auto-committed
+        // statements, an insert that failed after the delete had committed —
+        // a stale source_id violating the FK, a dropped connection, a
+        // lock-wait timeout, the process dying mid-request — left the frame
+        // with no anomalies at all, indistinguishable from "this run found
+        // none", with the pipeline's own retry failing identically on a
+        // deterministic cause (API audit 2026-08-20, finding C1; it compounds
+        // the pipeline audit's C8). saveSources() already wraps its own
+        // reconciliation pass this way; this pair was never given the same
+        // treatment. Manual transBegin/transCommit rather than transStart, so
+        // a DatabaseException thrown under DBDebug is caught, rolled back and
+        // reported as the 500 the pipeline's retry policy expects.
         // ----------------------------------------------------------------
         $anomalyModel = new AnomalyModel();
-        $anomalyModel->where('frame_id', $id)->delete();
+        $db           = \Config\Database::connect();
 
-        // ----------------------------------------------------------------
-        // Short-circuit for empty anomaly list — the delete above already
-        // did the only real work needed (a re-run that now finds nothing).
-        // ----------------------------------------------------------------
-        if (count($anomalies) === 0) {
-            return $this->respondCreated([
-                'message' => 'Anomalies saved successfully',
-                'count'   => 0,
-                'alerts'  => 0,
-            ]);
-        }
+        // transStatus is sticky on the connection: a failure in an earlier
+        // transaction on this same connection would otherwise fail this one
+        // too (visible in the shared-connection test suite; a fresh process
+        // per request hides it in production).
+        $db->resetTransStatus();
+        $db->transBegin();
+
+        try {
+            $anomalyModel->where('frame_id', $id)->delete();
 
         // ----------------------------------------------------------------
         // Build rows, flattening the optional ephemeris nested object
@@ -653,14 +664,26 @@ class FramesController extends BaseApiController
         }
         unset($row);
 
-        // ----------------------------------------------------------------
-        // Batch insert (into the model instance already created above, for
-        // the replace-delete)
-        // ----------------------------------------------------------------
-        if ($anomalyModel->insertBatch($rows) === false) {
-            log_message('error', 'FramesController::saveAnomalies — insertBatch failed for frame_id=' . $id);
+            // ------------------------------------------------------------
+            // Batch insert (into the model instance already created above,
+            // for the replace-delete). An empty list inserts nothing — the
+            // delete is the whole of the work for a re-run that found none.
+            // ------------------------------------------------------------
+            if ($rows !== [] && $anomalyModel->insertBatch($rows) === false) {
+                throw new \RuntimeException('insertBatch returned false');
+            }
 
-            return $this->respondError(500, 'Failed to save anomalies');
+            if ($db->transStatus() === false) {
+                throw new \RuntimeException('transaction status is false');
+            }
+
+            $db->transCommit();
+        } catch (\Throwable $e) {
+            $db->transRollback();
+            $db->resetTransStatus();
+            log_message('error', 'FramesController::saveAnomalies — replace failed for frame_id=' . $id . ', previous anomalies kept: ' . $e->getMessage());
+
+            return $this->respondError(500, 'Failed to save anomalies; the frame\'s previous anomalies were kept');
         }
 
         return $this->respondCreated([
