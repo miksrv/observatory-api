@@ -35,12 +35,18 @@ class AnomalyModel extends BaseModel
     ];
 
     /**
-     * Anomaly types that should trigger alerts.
+     * Anomaly types that should trigger alerts (`anomalies.is_alert = 1`).
+     *
+     * SPACE_DEBRIS is deliberately NOT one of them. The pipeline records a
+     * satellite/aircraft trail so that a genuine fast mover's single-exposure
+     * track is never erased and so that trails do not land in UNKNOWN — but a
+     * satellite pass is nothing an operator has to act on. On the 2026-09-22
+     * IC3322A test run, 38 of 50 alerts were such trails. Mirrors
+     * observatory-pipeline's `_ALERT_TYPES` (modules/anomaly_detector/types.py).
      */
     public const ALERT_TYPES = [
         'SUPERNOVA_CANDIDATE',
         'MOVING_UNKNOWN',
-        'SPACE_DEBRIS',
         'UNKNOWN',
     ];
 

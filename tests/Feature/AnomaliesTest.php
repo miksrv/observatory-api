@@ -163,11 +163,11 @@ final class AnomaliesTest extends CIUnitTestCase
         $this->assertSame(0, $json['alerts']);
     }
 
-    public function testAllFourAlertTypesProduceAlerts4(): void
+    public function testAllThreeAlertTypesProduceAlerts3(): void
     {
         $frameId = $this->createFrame();
 
-        $alertTypes = ['SUPERNOVA_CANDIDATE', 'MOVING_UNKNOWN', 'SPACE_DEBRIS', 'UNKNOWN'];
+        $alertTypes = ['SUPERNOVA_CANDIDATE', 'MOVING_UNKNOWN', 'UNKNOWN'];
         $anomalies  = array_map(fn (string $t) => $this->anomalyOf($t), $alertTypes);
 
         $result = $this->withHeaders($this->authHeaders())
@@ -179,15 +179,42 @@ final class AnomaliesTest extends CIUnitTestCase
 
         $result->assertStatus(201);
         $json = json_decode($result->getJSON(), true);
-        $this->assertSame(4, $json['count']);
-        $this->assertSame(4, $json['alerts']);
+        $this->assertSame(3, $json['count']);
+        $this->assertSame(3, $json['alerts']);
+    }
+
+    /**
+     * A satellite/aircraft trail is recorded (so a fast mover's track is never
+     * erased and trails stay out of UNKNOWN) but is not something an operator
+     * has to act on — it must be persisted with is_alert = 0.
+     */
+    public function testSpaceDebrisIsRecordedButNotAnAlert(): void
+    {
+        $frameId = $this->createFrame();
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->anomaliesEndpoint($frameId), [
+                'filename'  => 'test.fits',
+                'anomalies' => [$this->anomalyOf('SPACE_DEBRIS')],
+            ]);
+
+        $result->assertStatus(201);
+        $json = json_decode($result->getJSON(), true);
+        $this->assertSame(1, $json['count']);
+        $this->assertSame(0, $json['alerts']);
+
+        $row = \Config\Database::connect('default')->table('anomalies')
+            ->where('frame_id', $frameId)->get()->getRowArray();
+        $this->assertSame('SPACE_DEBRIS', $row['anomaly_type']);
+        $this->assertSame(0, (int) $row['is_alert']);
     }
 
     public function testNonAlertTypesProduceAlerts0(): void
     {
         $frameId = $this->createFrame();
 
-        $nonAlertTypes = ['ASTEROID', 'VARIABLE_STAR', 'BINARY_STAR', 'COMET'];
+        $nonAlertTypes = ['ASTEROID', 'VARIABLE_STAR', 'BINARY_STAR', 'COMET', 'SPACE_DEBRIS'];
         $anomalies     = array_map(fn (string $t) => $this->anomalyOf($t), $nonAlertTypes);
 
         $result = $this->withHeaders($this->authHeaders())
@@ -199,7 +226,7 @@ final class AnomaliesTest extends CIUnitTestCase
 
         $result->assertStatus(201);
         $json = json_decode($result->getJSON(), true);
-        $this->assertSame(4, $json['count']);
+        $this->assertSame(5, $json['count']);
         $this->assertSame(0, $json['alerts']);
     }
 

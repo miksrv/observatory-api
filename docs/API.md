@@ -432,7 +432,7 @@ constraint. Must stay in sync with the `AnomalyType` enum in observatory-pipelin
 | `COMET` | Shifted source, matched in MPC/SkyBot as a comet | No (logged + ephemeris) |
 | `SUPERNOVA_CANDIDATE` | New point source with no history near a Simbad galaxy, or a known galaxy brightening beyond threshold | **YES** |
 | `MOVING_UNKNOWN` | Shifted source, not in MPC, elongation ≤ 3.0 | **YES** |
-| `SPACE_DEBRIS` | Shifted source, not in MPC, elongation > 3.0 (fast trail) | **YES** |
+| `SPACE_DEBRIS` | Unmatched trail-like source (elongation above the trail threshold) — a satellite/aircraft trail, or a fast mover's single-exposure track. Recorded so the track is never erased and so trails stay out of `UNKNOWN`; a satellite pass is nothing an operator has to act on | No |
 | `UNKNOWN` | New point source, not in any catalog, area covered — or detected via image subtraction regardless of coverage | **YES** |
 
 Types marked **YES** are the alert-worthy subset (`AnomalyModel::ALERT_TYPES`) and set
