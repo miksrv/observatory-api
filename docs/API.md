@@ -232,7 +232,8 @@ astrometry, or photometry run against it.
 The `id` is the same value in both cases when `filename` matches an existing row.
 
 **Errors:** `400` missing required field · `422` a required numeric field (`ra_center`,
-`dec_center`, `fov_deg`) isn't numeric · `500` insert/update failed
+`dec_center`, `fov_deg`) isn't numeric, or `obs_time` isn't a parseable datetime · `500`
+insert/update failed
 
 ---
 

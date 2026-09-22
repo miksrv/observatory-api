@@ -69,6 +69,22 @@ class FramesController extends BaseApiController
             }
         }
 
+        // obs_time must actually parse. Every other date-handling call site
+        // in this controller guards strtotime() against false; this one did
+        // not, and date('Y-m-d H:i:s', false) is "1970-01-01 00:00:00" — the
+        // frame registered with 201 and a silently wrong epoch, corrupting
+        // GET /frames ordering, coverage's before_time filter and the
+        // object's first/last observation times (API audit 2026-08-20,
+        // finding M2).
+        $obsTimestamp = is_scalar($body['obs_time']) ? strtotime((string) $body['obs_time']) : false;
+
+        if ($obsTimestamp === false) {
+            return $this->respondError(422, 'Validation failed', [
+                'field'   => 'obs_time',
+                'message' => 'obs_time must be a parseable ISO 8601 datetime',
+            ]);
+        }
+
         // ----------------------------------------------------------------
         // Flatten nested objects into the DB column layout
         // ----------------------------------------------------------------
@@ -83,7 +99,7 @@ class FramesController extends BaseApiController
             // Top-level required fields
             'filename'          => $body['filename'],
             // Convert ISO 8601 (2024-03-15T22:01:34Z) to MySQL DATETIME format
-            'obs_time'          => date('Y-m-d H:i:s', strtotime($body['obs_time'])),
+            'obs_time'          => date('Y-m-d H:i:s', $obsTimestamp),
             'ra_center'         => (float) $body['ra_center'],
             'dec_center'        => (float) $body['dec_center'],
             'fov_deg'           => (float) $body['fov_deg'],

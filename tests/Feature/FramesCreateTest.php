@@ -206,6 +206,23 @@ final class FramesCreateTest extends CIUnitTestCase
     // Non-numeric sky coordinates → 422
     // -------------------------------------------------------------------------
 
+    /**
+     * API audit 2026-08-20, finding M2: an unparseable obs_time used to
+     * register the frame at 1970-01-01 00:00:00 with a 201.
+     */
+    public function testUnparseableObsTimeReturns422AndInsertsNothing(): void
+    {
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post(self::ENDPOINT, $this->validPayload(['obs_time' => 'not-a-date']));
+
+        $result->assertStatus(422);
+        $this->assertStringContainsString('obs_time', $result->getJSON());
+
+        $this->assertSame(0, \Config\Database::connect('default')->table('frames')
+            ->where('filename', 'frame_phpunit_test.fits')->countAllResults());
+    }
+
     public function testNonNumericRaCenterReturns422(): void
     {
         $result = $this->withHeaders($this->authHeaders())
