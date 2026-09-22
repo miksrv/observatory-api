@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use CodeIgniter\Test\CIUnitTestCase;
+use Tests\Support\DatabaseTestCase;
 use CodeIgniter\Test\FeatureTestTrait;
 
 /**
@@ -11,12 +11,12 @@ use CodeIgniter\Test\FeatureTestTrait;
  *   - PATCH /api/v1/tasks/{id} {"status":"RUNNING"} claims a task only while it is PENDING
  *   - POST /api/v1/tasks/{id}/items/progress counts an item exactly once
  *
- * Same conventions as DeleteFrameTaskTest: CIUnitTestCase + FeatureTestTrait, tables emptied
+ * Same conventions as DeleteFrameTaskTest: DatabaseTestCase + FeatureTestTrait, tables emptied
  * with raw DELETE FROM on the 'default' connection, fixtures inserted directly.
  *
  * @internal
  */
-final class TasksClaimTest extends CIUnitTestCase
+final class TasksClaimTest extends DatabaseTestCase
 {
     use FeatureTestTrait;
 
@@ -25,7 +25,7 @@ final class TasksClaimTest extends CIUnitTestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->query('DELETE FROM task_items');
         $db->query('DELETE FROM tasks');
     }
@@ -38,7 +38,7 @@ final class TasksClaimTest extends CIUnitTestCase
     /** @return array{task_id: string, item_id: string} */
     private function createTask(string $status = 'PENDING', int $items = 1): array
     {
-        $db     = \Config\Database::connect('default');
+        $db     = \Config\Database::connect();
         $taskId = uniqid('', true);
         $db->table('tasks')->insert([
             'id'          => $taskId,
@@ -98,7 +98,7 @@ final class TasksClaimTest extends CIUnitTestCase
         $json = json_decode($second->getJSON(), true);
         $this->assertSame('RUNNING', $json['details']['status']);
 
-        $row = \Config\Database::connect('default')->table('tasks')->where('id', $task['task_id'])->get()->getRowArray();
+        $row = \Config\Database::connect()->table('tasks')->where('id', $task['task_id'])->get()->getRowArray();
         $this->assertSame('RUNNING', $row['status']);
     }
 
@@ -143,7 +143,7 @@ final class TasksClaimTest extends CIUnitTestCase
         $this->assertSame(0, $json['task']['failed_items']);
         $this->assertSame('RUNNING', $json['task']['status']);
 
-        $item = \Config\Database::connect('default')->table('task_items')->where('id', $task['item_id'])->get()->getRowArray();
+        $item = \Config\Database::connect()->table('task_items')->where('id', $task['item_id'])->get()->getRowArray();
         $this->assertSame('DONE', $item['status']);  // the losing report did not overwrite it
     }
 
@@ -157,7 +157,7 @@ final class TasksClaimTest extends CIUnitTestCase
         $json = json_decode($result->getJSON(), true);
         $this->assertSame('error', $json['results'][0]['status']);
 
-        $item = \Config\Database::connect('default')->table('task_items')->where('id', $theirs['item_id'])->get()->getRowArray();
+        $item = \Config\Database::connect()->table('task_items')->where('id', $theirs['item_id'])->get()->getRowArray();
         $this->assertSame('PENDING', $item['status']);
     }
 }

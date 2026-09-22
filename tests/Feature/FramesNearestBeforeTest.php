@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use CodeIgniter\Test\CIUnitTestCase;
+use Tests\Support\DatabaseTestCase;
 use CodeIgniter\Test\FeatureTestTrait;
 
 /**
@@ -10,7 +10,7 @@ use CodeIgniter\Test\FeatureTestTrait;
  *
  * @internal
  */
-final class FramesNearestBeforeTest extends CIUnitTestCase
+final class FramesNearestBeforeTest extends DatabaseTestCase
 {
     use FeatureTestTrait;
 
@@ -29,7 +29,7 @@ final class FramesNearestBeforeTest extends CIUnitTestCase
 
     private function emptyAppTables(): void
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->query('DELETE FROM anomalies');
         $db->query('DELETE FROM frame_sources');
         $db->query('DELETE FROM source_observations');
@@ -55,7 +55,7 @@ final class FramesNearestBeforeTest extends CIUnitTestCase
         string $filename = 'test.fits',
         string $obsTime  = '2021-03-14 16:54:55'
     ): string {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $id = uniqid('', true);
         $db->table('frames')->insert([
             'id'           => $id,

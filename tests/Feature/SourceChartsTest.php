@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use CodeIgniter\Test\CIUnitTestCase;
+use Tests\Support\DatabaseTestCase;
 use CodeIgniter\Test\FeatureTestTrait;
 
 /**
@@ -13,7 +13,7 @@ use CodeIgniter\Test\FeatureTestTrait;
  *
  * @internal
  */
-final class SourceChartsTest extends CIUnitTestCase
+final class SourceChartsTest extends DatabaseTestCase
 {
     use FeatureTestTrait;
 
@@ -36,7 +36,7 @@ final class SourceChartsTest extends CIUnitTestCase
 
     private function emptyAppTables(): void
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->query('DELETE FROM source_charts');
         $db->query('DELETE FROM anomalies');
         $db->query('DELETE FROM frame_sources');
@@ -53,7 +53,7 @@ final class SourceChartsTest extends CIUnitTestCase
 
     private function createFrame(array $overrides = []): string
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $id = uniqid('', true);
         $db->table('frames')->insert(array_merge([
             'id'           => $id,
@@ -77,7 +77,7 @@ final class SourceChartsTest extends CIUnitTestCase
      */
     private function createSourceWithEpochs(int $epochCount): array
     {
-        $db       = \Config\Database::connect('default');
+        $db       = \Config\Database::connect();
         $sourceId = uniqid('', true);
 
         $db->table('sources')->insert([
@@ -163,7 +163,7 @@ final class SourceChartsTest extends CIUnitTestCase
         // in practice (see SourceModel docblock — a source is only ever
         // created alongside its first observation), but the endpoint must
         // still degrade gracefully rather than error.
-        $db       = \Config\Database::connect('default');
+        $db       = \Config\Database::connect();
         $sourceId = uniqid('', true);
         $db->table('sources')->insert([
             'id'                => $sourceId,
@@ -248,7 +248,7 @@ final class SourceChartsTest extends CIUnitTestCase
         $this->assertSame('track', $json2['style']);
         $this->assertSame(5, $json2['frame_count']);
 
-        $db    = \Config\Database::connect('default');
+        $db    = \Config\Database::connect();
         $count = $db->table('source_charts')->where('source_id', $sourceId)->countAllResults();
         $this->assertSame(1, $count);
 
@@ -279,7 +279,7 @@ final class SourceChartsTest extends CIUnitTestCase
         $this->assertSame('stamp_strip', $json['style']);
         $this->assertSame(1, $json['frame_count']);
 
-        $db     = \Config\Database::connect('default');
+        $db     = \Config\Database::connect();
         $styles = array_column($db->table('source_charts')->where('source_id', $sourceId)->get()->getResultArray(), 'style');
         sort($styles);
         $this->assertSame(['stamp_strip', 'track'], $styles);
@@ -352,7 +352,7 @@ final class SourceChartsTest extends CIUnitTestCase
         $this->withHeaders($this->authHeaders())->withBody(self::MINIMAL_GIF)
             ->post("/api/v1/sources/{$sourceId}/chart?style=track_gif&frame_count=3");
 
-        $db     = \Config\Database::connect('default');
+        $db     = \Config\Database::connect();
         $styles = array_column($db->table('source_charts')->where('source_id', $sourceId)->get()->getResultArray(), 'style');
         sort($styles);
         $this->assertSame(['track', 'track_gif'], $styles);

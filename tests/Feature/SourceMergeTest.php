@@ -3,7 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\SourceModel;
-use CodeIgniter\Test\CIUnitTestCase;
+use Tests\Support\DatabaseTestCase;
 use CodeIgniter\Test\FeatureTestTrait;
 
 /**
@@ -26,7 +26,7 @@ use CodeIgniter\Test\FeatureTestTrait;
  *
  * @internal
  */
-final class SourceMergeTest extends CIUnitTestCase
+final class SourceMergeTest extends DatabaseTestCase
 {
     use FeatureTestTrait;
 
@@ -46,7 +46,7 @@ final class SourceMergeTest extends CIUnitTestCase
 
     private function emptyAppTables(): void
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->query('DELETE FROM source_charts');
         $db->query('DELETE FROM anomalies');
         $db->query('DELETE FROM frame_sources');
@@ -58,7 +58,7 @@ final class SourceMergeTest extends CIUnitTestCase
 
     private function createFrame(array $overrides = []): string
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $id = uniqid('', true);
         $db->table('frames')->insert(array_merge([
             'id'           => $id,
@@ -84,7 +84,7 @@ final class SourceMergeTest extends CIUnitTestCase
      */
     private function createFragmentedSource(string $obsTime, float $ra, float $dec): array
     {
-        $db       = \Config\Database::connect('default');
+        $db       = \Config\Database::connect();
         $sourceId = uniqid('', true);
         $frameId  = $this->createFrame(['obs_time' => $obsTime]);
 
@@ -119,7 +119,7 @@ final class SourceMergeTest extends CIUnitTestCase
 
     private function createAnomalyFor(string $sourceId, string $frameId): string
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $id = uniqid('', true);
         $db->table('anomalies')->insert([
             'id'           => $id,
@@ -136,7 +136,7 @@ final class SourceMergeTest extends CIUnitTestCase
 
     private function createChartFor(string $sourceId): void
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->table('source_charts')->insert([
             'id'          => uniqid('', true),
             'source_id'   => $sourceId,
@@ -163,7 +163,7 @@ final class SourceMergeTest extends CIUnitTestCase
         $result->assertRedirect();
         $result->assertSessionHas('error');
 
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $this->assertSame(1, $db->table('sources')->where('id', $frag['source_id'])->countAllResults());
     }
 
@@ -178,7 +178,7 @@ final class SourceMergeTest extends CIUnitTestCase
         $b = $this->createFragmentedSource('2021-04-27 18:08:05', 222.560, 32.481);
         $c = $this->createFragmentedSource('2021-04-27 18:34:28', 222.487, 32.643);
 
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
 
         $result = $this->post('/ui/sources/merge', [
             'source_ids' => [$a['source_id'], $b['source_id'], $c['source_id']],
@@ -249,7 +249,7 @@ final class SourceMergeTest extends CIUnitTestCase
         ]);
         $result->assertSessionHas('success');
 
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
 
         // Old anomalies deleted outright (never reassigned — see
         // SourceModel::mergeSources()'s docblock: a fresh DETECT_ANOMALIES
@@ -276,7 +276,7 @@ final class SourceMergeTest extends CIUnitTestCase
         $result->assertSessionHas('success');
         $this->assertStringContainsString('does-not-exist.12345678', $_SESSION['success']);
 
-        $db        = \Config\Database::connect('default');
+        $db        = \Config\Database::connect();
         $remaining = $db->table('sources')->get()->getResultArray();
         $this->assertCount(1, $remaining);
         $this->assertSame(2, (int) $remaining[0]['observation_count']);

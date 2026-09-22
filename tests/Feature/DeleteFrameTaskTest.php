@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use CodeIgniter\Test\CIUnitTestCase;
+use Tests\Support\DatabaseTestCase;
 use CodeIgniter\Test\FeatureTestTrait;
 
 /**
@@ -14,15 +14,15 @@ use CodeIgniter\Test\FeatureTestTrait;
  *     set of frames on /ui/frames (POST /ui/tasks).
  *
  * Mirrors this repo's existing Feature test conventions (see FramesCreateTest.php,
- * SourceMergeTest.php, AnomaliesGenerateChartsTest.php): CIUnitTestCase + FeatureTestTrait,
+ * SourceMergeTest.php, AnomaliesGenerateChartsTest.php): DatabaseTestCase + FeatureTestTrait,
  * app tables emptied via raw DELETE FROM against the 'default' connection (NOT
  * DatabaseTestTrait — its migration handling hardcodes SQLite and fights the real MariaDB
  * schema this app actually uses), and fixture rows inserted directly via
- * \Config\Database::connect('default')->table(...)->insert(...) with uniqid('', true) ids.
+ * \Config\Database::connect()->table(...)->insert(...) with uniqid('', true) ids.
  *
  * @internal
  */
-final class DeleteFrameTaskTest extends CIUnitTestCase
+final class DeleteFrameTaskTest extends DatabaseTestCase
 {
     use FeatureTestTrait;
 
@@ -40,7 +40,7 @@ final class DeleteFrameTaskTest extends CIUnitTestCase
 
     private function emptyAppTables(): void
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->query('DELETE FROM task_items');
         $db->query('DELETE FROM tasks');
         $db->query('DELETE FROM source_charts');
@@ -59,7 +59,7 @@ final class DeleteFrameTaskTest extends CIUnitTestCase
 
     private function createFrame(array $overrides = []): string
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $id = uniqid('', true);
         $db->table('frames')->insert(array_merge([
             'id'           => $id,
@@ -81,7 +81,7 @@ final class DeleteFrameTaskTest extends CIUnitTestCase
      */
     private function linkSourceToFrame(string $sourceId, string $frameId, float $ra, float $dec, string $obsTime): void
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
 
         $db->table('source_observations')->insert([
             'id'        => uniqid('', true),
@@ -102,7 +102,7 @@ final class DeleteFrameTaskTest extends CIUnitTestCase
 
     private function createSource(string $obsTime, int $observationCount = 1): string
     {
-        $db       = \Config\Database::connect('default');
+        $db       = \Config\Database::connect();
         $sourceId = uniqid('', true);
 
         $db->table('sources')->insert([
@@ -120,7 +120,7 @@ final class DeleteFrameTaskTest extends CIUnitTestCase
 
     private function createAnomalyFor(string $sourceId, string $frameId): string
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $id = uniqid('', true);
         $db->table('anomalies')->insert([
             'id'           => $id,
@@ -143,7 +143,7 @@ final class DeleteFrameTaskTest extends CIUnitTestCase
      */
     private function createDeleteFrameTask(?string $frameId): array
     {
-        $db     = \Config\Database::connect('default');
+        $db     = \Config\Database::connect();
         $taskId = uniqid('', true);
 
         $db->table('tasks')->insert([
@@ -185,7 +185,7 @@ final class DeleteFrameTaskTest extends CIUnitTestCase
 
     public function testDeleteFrameCascadesAndPurgesOrphanedSource(): void
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
 
         $frameId  = $this->createFrame();
         $sourceId = $this->createSource('2024-03-15 22:01:34');
@@ -223,7 +223,7 @@ final class DeleteFrameTaskTest extends CIUnitTestCase
 
     public function testDeleteFrameLeavesSourceIntactWhenStillObservedElsewhere(): void
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
 
         $frameToDelete  = $this->createFrame(['filename' => 'delete_frame_test_a_' . uniqid() . '.fits']);
         $frameSurviving = $this->createFrame(['filename' => 'delete_frame_test_b_' . uniqid() . '.fits']);
@@ -275,7 +275,7 @@ final class DeleteFrameTaskTest extends CIUnitTestCase
         $result->assertRedirect();
         $result->assertSessionHas('success');
 
-        $db   = \Config\Database::connect('default');
+        $db   = \Config\Database::connect();
         $task = $db->table('tasks')->where('type', 'DELETE_FRAME')->get()->getRowArray();
 
         $this->assertNotNull($task);
@@ -322,7 +322,7 @@ final class DeleteFrameTaskTest extends CIUnitTestCase
      */
     public function testSecondDeleteFrameItemForAlreadyDeletedFrameStillRecordsProgressWithoutError(): void
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
 
         $frameId = $this->createFrame();
 

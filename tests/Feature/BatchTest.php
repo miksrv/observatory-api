@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use CodeIgniter\Test\CIUnitTestCase;
+use Tests\Support\DatabaseTestCase;
 use CodeIgniter\Test\FeatureTestTrait;
 
 /**
@@ -12,7 +12,7 @@ use CodeIgniter\Test\FeatureTestTrait;
  *
  * @internal
  */
-final class BatchTest extends CIUnitTestCase
+final class BatchTest extends DatabaseTestCase
 {
     use FeatureTestTrait;
 
@@ -30,7 +30,7 @@ final class BatchTest extends CIUnitTestCase
 
     private function emptyAppTables(): void
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->query('DELETE FROM anomalies');
         $db->query('DELETE FROM frame_sources');
         $db->query('DELETE FROM source_observations');
@@ -50,7 +50,7 @@ final class BatchTest extends CIUnitTestCase
 
     private function createFrame(array $overrides = []): string
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $id = uniqid('', true);
         $db->table('frames')->insert(array_merge([
             'id'           => $id,
@@ -67,7 +67,7 @@ final class BatchTest extends CIUnitTestCase
 
     private function createSource(array $data = []): string
     {
-        $db  = \Config\Database::connect('default');
+        $db  = \Config\Database::connect();
         $id  = uniqid('', true);
         $row = array_merge([
             'id'                => $id,
@@ -119,7 +119,7 @@ final class BatchTest extends CIUnitTestCase
         $frameId2 = $this->createFrame(['obs_time' => '2024-01-02 00:00:00']);
 
         // Create source observations directly
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->table('source_observations')->insert([
             'id'        => uniqid('', true),
             'source_id' => $this->createSource(['ra' => 202.461, 'dec' => 47.182]),
@@ -188,7 +188,7 @@ final class BatchTest extends CIUnitTestCase
             'filter'   => 'Ha',
         ]);
 
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->table('source_observations')->insert([
             'id'        => uniqid('', true),
             'source_id' => $this->createSource(['ra' => 202.461, 'dec' => 47.182]),
@@ -272,7 +272,7 @@ final class BatchTest extends CIUnitTestCase
     {
         $frameId = $this->createFrame(['obs_time' => '2024-01-01 00:00:00']);
 
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->table('source_observations')->insert([
             'id'        => uniqid('', true),
             'source_id' => $this->createSource(['ra' => 359.999, 'dec' => 10.0]),
@@ -305,7 +305,7 @@ final class BatchTest extends CIUnitTestCase
     {
         $frameId = $this->createFrame(['obs_time' => '2024-01-01 00:00:00']);
 
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->table('source_observations')->insert([
             'id'        => uniqid('', true),
             'source_id' => $this->createSource(['ra' => 60.0, 'dec' => -47.2]),

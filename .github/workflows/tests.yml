@@ -20,7 +20,7 @@ jobs:
         image: mariadb:10.5.8
         env:
           MARIADB_ROOT_PASSWORD: password
-          MARIADB_DATABASE: db
+          MARIADB_DATABASE: db_test
           MARIADB_USER: user
           MARIADB_PASSWORD: password
         ports:
@@ -51,15 +51,22 @@ jobs:
           echo "" >> .env
           echo "CI_ENVIRONMENT=testing" >> .env
           echo "database.default.hostname=127.0.0.1" >> .env
-          echo "database.default.database=db" >> .env
+          echo "database.default.database=db_test" >> .env
           echo "database.default.username=user" >> .env
           echo "database.default.password=password" >> .env
           echo "database.default.DBDriver=MySQLi" >> .env
           echo "database.default.port=3306" >> .env
+          echo "database.tests.hostname=127.0.0.1" >> .env
+          echo "database.tests.database=db_test" >> .env
+          echo "database.tests.username=user" >> .env
+          echo "database.tests.password=password" >> .env
+          echo "database.tests.DBDriver=MySQLi" >> .env
+          echo "database.tests.DBPrefix=" >> .env
+          echo "database.tests.port=3306" >> .env
           echo "API_KEY=your-secret-key-here" >> .env
 
       - name: Run migrations
-        run: php spark migrate --all
+        run: php spark migrate --all -g tests
 
       - name: Run tests
         run: vendor/bin/phpunit --no-coverage

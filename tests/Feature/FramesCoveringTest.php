@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use CodeIgniter\Test\CIUnitTestCase;
+use Tests\Support\DatabaseTestCase;
 use CodeIgniter\Test\FeatureTestTrait;
 
 /**
@@ -10,7 +10,7 @@ use CodeIgniter\Test\FeatureTestTrait;
  *
  * @internal
  */
-final class FramesCoveringTest extends CIUnitTestCase
+final class FramesCoveringTest extends DatabaseTestCase
 {
     use FeatureTestTrait;
 
@@ -29,7 +29,7 @@ final class FramesCoveringTest extends CIUnitTestCase
 
     private function emptyAppTables(): void
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->query('DELETE FROM anomalies');
         $db->query('DELETE FROM frame_sources');
         $db->query('DELETE FROM source_observations');
@@ -58,7 +58,7 @@ final class FramesCoveringTest extends CIUnitTestCase
         ?int   $widthPx      = null,
         ?int   $heightPx     = null
     ): string {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $id = uniqid('', true);
         $db->table('frames')->insert([
             'id'           => $id,

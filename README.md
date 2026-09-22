@@ -201,7 +201,7 @@ php spark serve
 php spark serve --host 0.0.0.0
 
 # Run tests
-php spark test
+vendor/bin/phpunit
 ```
 
 ---
@@ -210,9 +210,20 @@ php spark test
 
 Feature tests are located in `tests/Feature/`. Every endpoint has test coverage.
 
+The suite runs against a **separate, throwaway database** — the feature tests empty every
+application table in `setUp()`, so they must never point at the working `db`. The test
+connection is the `tests` group (`database.tests.*` in `.env`, `db_test` by default), and
+`Tests\Support\DatabaseTestCase` refuses to run unless that database's name ends in `_test`.
+Create and migrate it once (the MariaDB container only creates `db`):
+
 ```bash
-php spark test
+docker compose exec database sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" \
+  -e "CREATE DATABASE db_test CHARACTER SET utf8mb4; GRANT ALL PRIVILEGES ON db_test.* TO \"user\"@\"%\";"'
+php spark migrate -g tests
+vendor/bin/phpunit
 ```
+
+After adding a migration, run `php spark migrate -g tests` again so `db_test` keeps up.
 
 ---
 

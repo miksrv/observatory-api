@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use CodeIgniter\Test\CIUnitTestCase;
+use Tests\Support\DatabaseTestCase;
 use CodeIgniter\Test\FeatureTestTrait;
 
 /**
@@ -10,7 +10,7 @@ use CodeIgniter\Test\FeatureTestTrait;
  *
  * @internal
  */
-final class AnomaliesTest extends CIUnitTestCase
+final class AnomaliesTest extends DatabaseTestCase
 {
     use FeatureTestTrait;
 
@@ -28,7 +28,7 @@ final class AnomaliesTest extends CIUnitTestCase
 
     private function emptyAppTables(): void
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->query('DELETE FROM anomalies');
         $db->query('DELETE FROM frame_sources');
         $db->query('DELETE FROM source_observations');
@@ -48,7 +48,7 @@ final class AnomaliesTest extends CIUnitTestCase
 
     private function createFrame(): string
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $id = uniqid('', true);
         $db->table('frames')->insert([
             'id'           => $id,
@@ -86,7 +86,7 @@ final class AnomaliesTest extends CIUnitTestCase
      */
     private function createSource(): string
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $id = uniqid('', true);
         $db->table('sources')->insert([
             'id'                => $id,
@@ -204,7 +204,7 @@ final class AnomaliesTest extends CIUnitTestCase
         $this->assertSame(1, $json['count']);
         $this->assertSame(0, $json['alerts']);
 
-        $row = \Config\Database::connect('default')->table('anomalies')
+        $row = \Config\Database::connect()->table('anomalies')
             ->where('frame_id', $frameId)->get()->getRowArray();
         $this->assertSame('SPACE_DEBRIS', $row['anomaly_type']);
         $this->assertSame(0, (int) $row['is_alert']);
@@ -265,7 +265,7 @@ final class AnomaliesTest extends CIUnitTestCase
 
         $result->assertStatus(500);
 
-        $kept  = \Config\Database::connect('default')->table('anomalies')
+        $kept  = \Config\Database::connect()->table('anomalies')
             ->where('frame_id', $frameId)->get()->getResultArray();
         $types = array_column($kept, 'anomaly_type');
         sort($types);  // anomaly_type is an ENUM — ORDER BY would sort by enum index, not name
@@ -289,7 +289,7 @@ final class AnomaliesTest extends CIUnitTestCase
             ->post($this->anomaliesEndpoint($frameId), ['filename' => 'test.fits', 'anomalies' => []])
             ->assertStatus(201);
 
-        $this->assertSame(0, \Config\Database::connect('default')->table('anomalies')
+        $this->assertSame(0, \Config\Database::connect()->table('anomalies')
             ->where('frame_id', $frameId)->countAllResults());
     }
 
@@ -314,7 +314,7 @@ final class AnomaliesTest extends CIUnitTestCase
 
         $result->assertStatus(201);
 
-        $db  = \Config\Database::connect('default');
+        $db  = \Config\Database::connect();
         $row = $db->table('anomalies')->where('frame_id', $frameId)->get()->getRowArray();
         $this->assertNotNull($row);
         $this->assertSame($sourceId, $row['source_id']);
@@ -335,7 +335,7 @@ final class AnomaliesTest extends CIUnitTestCase
 
         $result->assertStatus(201);
 
-        $db  = \Config\Database::connect('default');
+        $db  = \Config\Database::connect();
         $row = $db->table('anomalies')->where('frame_id', $frameId)->get()->getRowArray();
         $this->assertNull($row['source_id']);
     }
@@ -363,7 +363,7 @@ final class AnomaliesTest extends CIUnitTestCase
             ])
             ->assertStatus(201);
 
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->table('sources')->where('id', $sourceId)->delete();
 
         $row = $db->table('anomalies')->where('frame_id', $frameId)->get()->getRowArray();
@@ -419,7 +419,7 @@ final class AnomaliesTest extends CIUnitTestCase
 
         // The whole batch is rejected atomically — the valid UNKNOWN entry
         // ahead of the bad one must not have been inserted either.
-        $db    = \Config\Database::connect('default');
+        $db    = \Config\Database::connect();
         $count = $db->table('anomalies')->where('frame_id', $frameId)->countAllResults();
         $this->assertSame(0, $count);
     }
@@ -446,7 +446,7 @@ final class AnomaliesTest extends CIUnitTestCase
      */
     private function createSourceWithCatalog(string $catalogName, string $catalogId): string
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $id = uniqid('', true);
         $db->table('sources')->insert([
             'id'                => $id,

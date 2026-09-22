@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use CodeIgniter\Test\CIUnitTestCase;
+use Tests\Support\DatabaseTestCase;
 use CodeIgniter\Test\FeatureTestTrait;
 
 /**
@@ -12,7 +12,7 @@ use CodeIgniter\Test\FeatureTestTrait;
  *
  * @internal
  */
-final class SourcesTest extends CIUnitTestCase
+final class SourcesTest extends DatabaseTestCase
 {
     use FeatureTestTrait;
 
@@ -31,7 +31,7 @@ final class SourcesTest extends CIUnitTestCase
 
     private function emptyAppTables(): void
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->query('DELETE FROM source_charts');
         $db->query('DELETE FROM anomalies');
         $db->query('DELETE FROM frame_sources');
@@ -55,7 +55,7 @@ final class SourcesTest extends CIUnitTestCase
      */
     private function createFrame(array $overrides = []): string
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $id = uniqid('', true);
         $db->table('frames')->insert(array_merge([
             'id'           => $id,
@@ -82,7 +82,7 @@ final class SourcesTest extends CIUnitTestCase
      */
     private function createSource(array $data = []): string
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $id = uniqid('', true);
 
         $ra  = $data['ra']  ?? 202.461;
@@ -280,7 +280,7 @@ final class SourcesTest extends CIUnitTestCase
 
         // The star's own row must stay untouched — still Gaia DR3, still
         // observed only once.
-        $db  = \Config\Database::connect('default');
+        $db  = \Config\Database::connect();
         $star = $db->table('sources')->where('id', $starId)->get()->getRowArray();
         $this->assertSame('Gaia DR3', $star['catalog_name']);
         $this->assertSame(1, (int) $star['observation_count']);
@@ -538,7 +538,7 @@ final class SourcesTest extends CIUnitTestCase
         $this->assertSame(0, $json2['purged_sources']);
         $this->assertSame($json1['source_ids'], $json2['source_ids']);
 
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $this->assertSame(
             3,
             $db->table('source_observations')->where('frame_id', $frameId)->countAllResults(),
@@ -586,7 +586,7 @@ final class SourcesTest extends CIUnitTestCase
         $this->assertSame(1, $json2['retracted_sources']);
         $this->assertSame(1, $json2['purged_sources'], 'The dropped source has no observations left on any frame and must be purged.');
 
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $this->assertNull($db->table('sources')->where('id', $droppedSourceId)->get()->getRowArray());
         $this->assertNull($db->table('source_observations')->where('source_id', $droppedSourceId)->get()->getRowArray());
         $this->assertNull($db->table('frame_sources')->where('source_id', $droppedSourceId)->get()->getRowArray());
@@ -624,7 +624,7 @@ final class SourcesTest extends CIUnitTestCase
         $this->assertSame(1, $json['retracted_sources']);
         $this->assertSame(0, $json['purged_sources'], 'Still observed on frame A — must not be purged.');
 
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $this->assertNotNull($db->table('sources')->where('id', $sourceId)->get()->getRowArray(), 'Source row must survive.');
         $this->assertNotNull(
             $db->table('source_observations')->where('frame_id', $frameA)->where('source_id', $sourceId)->get()->getRowArray(),
@@ -656,7 +656,7 @@ final class SourcesTest extends CIUnitTestCase
         $result->assertStatus(201);
         $sourceId = json_decode($result->getJSON(), true)['source_ids'][0];
 
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->table('anomalies')->insert([
             'id'           => uniqid('', true),
             'frame_id'     => $frameId,
