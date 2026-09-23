@@ -12,7 +12,8 @@ use CodeIgniter\Test\FeatureTestTrait;
  *   - POST /api/v1/tasks/{id}/items/progress counts an item exactly once
  *
  * Same conventions as DeleteFrameTaskTest: DatabaseTestCase + FeatureTestTrait, tables emptied
- * with raw DELETE FROM on the 'default' connection, fixtures inserted directly.
+ * with raw DELETE FROM on the test connection (DatabaseTestCase::db()), fixtures inserted
+ * directly.
  *
  * @internal
  */

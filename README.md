@@ -217,7 +217,7 @@ connection is the `tests` group (`database.tests.*` in `.env`, `db_test` by defa
 Create and migrate it once (the MariaDB container only creates `db`):
 
 ```bash
-docker compose exec database sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" \
+docker compose exec observatory-api sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" \
   -e "CREATE DATABASE db_test CHARACTER SET utf8mb4; GRANT ALL PRIVILEGES ON db_test.* TO \"user\"@\"%\";"'
 php spark migrate -g tests
 vendor/bin/phpunit

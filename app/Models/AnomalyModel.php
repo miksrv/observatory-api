@@ -43,6 +43,8 @@ class AnomalyModel extends BaseModel
      * satellite pass is nothing an operator has to act on. On the 2026-09-22
      * IC3322A test run, 38 of 50 alerts were such trails. Mirrors
      * observatory-pipeline's `_ALERT_TYPES` (modules/anomaly_detector/types.py).
+     * Rows persisted before this change are brought in line by
+     * 2026-09-23-000001_SpaceDebrisIsNotAnAlert.php.
      */
     public const ALERT_TYPES = [
         'SUPERNOVA_CANDIDATE',

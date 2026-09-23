@@ -621,9 +621,15 @@ class FramesController extends BaseApiController
         // too (visible in the shared-connection test suite; a fresh process
         // per request hides it in production).
         $db->resetTransStatus();
-        $db->transBegin();
 
         try {
+            // A transaction that failed to open would leave the delete below
+            // running auto-committed — the very path this block closes — so
+            // a false return is a hard failure, not something to continue past.
+            if ($db->transBegin() !== true) {
+                throw new \RuntimeException('transBegin() failed — no transaction is open');
+            }
+
             $anomalyModel->where('frame_id', $id)->delete();
 
         // ----------------------------------------------------------------
@@ -717,7 +723,12 @@ class FramesController extends BaseApiController
                 throw new \RuntimeException('transaction status is false');
             }
 
-            $db->transCommit();
+            // transCommit() reports failure by returning false, not by
+            // throwing; without this check a failed commit would fall through
+            // to the 201 below with nothing written.
+            if ($db->transCommit() !== true) {
+                throw new \RuntimeException('transCommit() failed');
+            }
         } catch (\Throwable $e) {
             $db->transRollback();
             $db->resetTransStatus();

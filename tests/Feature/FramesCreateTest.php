@@ -35,7 +35,8 @@ final class FramesCreateTest extends DatabaseTestCase
 
     /**
      * Delete all rows from app tables in FK-safe order.
-     * Connects explicitly to the 'default' MySQLi group, not the test-bootstrap SQLite.
+     * Uses the `tests` MySQLi group via DatabaseTestCase::db() — the same connection the
+     * controllers under test use, pointed at the throwaway `db_test` database.
      */
     private function emptyAppTables(): void
     {

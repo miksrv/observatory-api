@@ -15,7 +15,7 @@ use CodeIgniter\Test\FeatureTestTrait;
  *
  * Mirrors this repo's existing Feature test conventions (see FramesCreateTest.php,
  * SourceMergeTest.php, AnomaliesGenerateChartsTest.php): DatabaseTestCase + FeatureTestTrait,
- * app tables emptied via raw DELETE FROM against the 'default' connection (NOT
+ * app tables emptied via raw DELETE FROM against the test connection, DatabaseTestCase::db() (NOT
  * DatabaseTestTrait — its migration handling hardcodes SQLite and fights the real MariaDB
  * schema this app actually uses), and fixture rows inserted directly via
  * \Config\Database::connect()->table(...)->insert(...) with uniqid('', true) ids.
