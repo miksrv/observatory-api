@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use CodeIgniter\Test\CIUnitTestCase;
+use Tests\Support\DatabaseTestCase;
 use CodeIgniter\Test\FeatureTestTrait;
 
 /**
@@ -10,7 +10,7 @@ use CodeIgniter\Test\FeatureTestTrait;
  *
  * @internal
  */
-final class AnomaliesTest extends CIUnitTestCase
+final class AnomaliesTest extends DatabaseTestCase
 {
     use FeatureTestTrait;
 
@@ -28,7 +28,7 @@ final class AnomaliesTest extends CIUnitTestCase
 
     private function emptyAppTables(): void
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->query('DELETE FROM anomalies');
         $db->query('DELETE FROM frame_sources');
         $db->query('DELETE FROM source_observations');
@@ -48,7 +48,7 @@ final class AnomaliesTest extends CIUnitTestCase
 
     private function createFrame(): string
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $id = uniqid('', true);
         $db->table('frames')->insert([
             'id'           => $id,
@@ -86,7 +86,7 @@ final class AnomaliesTest extends CIUnitTestCase
      */
     private function createSource(): string
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $id = uniqid('', true);
         $db->table('sources')->insert([
             'id'                => $id,
@@ -163,11 +163,11 @@ final class AnomaliesTest extends CIUnitTestCase
         $this->assertSame(0, $json['alerts']);
     }
 
-    public function testAllFourAlertTypesProduceAlerts4(): void
+    public function testAllThreeAlertTypesProduceAlerts3(): void
     {
         $frameId = $this->createFrame();
 
-        $alertTypes = ['SUPERNOVA_CANDIDATE', 'MOVING_UNKNOWN', 'SPACE_DEBRIS', 'UNKNOWN'];
+        $alertTypes = ['SUPERNOVA_CANDIDATE', 'MOVING_UNKNOWN', 'UNKNOWN'];
         $anomalies  = array_map(fn (string $t) => $this->anomalyOf($t), $alertTypes);
 
         $result = $this->withHeaders($this->authHeaders())
@@ -179,15 +179,42 @@ final class AnomaliesTest extends CIUnitTestCase
 
         $result->assertStatus(201);
         $json = json_decode($result->getJSON(), true);
-        $this->assertSame(4, $json['count']);
-        $this->assertSame(4, $json['alerts']);
+        $this->assertSame(3, $json['count']);
+        $this->assertSame(3, $json['alerts']);
+    }
+
+    /**
+     * A satellite/aircraft trail is recorded (so a fast mover's track is never
+     * erased and trails stay out of UNKNOWN) but is not something an operator
+     * has to act on — it must be persisted with is_alert = 0.
+     */
+    public function testSpaceDebrisIsRecordedButNotAnAlert(): void
+    {
+        $frameId = $this->createFrame();
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->anomaliesEndpoint($frameId), [
+                'filename'  => 'test.fits',
+                'anomalies' => [$this->anomalyOf('SPACE_DEBRIS')],
+            ]);
+
+        $result->assertStatus(201);
+        $json = json_decode($result->getJSON(), true);
+        $this->assertSame(1, $json['count']);
+        $this->assertSame(0, $json['alerts']);
+
+        $row = \Config\Database::connect()->table('anomalies')
+            ->where('frame_id', $frameId)->get()->getRowArray();
+        $this->assertSame('SPACE_DEBRIS', $row['anomaly_type']);
+        $this->assertSame(0, (int) $row['is_alert']);
     }
 
     public function testNonAlertTypesProduceAlerts0(): void
     {
         $frameId = $this->createFrame();
 
-        $nonAlertTypes = ['ASTEROID', 'VARIABLE_STAR', 'BINARY_STAR', 'COMET'];
+        $nonAlertTypes = ['ASTEROID', 'VARIABLE_STAR', 'BINARY_STAR', 'COMET', 'SPACE_DEBRIS'];
         $anomalies     = array_map(fn (string $t) => $this->anomalyOf($t), $nonAlertTypes);
 
         $result = $this->withHeaders($this->authHeaders())
@@ -199,8 +226,71 @@ final class AnomaliesTest extends CIUnitTestCase
 
         $result->assertStatus(201);
         $json = json_decode($result->getJSON(), true);
-        $this->assertSame(4, $json['count']);
+        $this->assertSame(5, $json['count']);
         $this->assertSame(0, $json['alerts']);
+    }
+
+    // -------------------------------------------------------------------------
+    // Replace is atomic (API audit 2026-08-20, finding C1)
+    // -------------------------------------------------------------------------
+
+    /**
+     * The delete-then-insert replace must not be able to half-succeed: an
+     * insert that fails after the delete (here: a source_id that violates the
+     * anomalies.source_id FK) must leave the frame's previous anomalies in
+     * place and answer 500, so the pipeline retries instead of believing the
+     * frame has no anomalies.
+     */
+    public function testFailedInsertKeepsThePreviousAnomalies(): void
+    {
+        $frameId = $this->createFrame();
+
+        $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->anomaliesEndpoint($frameId), [
+                'filename'  => 'test.fits',
+                'anomalies' => [$this->anomalyOf('UNKNOWN'), $this->anomalyOf('ASTEROID')],
+            ])
+            ->assertStatus(201);
+
+        $bad              = $this->anomalyOf('SUPERNOVA_CANDIDATE');
+        $bad['source_id'] = 'no-such-source-' . uniqid();
+
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->anomaliesEndpoint($frameId), [
+                'filename'  => 'test.fits',
+                'anomalies' => [$this->anomalyOf('MOVING_UNKNOWN'), $bad],
+            ]);
+
+        $result->assertStatus(500);
+
+        $kept  = \Config\Database::connect()->table('anomalies')
+            ->where('frame_id', $frameId)->get()->getResultArray();
+        $types = array_column($kept, 'anomaly_type');
+        sort($types);  // anomaly_type is an ENUM — ORDER BY would sort by enum index, not name
+        $this->assertSame(['ASTEROID', 'UNKNOWN'], $types);
+    }
+
+    public function testEmptyListStillReplacesThePreviousAnomalies(): void
+    {
+        $frameId = $this->createFrame();
+
+        $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->anomaliesEndpoint($frameId), [
+                'filename'  => 'test.fits',
+                'anomalies' => [$this->anomalyOf('UNKNOWN')],
+            ])
+            ->assertStatus(201);
+
+        $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->anomaliesEndpoint($frameId), ['filename' => 'test.fits', 'anomalies' => []])
+            ->assertStatus(201);
+
+        $this->assertSame(0, \Config\Database::connect()->table('anomalies')
+            ->where('frame_id', $frameId)->countAllResults());
     }
 
     // -------------------------------------------------------------------------
@@ -224,7 +314,7 @@ final class AnomaliesTest extends CIUnitTestCase
 
         $result->assertStatus(201);
 
-        $db  = \Config\Database::connect('default');
+        $db  = \Config\Database::connect();
         $row = $db->table('anomalies')->where('frame_id', $frameId)->get()->getRowArray();
         $this->assertNotNull($row);
         $this->assertSame($sourceId, $row['source_id']);
@@ -245,7 +335,7 @@ final class AnomaliesTest extends CIUnitTestCase
 
         $result->assertStatus(201);
 
-        $db  = \Config\Database::connect('default');
+        $db  = \Config\Database::connect();
         $row = $db->table('anomalies')->where('frame_id', $frameId)->get()->getRowArray();
         $this->assertNull($row['source_id']);
     }
@@ -273,7 +363,7 @@ final class AnomaliesTest extends CIUnitTestCase
             ])
             ->assertStatus(201);
 
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->table('sources')->where('id', $sourceId)->delete();
 
         $row = $db->table('anomalies')->where('frame_id', $frameId)->get()->getRowArray();
@@ -329,7 +419,7 @@ final class AnomaliesTest extends CIUnitTestCase
 
         // The whole batch is rejected atomically — the valid UNKNOWN entry
         // ahead of the bad one must not have been inserted either.
-        $db    = \Config\Database::connect('default');
+        $db    = \Config\Database::connect();
         $count = $db->table('anomalies')->where('frame_id', $frameId)->countAllResults();
         $this->assertSame(0, $count);
     }
@@ -356,7 +446,7 @@ final class AnomaliesTest extends CIUnitTestCase
      */
     private function createSourceWithCatalog(string $catalogName, string $catalogId): string
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $id = uniqid('', true);
         $db->table('sources')->insert([
             'id'                => $id,

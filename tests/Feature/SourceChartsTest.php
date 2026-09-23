@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use CodeIgniter\Test\CIUnitTestCase;
+use Tests\Support\DatabaseTestCase;
 use CodeIgniter\Test\FeatureTestTrait;
 
 /**
@@ -13,7 +13,7 @@ use CodeIgniter\Test\FeatureTestTrait;
  *
  * @internal
  */
-final class SourceChartsTest extends CIUnitTestCase
+final class SourceChartsTest extends DatabaseTestCase
 {
     use FeatureTestTrait;
 
@@ -36,7 +36,7 @@ final class SourceChartsTest extends CIUnitTestCase
 
     private function emptyAppTables(): void
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->query('DELETE FROM source_charts');
         $db->query('DELETE FROM anomalies');
         $db->query('DELETE FROM frame_sources');
@@ -53,7 +53,7 @@ final class SourceChartsTest extends CIUnitTestCase
 
     private function createFrame(array $overrides = []): string
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $id = uniqid('', true);
         $db->table('frames')->insert(array_merge([
             'id'           => $id,
@@ -77,7 +77,7 @@ final class SourceChartsTest extends CIUnitTestCase
      */
     private function createSourceWithEpochs(int $epochCount): array
     {
-        $db       = \Config\Database::connect('default');
+        $db       = \Config\Database::connect();
         $sourceId = uniqid('', true);
 
         $db->table('sources')->insert([
@@ -94,11 +94,15 @@ final class SourceChartsTest extends CIUnitTestCase
         ]);
 
         $frameIds = [];
+        // Unique per call, like catalog_id above: frames.filename is UNIQUE
+        // (uniq_frames_filename), and a test that creates two sources would
+        // otherwise insert "..._epoch0.fits" twice.
+        $tag = uniqid();
 
         for ($i = 0; $i < $epochCount; $i++) {
             $obsTime = sprintf('2024-03-15 %02d:00:00', 16 + $i);
             $frameId = $this->createFrame([
-                'filename' => "Vesta_A807_FA_Light_L_60_epoch{$i}.fits",
+                'filename' => "Vesta_A807_FA_Light_L_60_{$tag}_epoch{$i}.fits",
                 'obs_time' => $obsTime,
             ]);
             $frameIds[] = $frameId;
@@ -143,8 +147,8 @@ final class SourceChartsTest extends CIUnitTestCase
         $this->assertCount(3, $json['epochs']);
 
         // Chronological order: epoch0 (16:00) before epoch1 (17:00) before epoch2 (18:00).
-        $this->assertSame('Vesta_A807_FA_Light_L_60_epoch0.fits', $json['epochs'][0]['filename']);
-        $this->assertSame('Vesta_A807_FA_Light_L_60_epoch2.fits', $json['epochs'][2]['filename']);
+        $this->assertStringEndsWith('_epoch0.fits', $json['epochs'][0]['filename']);
+        $this->assertStringEndsWith('_epoch2.fits', $json['epochs'][2]['filename']);
 
         // Each epoch carries the position the object was actually detected
         // at on that frame — not a single fixed source position — since a
@@ -163,7 +167,7 @@ final class SourceChartsTest extends CIUnitTestCase
         // in practice (see SourceModel docblock — a source is only ever
         // created alongside its first observation), but the endpoint must
         // still degrade gracefully rather than error.
-        $db       = \Config\Database::connect('default');
+        $db       = \Config\Database::connect();
         $sourceId = uniqid('', true);
         $db->table('sources')->insert([
             'id'                => $sourceId,
@@ -248,7 +252,7 @@ final class SourceChartsTest extends CIUnitTestCase
         $this->assertSame('track', $json2['style']);
         $this->assertSame(5, $json2['frame_count']);
 
-        $db    = \Config\Database::connect('default');
+        $db    = \Config\Database::connect();
         $count = $db->table('source_charts')->where('source_id', $sourceId)->countAllResults();
         $this->assertSame(1, $count);
 
@@ -279,7 +283,7 @@ final class SourceChartsTest extends CIUnitTestCase
         $this->assertSame('stamp_strip', $json['style']);
         $this->assertSame(1, $json['frame_count']);
 
-        $db     = \Config\Database::connect('default');
+        $db     = \Config\Database::connect();
         $styles = array_column($db->table('source_charts')->where('source_id', $sourceId)->get()->getResultArray(), 'style');
         sort($styles);
         $this->assertSame(['stamp_strip', 'track'], $styles);
@@ -352,7 +356,7 @@ final class SourceChartsTest extends CIUnitTestCase
         $this->withHeaders($this->authHeaders())->withBody(self::MINIMAL_GIF)
             ->post("/api/v1/sources/{$sourceId}/chart?style=track_gif&frame_count=3");
 
-        $db     = \Config\Database::connect('default');
+        $db     = \Config\Database::connect();
         $styles = array_column($db->table('source_charts')->where('source_id', $sourceId)->get()->getResultArray(), 'style');
         sort($styles);
         $this->assertSame(['track', 'track_gif'], $styles);
@@ -535,8 +539,8 @@ final class SourceChartsTest extends CIUnitTestCase
         $this->assertCount(1, $json['results'][$sourceIdB]);
 
         // Chronological order preserved, same as the single-source endpoint.
-        $this->assertSame('Vesta_A807_FA_Light_L_60_epoch0.fits', $json['results'][$sourceIdA][0]['filename']);
-        $this->assertSame('Vesta_A807_FA_Light_L_60_epoch2.fits', $json['results'][$sourceIdA][2]['filename']);
+        $this->assertStringEndsWith('_epoch0.fits', $json['results'][$sourceIdA][0]['filename']);
+        $this->assertStringEndsWith('_epoch2.fits', $json['results'][$sourceIdA][2]['filename']);
     }
 
     public function testTracksBatchResolvesUnknownOrMalformedIdsToEmptyEpochsWithoutFailingOthers(): void

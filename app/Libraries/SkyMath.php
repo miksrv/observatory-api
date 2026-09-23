@@ -38,6 +38,42 @@ final class SkyMath
     }
 
     /**
+     * Radius (arcseconds) of the circle a frame is treated as covering.
+     *
+     * `frames.fov_deg` is the pipeline's LONGEST axis, so `fov_deg / 2` is
+     * the circle inscribed along that side and never reaches the corners:
+     * on a 4656x3520 frame at 0.78"/px the corners lie ~0.63 deg from the
+     * centre while fov_deg / 2 is 0.50 deg. Every sky position in the
+     * corner regions was therefore reported "never covered", however many
+     * frames had imaged it — and observatory-pipeline's classifier trusts
+     * that answer, sending a corner subtraction candidate straight to the
+     * no-coverage UNKNOWN alert branch without consulting history (10 of 11
+     * UNKNOWN alerts on the 2026-09-22 IC3322A test run).
+     *
+     * This returns the half-DIAGONAL instead — the circumscribed circle —
+     * from the frame's own aspect ratio when its pixel dimensions are known,
+     * and the square-frame worst case (fov_deg / 2 * sqrt(2)) when they are
+     * not. It errs toward "covered", which is the safe direction for this
+     * check: a false "covered" at worst turns a FIRST_OBSERVATION note into a
+     * classification the other evidence still has to support, whereas a false
+     * "not covered" bypasses the history check entirely. The exact rotated
+     * rectangle would need the frame's position angle applied with a sign
+     * convention this side does not own; the circle needs none.
+     */
+    public static function coverageRadiusArcsec(float $fovDeg, ?int $widthPx, ?int $heightPx): float
+    {
+        $halfLong = $fovDeg / 2.0;
+
+        if ($widthPx !== null && $heightPx !== null && $widthPx > 0 && $heightPx > 0) {
+            $aspect = min($widthPx, $heightPx) / max($widthPx, $heightPx);
+
+            return $halfLong * sqrt(1.0 + $aspect * $aspect) * 3600.0;
+        }
+
+        return $halfLong * M_SQRT2 * 3600.0;
+    }
+
+    /**
      * RA half-width (in degrees) a bounding box needs at a given declination
      * to fully cover a fixed angular margin.
      *

@@ -232,7 +232,8 @@ astrometry, or photometry run against it.
 The `id` is the same value in both cases when `filename` matches an existing row.
 
 **Errors:** `400` missing required field · `422` a required numeric field (`ra_center`,
-`dec_center`, `fov_deg`) isn't numeric · `500` insert/update failed
+`dec_center`, `fov_deg`) isn't numeric, or `obs_time` isn't a parseable datetime · `500`
+insert/update failed
 
 ---
 
@@ -240,7 +241,12 @@ The `id` is the same value in both cases when `filename` matches an existing row
 
 Returns frames whose field of view covered a sky point, observed before a given time. A frame
 covers a point if the angular distance from its center `(ra_center, dec_center)` to the point is
-`<= fov_deg / 2`. See [Implementation Notes](#implementation-notes) for how the search works.
+within the frame's **half-diagonal** — `fov_deg / 2 × sqrt(1 + (short/long)²)` from `width_px`/
+`height_px`, or `fov_deg / 2 × sqrt(2)` when the pixel dimensions are unknown. `fov_deg` is the
+frame's longest axis, so the earlier `fov_deg / 2` test was the inscribed circle and never reached
+the frame's corners; the circumscribed circle errs toward "covered", the safe direction for this
+check (see `SkyMath::coverageRadiusArcsec()`). See [Implementation Notes](#implementation-notes)
+for how the search works.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -326,7 +332,11 @@ identity (`catalog_name` + `catalog_id`) when both are present, then fall back t
 position match (against `source_observations`) only when there's no catalog identity to match on.
 Catalog-identity matching is required for anything that moves between frames (an MPC-matched
 asteroid can shift tens of arcsec/hour) — position-only matching would otherwise mint a new
-`sources` row for it on every frame.
+`sources` row for it on every frame. The position fallback never merges an entry onto a source
+that an *earlier entry of the same batch* already confirmed: two uncatalogued sources within 2″
+of each other in one batch are two distinct detections (the pipeline's own dedup deliberately
+keeps such pairs), and each gets its own row — merging them made the second's photometry silently
+overwrite the first's.
 
 **Reconciling by `frame_id` (idempotent re-analysis):** this call is safe to repeat for the same
 `frame_id` — e.g. an operator re-runs ANALYZE on an already-processed file after improving the
@@ -432,7 +442,7 @@ constraint. Must stay in sync with the `AnomalyType` enum in observatory-pipelin
 | `COMET` | Shifted source, matched in MPC/SkyBot as a comet | No (logged + ephemeris) |
 | `SUPERNOVA_CANDIDATE` | New point source with no history near a Simbad galaxy, or a known galaxy brightening beyond threshold | **YES** |
 | `MOVING_UNKNOWN` | Shifted source, not in MPC, elongation ≤ 3.0 | **YES** |
-| `SPACE_DEBRIS` | Shifted source, not in MPC, elongation > 3.0 (fast trail) | **YES** |
+| `SPACE_DEBRIS` | Unmatched trail-like source (elongation above the trail threshold) — a satellite/aircraft trail, or a fast mover's single-exposure track. Recorded so the track is never erased and so trails stay out of `UNKNOWN`; a satellite pass is nothing an operator has to act on | No |
 | `UNKNOWN` | New point source, not in any catalog, area covered — or detected via image subtraction regardless of coverage | **YES** |
 
 Types marked **YES** are the alert-worthy subset (`AnomalyModel::ALERT_TYPES`) and set
@@ -717,9 +727,17 @@ also set it directly (e.g. a zero-item task) or force a state.
 **Required:** `status` (one of `PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `CANCELLED`).
 **Optional:** `error` (message, typically set alongside `status: "FAILED"`).
 
+`status: "RUNNING"` is a **claim** and is atomic: it succeeds only if the task is still `PENDING`
+at the moment of the update (`UPDATE ... WHERE status = 'PENDING'`). A worker that receives `409`
+lost the claim to another worker (or the task was cancelled/completed meanwhile) and must not
+process the task. Every other transition is unconditional — an operator can still reset a stuck
+`RUNNING` task to `PENDING`, and a worker can still mark its own task `FAILED`/`COMPLETED`.
+
 **Response `200 OK`:** `{ "task": { "...": "same shape as GET /tasks/{id}'s task" } }`
 
-**Errors:** `400` invalid/missing `status` · `404` task not found
+**Errors:** `400` invalid/missing `status` · `404` task not found · `409` `status: "RUNNING"`
+requested but the task is no longer `PENDING` (`details.status` carries its current status,
+`details.task` the task)
 
 ---
 
@@ -767,8 +785,11 @@ task type since the item already carries its `frame_id` from task creation.
 }
 ```
 An item already resolved (retry, duplicate delivery) reports back `status: "ok"` without
-double-counting the task's counters. An unknown `item_id`, or one belonging to a different task,
-fails only that entry (`status: "error"`) — it never blocks the rest of the batch.
+double-counting the task's counters — the resolution is a single conditional
+`UPDATE ... WHERE status = 'PENDING'`, so of two concurrent reports for the same item exactly one
+counts (and, for `DELETE_FRAME`, exactly one runs the cascade). An unknown `item_id`, or one
+belonging to a different task, fails only that entry (`status: "error"`) — it never blocks the
+rest of the batch.
 
 **Errors:** `400` missing `items` (must be an array) · `404` task not found
 
@@ -1221,6 +1242,10 @@ cheap bounding-box pre-filter on an indexed column (fast, uses the index), then 
   as `|dec|` grows (meridians converge toward the poles).
 - **The RA=0°/360° seam** (`raRanges()` / `combinedRaRanges()`) — a query near RA=0 must also
   match sources near RA=360, which a plain `BETWEEN` silently misses.
+- **Frame coverage radius** (`coverageRadiusArcsec()`) — a frame covers a point within its
+  half-diagonal, derived from `fov_deg` (the longest axis) and the `width_px`/`height_px` aspect
+  ratio. The bounding-box margin (`MAX(fov_deg)`) is wider than any frame's radius
+  (`fov_deg × √2 / 2` at most), so the pre-filter never drops a frame the exact test would keep.
 
 **Batch response key typing.** `.../near/batch`, `.../covering/batch`, and `.../tracks/batch`
 return `results` as a JSON **object** keyed by position index or source id (e.g.

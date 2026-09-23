@@ -69,6 +69,22 @@ class FramesController extends BaseApiController
             }
         }
 
+        // obs_time must actually parse. Every other date-handling call site
+        // in this controller guards strtotime() against false; this one did
+        // not, and date('Y-m-d H:i:s', false) is "1970-01-01 00:00:00" — the
+        // frame registered with 201 and a silently wrong epoch, corrupting
+        // GET /frames ordering, coverage's before_time filter and the
+        // object's first/last observation times (API audit 2026-08-20,
+        // finding M2).
+        $obsTimestamp = is_scalar($body['obs_time']) ? strtotime((string) $body['obs_time']) : false;
+
+        if ($obsTimestamp === false) {
+            return $this->respondError(422, 'Validation failed', [
+                'field'   => 'obs_time',
+                'message' => 'obs_time must be a parseable ISO 8601 datetime',
+            ]);
+        }
+
         // ----------------------------------------------------------------
         // Flatten nested objects into the DB column layout
         // ----------------------------------------------------------------
@@ -83,7 +99,7 @@ class FramesController extends BaseApiController
             // Top-level required fields
             'filename'          => $body['filename'],
             // Convert ISO 8601 (2024-03-15T22:01:34Z) to MySQL DATETIME format
-            'obs_time'          => date('Y-m-d H:i:s', strtotime($body['obs_time'])),
+            'obs_time'          => date('Y-m-d H:i:s', $obsTimestamp),
             'ra_center'         => (float) $body['ra_center'],
             'dec_center'        => (float) $body['dec_center'],
             'fov_deg'           => (float) $body['fov_deg'],
@@ -355,6 +371,30 @@ class FramesController extends BaseApiController
                 $existingSource = $sourceModel->findByCatalogIdentity($catalogName, $catalogId);
             } else {
                 $existingSource = $sourceModel->findByCoordinates($ra, $dec, 2.0);
+
+                // A position match to a source this SAME batch has already
+                // confirmed is not a re-observation — it is a second, distinct
+                // detection the pipeline deliberately sent as its own entry
+                // (its own dedup passes leave two ordinary uncatalogued
+                // sources alone, since they may be two real faint objects: a
+                // supernova candidate beside an unrelated faint star, a
+                // deblended pair). The loop runs synchronously with no
+                // transaction, so the earlier entry's freshly inserted
+                // observation is already visible to this lookup; merging onto
+                // it made this entry's photometry overwrite the earlier one's
+                // with no unique-key violation and no log line (API audit
+                // 2026-08-20, finding M1). Give it its own row instead. On a
+                // later frame each detection then matches its own row, since
+                // findByCoordinates() returns the nearest one.
+                if ($existingSource !== null && isset($confirmedSourceIds[$existingSource['id']])) {
+                    log_message('info', sprintf(
+                        'FramesController::saveSources — frame_id=%s: uncatalogued source at ra=%.5f dec=%.5f '
+                        . 'lies within 2" of source_id=%s already confirmed earlier in this batch; '
+                        . 'keeping it as a distinct source rather than merging',
+                        $id, $ra, $dec, $existingSource['id'],
+                    ));
+                    $existingSource = null;
+                }
             }
 
             // Does a source_observations row already exist for this exact
@@ -559,21 +599,38 @@ class FramesController extends BaseApiController
         // previous run's anomalies sitting alongside the new ones instead of
         // superseding them. A frame classified for the first time simply has
         // nothing to delete here.
+        //
+        // Delete and insert run in ONE transaction. As two auto-committed
+        // statements, an insert that failed after the delete had committed —
+        // a stale source_id violating the FK, a dropped connection, a
+        // lock-wait timeout, the process dying mid-request — left the frame
+        // with no anomalies at all, indistinguishable from "this run found
+        // none", with the pipeline's own retry failing identically on a
+        // deterministic cause (API audit 2026-08-20, finding C1; it compounds
+        // the pipeline audit's C8). saveSources() already wraps its own
+        // reconciliation pass this way; this pair was never given the same
+        // treatment. Manual transBegin/transCommit rather than transStart, so
+        // a DatabaseException thrown under DBDebug is caught, rolled back and
+        // reported as the 500 the pipeline's retry policy expects.
         // ----------------------------------------------------------------
         $anomalyModel = new AnomalyModel();
-        $anomalyModel->where('frame_id', $id)->delete();
+        $db           = \Config\Database::connect();
 
-        // ----------------------------------------------------------------
-        // Short-circuit for empty anomaly list — the delete above already
-        // did the only real work needed (a re-run that now finds nothing).
-        // ----------------------------------------------------------------
-        if (count($anomalies) === 0) {
-            return $this->respondCreated([
-                'message' => 'Anomalies saved successfully',
-                'count'   => 0,
-                'alerts'  => 0,
-            ]);
-        }
+        // transStatus is sticky on the connection: a failure in an earlier
+        // transaction on this same connection would otherwise fail this one
+        // too (visible in the shared-connection test suite; a fresh process
+        // per request hides it in production).
+        $db->resetTransStatus();
+
+        try {
+            // A transaction that failed to open would leave the delete below
+            // running auto-committed — the very path this block closes — so
+            // a false return is a hard failure, not something to continue past.
+            if ($db->transBegin() !== true) {
+                throw new \RuntimeException('transBegin() failed — no transaction is open');
+            }
+
+            $anomalyModel->where('frame_id', $id)->delete();
 
         // ----------------------------------------------------------------
         // Build rows, flattening the optional ephemeris nested object
@@ -653,14 +710,31 @@ class FramesController extends BaseApiController
         }
         unset($row);
 
-        // ----------------------------------------------------------------
-        // Batch insert (into the model instance already created above, for
-        // the replace-delete)
-        // ----------------------------------------------------------------
-        if ($anomalyModel->insertBatch($rows) === false) {
-            log_message('error', 'FramesController::saveAnomalies — insertBatch failed for frame_id=' . $id);
+            // ------------------------------------------------------------
+            // Batch insert (into the model instance already created above,
+            // for the replace-delete). An empty list inserts nothing — the
+            // delete is the whole of the work for a re-run that found none.
+            // ------------------------------------------------------------
+            if ($rows !== [] && $anomalyModel->insertBatch($rows) === false) {
+                throw new \RuntimeException('insertBatch returned false');
+            }
 
-            return $this->respondError(500, 'Failed to save anomalies');
+            if ($db->transStatus() === false) {
+                throw new \RuntimeException('transaction status is false');
+            }
+
+            // transCommit() reports failure by returning false, not by
+            // throwing; without this check a failed commit would fall through
+            // to the 201 below with nothing written.
+            if ($db->transCommit() !== true) {
+                throw new \RuntimeException('transCommit() failed');
+            }
+        } catch (\Throwable $e) {
+            $db->transRollback();
+            $db->resetTransStatus();
+            log_message('error', 'FramesController::saveAnomalies — replace failed for frame_id=' . $id . ', previous anomalies kept: ' . $e->getMessage());
+
+            return $this->respondError(500, 'Failed to save anomalies; the frame\'s previous anomalies were kept');
         }
 
         return $this->respondCreated([
@@ -725,11 +799,12 @@ class FramesController extends BaseApiController
 
         // ----------------------------------------------------------------
         // Bounding-box pre-filter. The margin is the widest fov_deg on
-        // record — deliberately wider than any single frame needs, since
-        // Haversine below trims it to each frame's exact fov_deg/2 coverage.
-        // The margin is declination-scaled and split across the RA=0/360
-        // seam (SkyMath) so real coverage near the poles or the seam is
-        // never silently dropped by the pre-filter.
+        // record — deliberately wider than any single frame needs (a frame's
+        // coverage radius is at most fov_deg * sqrt(2) / 2), since Haversine
+        // below trims it to each frame's exact coverage circle. The margin is
+        // declination-scaled and split across the RA=0/360 seam (SkyMath) so
+        // real coverage near the poles or the seam is never silently dropped
+        // by the pre-filter.
         // ----------------------------------------------------------------
         $db        = \Config\Database::connect();
         $maxFovDeg = (float) ($db->query('SELECT MAX(fov_deg) AS max_fov FROM frames')->getRow()->max_fov ?? 0.0);
@@ -750,7 +825,7 @@ class FramesController extends BaseApiController
             $params[]    = $max;
         }
 
-        $sql = 'SELECT id, filename, obs_time, ra_center, dec_center, fov_deg
+        $sql = 'SELECT id, filename, obs_time, ra_center, dec_center, fov_deg, width_px, height_px
                    FROM frames
                   WHERE obs_time < ?
                     AND (' . implode(' OR ', $raClauses) . ')
@@ -762,13 +837,19 @@ class FramesController extends BaseApiController
 
         // ----------------------------------------------------------------
         // Haversine precision filter: keep only frames that truly cover the
-        // query point (angular distance from frame center <= fov_deg / 2)
+        // query point — angular distance from the frame centre within the
+        // frame's half-diagonal (SkyMath::coverageRadiusArcsec), not within
+        // fov_deg / 2, which misses every corner of a rectangular frame.
         // ----------------------------------------------------------------
         $results = [];
 
         foreach ($candidates as $frame) {
             $distArcsec    = SkyMath::haversineArcsec($ra, $dec, (float) $frame->ra_center, (float) $frame->dec_center);
-            $radiusArcsec  = ((float) $frame->fov_deg / 2.0) * 3600.0;
+            $radiusArcsec  = SkyMath::coverageRadiusArcsec(
+                (float) $frame->fov_deg,
+                $frame->width_px !== null ? (int) $frame->width_px : null,
+                $frame->height_px !== null ? (int) $frame->height_px : null,
+            );
 
             if ($distArcsec <= $radiusArcsec) {
                 $results[] = [
@@ -886,7 +967,7 @@ class FramesController extends BaseApiController
             $params[]    = $max;
         }
 
-        $sql = 'SELECT id, filename, obs_time, ra_center, dec_center, fov_deg
+        $sql = 'SELECT id, filename, obs_time, ra_center, dec_center, fov_deg, width_px, height_px
                    FROM frames
                   WHERE obs_time < ?
                     AND (' . implode(' OR ', $raClauses) . ')
@@ -897,7 +978,8 @@ class FramesController extends BaseApiController
         $candidates = $db->query($sql, $params)->getResultObject();
 
         // ----------------------------------------------------------------
-        // For each position, check which frames cover it
+        // For each position, check which frames cover it — same half-diagonal
+        // coverage circle as covering() above (SkyMath::coverageRadiusArcsec).
         // ----------------------------------------------------------------
         $results = [];
         $totalMatches = 0;
@@ -909,7 +991,11 @@ class FramesController extends BaseApiController
 
             foreach ($candidates as $frame) {
                 $distArcsec   = SkyMath::haversineArcsec($ra, $dec, (float) $frame->ra_center, (float) $frame->dec_center);
-                $radiusArcsec = ((float) $frame->fov_deg / 2.0) * 3600.0;
+                $radiusArcsec = SkyMath::coverageRadiusArcsec(
+                    (float) $frame->fov_deg,
+                    $frame->width_px !== null ? (int) $frame->width_px : null,
+                    $frame->height_px !== null ? (int) $frame->height_px : null,
+                );
 
                 if ($distArcsec <= $radiusArcsec) {
                     $posResults[] = [

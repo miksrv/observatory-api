@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use CodeIgniter\Test\CIUnitTestCase;
+use Tests\Support\DatabaseTestCase;
 use CodeIgniter\Test\FeatureTestTrait;
 
 /**
@@ -17,7 +17,7 @@ use CodeIgniter\Test\FeatureTestTrait;
  *
  * @internal
  */
-final class AnomaliesGenerateChartsTest extends CIUnitTestCase
+final class AnomaliesGenerateChartsTest extends DatabaseTestCase
 {
     use FeatureTestTrait;
 
@@ -31,7 +31,7 @@ final class AnomaliesGenerateChartsTest extends CIUnitTestCase
 
     private function emptyAppTables(): void
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->query('DELETE FROM task_items');
         $db->query('DELETE FROM tasks');
         $db->query('DELETE FROM source_charts');
@@ -49,7 +49,7 @@ final class AnomaliesGenerateChartsTest extends CIUnitTestCase
 
     private function createFrame(array $overrides = []): string
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $id = uniqid('', true);
         $db->table('frames')->insert(array_merge([
             'id'           => $id,
@@ -73,7 +73,7 @@ final class AnomaliesGenerateChartsTest extends CIUnitTestCase
      */
     private function createSourceWithTwoAnomalyTypes(): array
     {
-        $db       = \Config\Database::connect('default');
+        $db       = \Config\Database::connect();
         $sourceId = uniqid('', true);
 
         $db->table('sources')->insert([
@@ -165,7 +165,7 @@ final class AnomaliesGenerateChartsTest extends CIUnitTestCase
 
         $result->assertSessionHas('success');
 
-        $db    = \Config\Database::connect('default');
+        $db    = \Config\Database::connect();
         $task  = $db->table('tasks')->where('type', 'GENERATE_CHARTS')->get()->getRowArray();
         $this->assertNotNull($task);
         $this->assertSame(2, (int) $task['total_items']);
@@ -188,7 +188,7 @@ final class AnomaliesGenerateChartsTest extends CIUnitTestCase
 
     public function testGenerateChartsWithSingleTypeGroupStillCreatesOneItem(): void
     {
-        $db       = \Config\Database::connect('default');
+        $db       = \Config\Database::connect();
         $sourceId = uniqid('', true);
         $frameId  = $this->createFrame();
 
@@ -231,7 +231,7 @@ final class AnomaliesGenerateChartsTest extends CIUnitTestCase
         $result = $this->post('/ui/anomalies/generate-charts', ['group_data' => [$groupData]]);
 
         $result->assertSessionHas('error');
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $this->assertSame(0, $db->table('tasks')->countAllResults());
     }
 
@@ -243,7 +243,7 @@ final class AnomaliesGenerateChartsTest extends CIUnitTestCase
     {
         $fixture = $this->createSourceWithTwoAnomalyTypes();
 
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->table('source_charts')->insert([
             'id' => uniqid('', true), 'source_id' => $fixture['source_id'],
             'style' => 'track', 'frame_count' => 1, 'updated_at' => date('Y-m-d H:i:s'),
@@ -252,8 +252,8 @@ final class AnomaliesGenerateChartsTest extends CIUnitTestCase
             'id' => uniqid('', true), 'source_id' => $fixture['source_id'],
             'style' => 'stamp_strip', 'frame_count' => 1, 'updated_at' => date('Y-m-d H:i:s'),
         ]);
-        file_put_contents(WRITEPATH . 'uploads/charts/' . $fixture['source_id'] . '_track.png', self::MINIMAL_PNG);
-        file_put_contents(WRITEPATH . 'uploads/charts/' . $fixture['source_id'] . '_stamp_strip.png', self::MINIMAL_PNG);
+        file_put_contents($this->chartsDir() . $fixture['source_id'] . '_track.png', self::MINIMAL_PNG);
+        file_put_contents($this->chartsDir() . $fixture['source_id'] . '_stamp_strip.png', self::MINIMAL_PNG);
 
         $groupData = json_encode([
             'source_id'   => $fixture['source_id'],
@@ -269,7 +269,7 @@ final class AnomaliesGenerateChartsTest extends CIUnitTestCase
 
         $this->assertSame(0, $db->table('anomalies')->countAllResults());
         $this->assertSame(0, $db->table('source_charts')->countAllResults());
-        $this->assertFileDoesNotExist(WRITEPATH . 'uploads/charts/' . $fixture['source_id'] . '_track.png');
-        $this->assertFileDoesNotExist(WRITEPATH . 'uploads/charts/' . $fixture['source_id'] . '_stamp_strip.png');
+        $this->assertFileDoesNotExist($this->chartsDir() . $fixture['source_id'] . '_track.png');
+        $this->assertFileDoesNotExist($this->chartsDir() . $fixture['source_id'] . '_stamp_strip.png');
     }
 }

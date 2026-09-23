@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use CodeIgniter\Test\CIUnitTestCase;
+use Tests\Support\DatabaseTestCase;
 use CodeIgniter\Test\FeatureTestTrait;
 
 /**
@@ -15,7 +15,7 @@ use CodeIgniter\Test\FeatureTestTrait;
  *
  * @internal
  */
-final class FramesCreateTest extends CIUnitTestCase
+final class FramesCreateTest extends DatabaseTestCase
 {
     use FeatureTestTrait;
 
@@ -35,11 +35,12 @@ final class FramesCreateTest extends CIUnitTestCase
 
     /**
      * Delete all rows from app tables in FK-safe order.
-     * Connects explicitly to the 'default' MySQLi group, not the test-bootstrap SQLite.
+     * Uses the `tests` MySQLi group via DatabaseTestCase::db() — the same connection the
+     * controllers under test use, pointed at the throwaway `db_test` database.
      */
     private function emptyAppTables(): void
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->query('DELETE FROM anomalies');
         $db->query('DELETE FROM frame_sources');
         $db->query('DELETE FROM source_observations');
@@ -206,6 +207,23 @@ final class FramesCreateTest extends CIUnitTestCase
     // Non-numeric sky coordinates → 422
     // -------------------------------------------------------------------------
 
+    /**
+     * API audit 2026-08-20, finding M2: an unparseable obs_time used to
+     * register the frame at 1970-01-01 00:00:00 with a 201.
+     */
+    public function testUnparseableObsTimeReturns422AndInsertsNothing(): void
+    {
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post(self::ENDPOINT, $this->validPayload(['obs_time' => 'not-a-date']));
+
+        $result->assertStatus(422);
+        $this->assertStringContainsString('obs_time', $result->getJSON());
+
+        $this->assertSame(0, \Config\Database::connect()->table('frames')
+            ->where('filename', 'frame_phpunit_test.fits')->countAllResults());
+    }
+
     public function testNonNumericRaCenterReturns422(): void
     {
         $result = $this->withHeaders($this->authHeaders())
@@ -284,7 +302,7 @@ final class FramesCreateTest extends CIUnitTestCase
         $this->assertSame($firstId, $json2['id'], 'Re-analysis of the same filename must return the same frame_id.');
         $this->assertSame('Frame updated successfully', $json2['message']);
 
-        $db    = \Config\Database::connect('default');
+        $db    = \Config\Database::connect();
         $count = $db->table('frames')->where('filename', $this->validPayload()['filename'])->countAllResults();
         $this->assertSame(1, $count, 'Exactly one frames row must exist for this filename, not two.');
 
@@ -308,7 +326,7 @@ final class FramesCreateTest extends CIUnitTestCase
             ->post(self::ENDPOINT, $this->validPayload())
             ->assertStatus(200);
 
-        $db  = \Config\Database::connect('default');
+        $db  = \Config\Database::connect();
         $row = $db->table('object_stats')->where('object', 'M51')->get()->getRowArray();
         $this->assertNotNull($row);
         $this->assertSame(1, (int) $row['frame_count'], 'A re-analysis of the same file must not increment frame_count again.');
@@ -331,7 +349,7 @@ final class FramesCreateTest extends CIUnitTestCase
         $result->assertStatus(201);
         $id = json_decode($result->getJSON(), true)['id'];
 
-        $db  = \Config\Database::connect('default');
+        $db  = \Config\Database::connect();
         $row = $db->table('frames')->where('id', $id)->get()->getRowArray();
         $this->assertSame(12.4, (float) $row['pointing_error_arcsec']);
         $this->assertSame(-8.1, (float) $row['pointing_error_ra_arcsec']);
@@ -347,7 +365,7 @@ final class FramesCreateTest extends CIUnitTestCase
         $result->assertStatus(201);
         $id = json_decode($result->getJSON(), true)['id'];
 
-        $db  = \Config\Database::connect('default');
+        $db  = \Config\Database::connect();
         $row = $db->table('frames')->where('id', $id)->get()->getRowArray();
         $this->assertNull($row['pointing_error_arcsec']);
         $this->assertNull($row['pointing_error_ra_arcsec']);
@@ -388,7 +406,7 @@ final class FramesCreateTest extends CIUnitTestCase
         $second->assertStatus(200);
         $this->assertSame($firstId, json_decode($second->getJSON(), true)['id']);
 
-        $db  = \Config\Database::connect('default');
+        $db  = \Config\Database::connect();
         $row = $db->table('frames')->where('id', $firstId)->get()->getRowArray();
         $this->assertSame(12.4, (float) $row['pointing_error_arcsec'], 'Re-analysis must not overwrite the original pointing_error_arcsec.');
         $this->assertSame(-8.1, (float) $row['pointing_error_ra_arcsec'], 'Re-analysis must not overwrite the original pointing_error_ra_arcsec.');
@@ -420,7 +438,7 @@ final class FramesCreateTest extends CIUnitTestCase
 
         $second->assertStatus(200);
 
-        $db  = \Config\Database::connect('default');
+        $db  = \Config\Database::connect();
         $row = $db->table('frames')->where('id', $firstId)->get()->getRowArray();
         $this->assertNull($row['pointing_error_arcsec']);
         $this->assertNull($row['pointing_error_ra_arcsec']);

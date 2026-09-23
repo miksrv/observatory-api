@@ -51,11 +51,15 @@
         <!-- Directory containing the front controller (index.php) -->
         <const name="PUBLICPATH" value="./public/"/>
         <!-- When ENVIRONMENT=testing the app's Database config switches
-             defaultGroup to 'tests'. We configure that group to point at the
-             real MariaDB instance so controllers and feature tests share the
-             same connection. No DBPrefix so table names match production. -->
+             defaultGroup to 'tests'. We configure that group to point at a
+             THROWAWAY database on the real MariaDB instance so controllers and
+             feature tests share the same connection. No DBPrefix so table names
+             match production. The name must end in "_test": the feature tests
+             DELETE FROM every application table in setUp(), and
+             Tests\Support\DatabaseTestCase refuses any other name. Create and
+             migrate it once: see README.md, "Tests". -->
         <env name="database.tests.hostname" value="127.0.0.1"/>
-        <env name="database.tests.database" value="db"/>
+        <env name="database.tests.database" value="db_test"/>
         <env name="database.tests.username" value="user"/>
         <env name="database.tests.password" value="password"/>
         <env name="database.tests.DBDriver" value="MySQLi"/>

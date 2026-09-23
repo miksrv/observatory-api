@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use CodeIgniter\Test\CIUnitTestCase;
+use Tests\Support\DatabaseTestCase;
 use CodeIgniter\Test\FeatureTestTrait;
 
 /**
@@ -12,7 +12,7 @@ use CodeIgniter\Test\FeatureTestTrait;
  *
  * @internal
  */
-final class SourcesTest extends CIUnitTestCase
+final class SourcesTest extends DatabaseTestCase
 {
     use FeatureTestTrait;
 
@@ -31,7 +31,7 @@ final class SourcesTest extends CIUnitTestCase
 
     private function emptyAppTables(): void
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->query('DELETE FROM source_charts');
         $db->query('DELETE FROM anomalies');
         $db->query('DELETE FROM frame_sources');
@@ -55,7 +55,7 @@ final class SourcesTest extends CIUnitTestCase
      */
     private function createFrame(array $overrides = []): string
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $id = uniqid('', true);
         $db->table('frames')->insert(array_merge([
             'id'           => $id,
@@ -82,7 +82,7 @@ final class SourcesTest extends CIUnitTestCase
      */
     private function createSource(array $data = []): string
     {
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $id = uniqid('', true);
 
         $ra  = $data['ra']  ?? 202.461;
@@ -280,10 +280,73 @@ final class SourcesTest extends CIUnitTestCase
 
         // The star's own row must stay untouched — still Gaia DR3, still
         // observed only once.
-        $db  = \Config\Database::connect('default');
+        $db  = \Config\Database::connect();
         $star = $db->table('sources')->where('id', $starId)->get()->getRowArray();
         $this->assertSame('Gaia DR3', $star['catalog_name']);
         $this->assertSame(1, (int) $star['observation_count']);
+    }
+
+    /**
+     * API audit 2026-08-20, finding M1: two distinct uncatalogued sources
+     * within the 2" position-matching radius, sent in the SAME batch, used to
+     * collapse into one `sources` row — the second's photometry overwrote the
+     * first's with nothing logged. Each must keep its own row and its own
+     * observation, and on a later frame each must match its own row again.
+     */
+    public function testTwoCloseUncataloguedSourcesInOneBatchStayDistinct(): void
+    {
+        $frameId1 = $this->createFrame(['obs_time' => '2024-01-01 00:00:00']);
+        // ~1.0" apart (dec offset of 1/3600 deg), no catalog identity on either.
+        $pair = [
+            ['ra' => 202.4610, 'dec' => 47.1820,             'mag' => 18.20, 'flux' => 1200.0],
+            ['ra' => 202.4610, 'dec' => 47.1820 + 1 / 3600, 'mag' => 19.50, 'flux' => 350.0],
+        ];
+
+        $result1 = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->sourcesEndpoint($frameId1), ['filename' => 'pair1.fits', 'sources' => $pair]);
+
+        $result1->assertStatus(201);
+        $json1 = json_decode($result1->getJSON(), true);
+        $this->assertSame(2, $json1['new_sources']);
+        $this->assertSame(0, $json1['matched_sources']);
+        [$idA, $idB] = $json1['source_ids'];
+        $this->assertNotSame($idA, $idB);
+
+        $db   = \Config\Database::connect();
+        $mags = $db->table('source_observations')->where('frame_id', $frameId1)
+            ->orderBy('mag')->get()->getResultArray();
+        $this->assertSame([18.2, 19.5], array_map(static fn ($r) => round((float) $r['mag'], 2), $mags));
+
+        // A later frame of the same field: each detection re-matches ITS OWN row.
+        $frameId2 = $this->createFrame(['obs_time' => '2024-01-02 00:00:00']);
+        $result2  = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post($this->sourcesEndpoint($frameId2), ['filename' => 'pair2.fits', 'sources' => $pair]);
+
+        $json2 = json_decode($result2->getJSON(), true);
+        $this->assertSame(0, $json2['new_sources']);
+        $this->assertSame(2, $json2['matched_sources']);
+        $this->assertSame([$idA, $idB], $json2['source_ids']);
+    }
+
+    /**
+     * The ordinary cross-frame case is untouched: one uncatalogued source
+     * re-observed on a second frame still matches its existing row.
+     */
+    public function testUncataloguedSourceStillMatchesAcrossFrames(): void
+    {
+        $one = [['ra' => 202.4610, 'dec' => 47.1820, 'mag' => 18.2]];
+
+        $r1 = $this->withHeaders($this->authHeaders())->withBodyFormat('json')
+            ->post($this->sourcesEndpoint($this->createFrame(['obs_time' => '2024-01-01 00:00:00'])), ['filename' => 'a.fits', 'sources' => $one]);
+        $r2 = $this->withHeaders($this->authHeaders())->withBodyFormat('json')
+            ->post($this->sourcesEndpoint($this->createFrame(['obs_time' => '2024-01-02 00:00:00'])), ['filename' => 'b.fits', 'sources' => $one]);
+
+        $j1 = json_decode($r1->getJSON(), true);
+        $j2 = json_decode($r2->getJSON(), true);
+        $this->assertSame(1, $j2['matched_sources']);
+        $this->assertSame($j1['source_ids'], $j2['source_ids']);
     }
 
     public function testSourceIdsAlignPositionallyAndNullOutSkippedEntries(): void
@@ -538,7 +601,7 @@ final class SourcesTest extends CIUnitTestCase
         $this->assertSame(0, $json2['purged_sources']);
         $this->assertSame($json1['source_ids'], $json2['source_ids']);
 
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $this->assertSame(
             3,
             $db->table('source_observations')->where('frame_id', $frameId)->countAllResults(),
@@ -586,7 +649,7 @@ final class SourcesTest extends CIUnitTestCase
         $this->assertSame(1, $json2['retracted_sources']);
         $this->assertSame(1, $json2['purged_sources'], 'The dropped source has no observations left on any frame and must be purged.');
 
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $this->assertNull($db->table('sources')->where('id', $droppedSourceId)->get()->getRowArray());
         $this->assertNull($db->table('source_observations')->where('source_id', $droppedSourceId)->get()->getRowArray());
         $this->assertNull($db->table('frame_sources')->where('source_id', $droppedSourceId)->get()->getRowArray());
@@ -624,7 +687,7 @@ final class SourcesTest extends CIUnitTestCase
         $this->assertSame(1, $json['retracted_sources']);
         $this->assertSame(0, $json['purged_sources'], 'Still observed on frame A — must not be purged.');
 
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $this->assertNotNull($db->table('sources')->where('id', $sourceId)->get()->getRowArray(), 'Source row must survive.');
         $this->assertNotNull(
             $db->table('source_observations')->where('frame_id', $frameA)->where('source_id', $sourceId)->get()->getRowArray(),
@@ -656,7 +719,7 @@ final class SourcesTest extends CIUnitTestCase
         $result->assertStatus(201);
         $sourceId = json_decode($result->getJSON(), true)['source_ids'][0];
 
-        $db = \Config\Database::connect('default');
+        $db = \Config\Database::connect();
         $db->table('anomalies')->insert([
             'id'           => uniqid('', true),
             'frame_id'     => $frameId,
