@@ -94,11 +94,15 @@ final class SourceChartsTest extends DatabaseTestCase
         ]);
 
         $frameIds = [];
+        // Unique per call, like catalog_id above: frames.filename is UNIQUE
+        // (uniq_frames_filename), and a test that creates two sources would
+        // otherwise insert "..._epoch0.fits" twice.
+        $tag = uniqid();
 
         for ($i = 0; $i < $epochCount; $i++) {
             $obsTime = sprintf('2024-03-15 %02d:00:00', 16 + $i);
             $frameId = $this->createFrame([
-                'filename' => "Vesta_A807_FA_Light_L_60_epoch{$i}.fits",
+                'filename' => "Vesta_A807_FA_Light_L_60_{$tag}_epoch{$i}.fits",
                 'obs_time' => $obsTime,
             ]);
             $frameIds[] = $frameId;
@@ -143,8 +147,8 @@ final class SourceChartsTest extends DatabaseTestCase
         $this->assertCount(3, $json['epochs']);
 
         // Chronological order: epoch0 (16:00) before epoch1 (17:00) before epoch2 (18:00).
-        $this->assertSame('Vesta_A807_FA_Light_L_60_epoch0.fits', $json['epochs'][0]['filename']);
-        $this->assertSame('Vesta_A807_FA_Light_L_60_epoch2.fits', $json['epochs'][2]['filename']);
+        $this->assertStringEndsWith('_epoch0.fits', $json['epochs'][0]['filename']);
+        $this->assertStringEndsWith('_epoch2.fits', $json['epochs'][2]['filename']);
 
         // Each epoch carries the position the object was actually detected
         // at on that frame — not a single fixed source position — since a
@@ -535,8 +539,8 @@ final class SourceChartsTest extends DatabaseTestCase
         $this->assertCount(1, $json['results'][$sourceIdB]);
 
         // Chronological order preserved, same as the single-source endpoint.
-        $this->assertSame('Vesta_A807_FA_Light_L_60_epoch0.fits', $json['results'][$sourceIdA][0]['filename']);
-        $this->assertSame('Vesta_A807_FA_Light_L_60_epoch2.fits', $json['results'][$sourceIdA][2]['filename']);
+        $this->assertStringEndsWith('_epoch0.fits', $json['results'][$sourceIdA][0]['filename']);
+        $this->assertStringEndsWith('_epoch2.fits', $json['results'][$sourceIdA][2]['filename']);
     }
 
     public function testTracksBatchResolvesUnknownOrMalformedIdsToEmptyEpochsWithoutFailingOthers(): void
