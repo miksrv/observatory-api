@@ -42,6 +42,24 @@ abstract class DatabaseTestCase extends CIUnitTestCase
     }
 
     /**
+     * The chart upload directory, created on demand. Tests that plant chart
+     * files directly (instead of uploading through the API, whose controller
+     * creates the directory itself) must go through this: writable/uploads/*
+     * is git-ignored, so a fresh checkout — CI — has no charts/ directory
+     * and a bare file_put_contents() there fails.
+     */
+    protected function chartsDir(): string
+    {
+        $dir = WRITEPATH . 'uploads/charts';
+
+        if (! is_dir($dir) && ! mkdir($dir, 0775, true) && ! is_dir($dir)) {
+            self::fail("Could not create chart directory {$dir}");
+        }
+
+        return $dir . '/';
+    }
+
+    /**
      * The test-group connection — the same one the controllers under test use
      * when ENVIRONMENT is 'testing'. Never ask for 'default' by name here.
      */

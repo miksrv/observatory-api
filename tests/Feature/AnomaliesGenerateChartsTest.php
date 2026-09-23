@@ -252,8 +252,8 @@ final class AnomaliesGenerateChartsTest extends DatabaseTestCase
             'id' => uniqid('', true), 'source_id' => $fixture['source_id'],
             'style' => 'stamp_strip', 'frame_count' => 1, 'updated_at' => date('Y-m-d H:i:s'),
         ]);
-        file_put_contents(WRITEPATH . 'uploads/charts/' . $fixture['source_id'] . '_track.png', self::MINIMAL_PNG);
-        file_put_contents(WRITEPATH . 'uploads/charts/' . $fixture['source_id'] . '_stamp_strip.png', self::MINIMAL_PNG);
+        file_put_contents($this->chartsDir() . $fixture['source_id'] . '_track.png', self::MINIMAL_PNG);
+        file_put_contents($this->chartsDir() . $fixture['source_id'] . '_stamp_strip.png', self::MINIMAL_PNG);
 
         $groupData = json_encode([
             'source_id'   => $fixture['source_id'],
@@ -269,7 +269,7 @@ final class AnomaliesGenerateChartsTest extends DatabaseTestCase
 
         $this->assertSame(0, $db->table('anomalies')->countAllResults());
         $this->assertSame(0, $db->table('source_charts')->countAllResults());
-        $this->assertFileDoesNotExist(WRITEPATH . 'uploads/charts/' . $fixture['source_id'] . '_track.png');
-        $this->assertFileDoesNotExist(WRITEPATH . 'uploads/charts/' . $fixture['source_id'] . '_stamp_strip.png');
+        $this->assertFileDoesNotExist($this->chartsDir() . $fixture['source_id'] . '_track.png');
+        $this->assertFileDoesNotExist($this->chartsDir() . $fixture['source_id'] . '_stamp_strip.png');
     }
 }
