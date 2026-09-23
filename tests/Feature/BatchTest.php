@@ -215,6 +215,95 @@ final class BatchTest extends DatabaseTestCase
         $this->assertSame('Ha', $json['results']['0'][0]['filter']);
     }
 
+    /**
+     * uncatalogued_only keeps observations of sources with no catalog
+     * identity or an MPC one, and drops catalogued stars — the pipeline's
+     * wide-cone moving-object query, which OOM-killed its worker when every
+     * star in a 228-frame field came back.
+     */
+    public function testSourcesNearBatchUncataloguedOnlyDropsCataloguedStars(): void
+    {
+        $frameId = $this->createFrame(['obs_time' => '2024-01-01 00:00:00']);
+        $db      = \Config\Database::connect();
+
+        $sources = [
+            'star'    => $this->createSource(),
+            'unknown' => $this->createSource(['catalog_name' => null, 'catalog_id' => null, 'object_type' => null]),
+            'mpc'     => $this->createSource(['catalog_name' => 'MPC', 'catalog_id' => '2014 RY1', 'object_type' => 'ASTEROID']),
+        ];
+        $mags = ['star' => 14.0, 'unknown' => 18.0, 'mpc' => 17.0];
+        foreach ($sources as $kind => $sourceId) {
+            $db->table('source_observations')->insert([
+                'id'        => uniqid('', true),
+                'source_id' => $sourceId,
+                'frame_id'  => $frameId,
+                'ra'        => 202.461,
+                'dec'       => 47.182,
+                'mag'       => $mags[$kind],
+                'flux'      => 1000.0,
+                'obs_time'  => '2024-01-01 00:00:00',
+            ]);
+        }
+
+        $request = [
+            'positions'     => [['ra' => 202.461, 'dec' => 47.182]],
+            'radius_arcsec' => 60.0,
+            'before_time'   => '2024-06-01T00:00:00Z',
+        ];
+
+        $all = json_decode($this->withHeaders($this->authHeaders())->withBodyFormat('json')
+            ->post('/api/v1/sources/near/batch', $request)->getJSON(), true);
+        $this->assertCount(3, $all['results']['0']);
+
+        $filtered = json_decode($this->withHeaders($this->authHeaders())->withBodyFormat('json')
+            ->post('/api/v1/sources/near/batch', $request + ['uncatalogued_only' => true])->getJSON(), true);
+        $magsBack = array_column($filtered['results']['0'], 'mag');
+        sort($magsBack);
+        $this->assertEquals([17.0, 18.0], $magsBack);
+    }
+
+    /**
+     * The declination-sorted pre-filter must not lose a match: each position
+     * gets exactly the observations within its own cone, however the others
+     * are spread.
+     */
+    public function testSourcesNearBatchPreFilterKeepsEveryPositionsOwnMatches(): void
+    {
+        $frameId = $this->createFrame(['obs_time' => '2024-01-01 00:00:00']);
+        $db      = \Config\Database::connect();
+
+        // A column of observations 30" apart in dec, plus one 30" east of the first.
+        $points = [];
+        for ($k = 0; $k < 10; $k++) {
+            $points[] = [202.461, 47.100 + $k * 30 / 3600];
+        }
+        $points[] = [202.461 + (30 / 3600) / cos(deg2rad(47.100)), 47.100];
+        foreach ($points as [$ra, $dec]) {
+            $db->table('source_observations')->insert([
+                'id'        => uniqid('', true),
+                'source_id' => $this->createSource(),
+                'frame_id'  => $frameId,
+                'ra'        => $ra,
+                'dec'       => $dec,
+                'mag'       => 15.0,
+                'flux'      => 1000.0,
+                'obs_time'  => '2024-01-01 00:00:00',
+            ]);
+        }
+
+        $json = json_decode($this->withHeaders($this->authHeaders())->withBodyFormat('json')
+            ->post('/api/v1/sources/near/batch', [
+                'positions'     => [['ra' => 202.461, 'dec' => 47.100], ['ra' => 202.461, 'dec' => 47.100 + 270 / 3600]],
+                'radius_arcsec' => 35.0,
+                'before_time'   => '2024-06-01T00:00:00Z',
+            ])->getJSON(), true);
+
+        // First position: itself, the next one north, and the one east.
+        $this->assertCount(3, $json['results']['0']);
+        // Last in the column: itself and the one south.
+        $this->assertCount(2, $json['results']['1']);
+    }
+
     public function testSourcesNearBatchMissingPositionsReturns400(): void
     {
         $result = $this->withHeaders($this->authHeaders())

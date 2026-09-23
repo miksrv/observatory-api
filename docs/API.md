@@ -879,7 +879,15 @@ so the pipeline can compare a newly-detected point against everything previously
 position for anomaly detection.
 
 **Required fields:** `positions`, `radius_arcsec`. **Optional:** `before_time` (restricts to
-observations strictly before this time).
+observations strictly before this time); `uncatalogued_only` (bool, default `false` — only
+observations of sources whose `catalog_name` is `NULL` or `'MPC'`).
+
+`uncatalogued_only` exists for the pipeline's wide-cone moving-object query: a catalogued star's
+position is never evidence of motion, and on a field observed many times an unfiltered wide cone is
+almost entirely stars — the 228-frame NGC 7331 run (2026-09-23) returned 870k rows for 62k stored
+observations and OOM-killed the pipeline's worker. Within one position, results are ordered by
+declination: the controller sorts the candidates by dec and binary-searches each position's
+±radius slice before the haversine, instead of testing every candidate against every position.
 
 <details>
 <summary>Request example</summary>

@@ -236,6 +236,10 @@ class SourcesController extends BaseApiController
      * Batch cone search for sources near multiple sky positions.
      * Returns historical observations (mag, flux, frame_id, obs_time) for anomaly detection.
      * Reduces API calls from O(N) to O(1) when processing frames with many sources.
+     *
+     * Optional `uncatalogued_only` (bool): only observations of sources whose
+     * catalog_name is NULL or 'MPC' — the pipeline's wide-cone moving-object
+     * query. Results within a position are ordered by declination.
      */
     public function nearBatch(): ResponseInterface
     {
@@ -256,9 +260,15 @@ class SourcesController extends BaseApiController
             return $this->respondError(400, 'Missing or invalid required field: radius_arcsec');
         }
 
-        $positions    = $body['positions'];
-        $radiusArcsec = (float) $body['radius_arcsec'];
-        $beforeTime   = $body['before_time'] ?? null;
+        $positions        = $body['positions'];
+        $radiusArcsec     = (float) $body['radius_arcsec'];
+        $beforeTime       = $body['before_time'] ?? null;
+        // Only observations of sources no catalog explains (or MPC). The
+        // pipeline sets it on its wide-cone moving-object query: a catalogued
+        // star's position is never evidence of motion, and on a field observed
+        // many times an unfiltered wide cone is almost entirely stars — the
+        // 228-frame NGC 7331 run OOM-killed the pipeline's worker on it.
+        $uncataloguedOnly = filter_var($body['uncatalogued_only'] ?? false, FILTER_VALIDATE_BOOLEAN);
 
         // Parse before_time if provided
         $beforeMysql = null;
@@ -338,11 +348,16 @@ class SourcesController extends BaseApiController
 
         $sql = 'SELECT so.id, so.source_id, so.frame_id, so.ra, so.dec, so.mag, so.flux, so.fwhm, so.obs_time, f.filter AS filter
                 FROM source_observations so
-                LEFT JOIN frames f ON f.id = so.frame_id
+                LEFT JOIN frames f ON f.id = so.frame_id'
+            . ($uncataloguedOnly ? ' JOIN sources s ON s.id = so.source_id' : '') . '
                 WHERE (' . implode(' OR ', $raClauses) . ')
                   AND so.dec BETWEEN ? AND ?';
         $params[] = $minDec;
         $params[] = $maxDec;
+
+        if ($uncataloguedOnly) {
+            $sql .= " AND (s.catalog_name IS NULL OR s.catalog_name = 'MPC')";
+        }
 
         if ($beforeMysql !== null) {
             $sql .= ' AND so.obs_time < ?';
@@ -353,8 +368,19 @@ class SourcesController extends BaseApiController
 
 
         // ----------------------------------------------------------------
-        // For each position, filter candidates using Haversine
+        // For each position, filter candidates using Haversine.
+        //
+        // The candidates come from ONE box around all positions, so testing
+        // every candidate against every position is positions × candidates
+        // haversines — ~18M per request for a 300-source frame over a
+        // 62k-observation field. Sorted by declination, each position only
+        // needs the slice within ±radius of its own dec (binary search), and
+        // a cheap RA-window check before the haversine.
         // ----------------------------------------------------------------
+        usort($candidates, static fn (array $a, array $b): int => (float) $a['dec'] <=> (float) $b['dec']);
+        $candidateDecs = array_map(static fn (array $c): float => (float) $c['dec'], $candidates);
+        $nCandidates   = count($candidates);
+
         $results = [];
         $totalMatches = 0;
 
@@ -363,7 +389,30 @@ class SourcesController extends BaseApiController
             $dec = (float) $pos['dec'];
             $posResults = [];
 
-            foreach ($candidates as $obs) {
+            // Widest RA half-width any point within the radius can have: the
+            // one at the highest |dec| the cone reaches.
+            $raWindow = SkyMath::raMargin(min(90.0, abs($dec) + $deg), $deg);
+
+            // First candidate with dec >= $dec - $deg.
+            $lo = 0;
+            $hi = $nCandidates;
+            while ($lo < $hi) {
+                $mid = intdiv($lo + $hi, 2);
+                if ($candidateDecs[$mid] < $dec - $deg) {
+                    $lo = $mid + 1;
+                } else {
+                    $hi = $mid;
+                }
+            }
+
+            for ($k = $lo; $k < $nCandidates && $candidateDecs[$k] <= $dec + $deg; $k++) {
+                $obs = $candidates[$k];
+
+                $dRa = abs((float) $obs['ra'] - $ra);
+                if (min($dRa, 360.0 - $dRa) > $raWindow) {
+                    continue;
+                }
+
                 $distance = SkyMath::haversineArcsec($ra, $dec, (float) $obs['ra'], (float) $obs['dec']);
 
                 if ($distance <= $radiusArcsec) {
