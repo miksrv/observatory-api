@@ -7,6 +7,7 @@
             <?= esc($task['type']) ?>
             · создана <?= $task['created_at'] ? esc(gmdate('Y-m-d H:i:s', strtotime($task['created_at']))) : '—' ?> UTC
             <?php if ($task['scope_object']): ?> · объект: <?= esc($task['scope_object']) ?><?php endif; ?>
+            · pipeline: <?= view('web/partials/task_pipeline', ['task' => $task, 'names' => $pipelineNames]) ?>
         </div>
     </div>
     <a href="/ui/tasks" class="btn btn-outline-secondary">← к списку задач</a>

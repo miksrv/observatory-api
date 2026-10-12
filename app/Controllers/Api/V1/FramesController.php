@@ -3,11 +3,13 @@
 namespace App\Controllers\Api\V1;
 
 use App\Controllers\BaseApiController;
+use App\Libraries\PipelineIdentity;
 use App\Libraries\SkyMath;
 use App\Models\AnomalyModel;
 use App\Models\FrameModel;
 use App\Models\FrameSourceModel;
 use App\Models\ObjectStatsModel;
+use App\Models\PipelineModel;
 use App\Models\SourceModel;
 use App\Models\SourceObservationModel;
 use CodeIgniter\HTTP\ResponseInterface;
@@ -156,6 +158,39 @@ class FramesController extends BaseApiController
         $model      = new FrameModel();
         $existing   = $model->findByFilename($data['filename']);
         $isNewFrame = $existing === null;
+
+        // ----------------------------------------------------------------
+        // Ownership — which pipeline holds this frame's file: the caller,
+        // identified by its API key (see PipelineIdentity). Tasks for the
+        // frame are routed to that pipeline, so a filename already owned by
+        // ANOTHER pipeline must not be taken over by an upsert: that would
+        // overwrite one observatory's frame with another's and send every
+        // later task for it to the wrong server. The name carries object,
+        // filter, exposure and a timestamp, so two sites colliding is rare —
+        // but silent if allowed. A frame with no owner yet (registered before
+        // multi-pipeline support) is claimed by the first pipeline that
+        // re-registers it.
+        // ----------------------------------------------------------------
+        $pipelineId = PipelineIdentity::currentId();
+
+        if (
+            ! $isNewFrame
+            && $pipelineId !== null
+            && ($existing['pipeline_id'] ?? null) !== null
+            && $existing['pipeline_id'] !== $pipelineId
+        ) {
+            $owner = (new PipelineModel())->find($existing['pipeline_id']);
+
+            return $this->respondError(409, 'Frame filename is already registered by another pipeline', [
+                'filename' => $data['filename'],
+                'frame_id' => (string) $existing['id'],
+                'pipeline' => $owner['name'] ?? $existing['pipeline_id'],
+            ]);
+        }
+
+        if ($pipelineId !== null) {
+            $data['pipeline_id'] = $pipelineId;
+        }
 
         // Mount pointing error (see the migration's docblock) is the one set of
         // fields in this payload that must NOT be refreshed by a re-analysis of
@@ -1216,6 +1251,7 @@ class FramesController extends BaseApiController
         return [
             'id'                    => (string) $frame['id'],
             'filename'              => $frame['filename'],
+            'pipeline_id'           => $frame['pipeline_id'] ?? null,
             'obs_time'              => gmdate('Y-m-d\TH:i:s\Z', strtotime($frame['obs_time'])),
             'ra_center'             => (float) $frame['ra_center'],
             'dec_center'            => (float) $frame['dec_center'],

@@ -22,6 +22,15 @@
         </select>
     </div>
     <div class="col-auto">
+        <label class="form-label mb-0">Pipeline</label>
+        <select name="pipeline" class="form-select">
+            <option value="">— все —</option>
+            <?php foreach ($pipelines as $name): ?>
+                <option value="<?= esc($name) ?>" <?= $name === $filterPipeline ? 'selected' : '' ?>><?= esc($name) ?></option>
+            <?php endforeach; ?>
+        </select>
+    </div>
+    <div class="col-auto">
         <label class="form-label mb-0">Объект (scope_object)</label>
         <input type="text" name="object" class="form-control" value="<?= esc($filterObjectQ) ?>">
     </div>
@@ -37,13 +46,13 @@
 <table class="table table-sm table-hover table-striped mb-0">
 <thead class="table-light">
 <tr>
-    <th>ID</th><th>Тип</th><th>Статус</th><th>Объект</th><th>Прогресс</th>
+    <th>ID</th><th>Тип</th><th>Статус</th><th>Pipeline</th><th>Объект</th><th>Прогресс</th>
     <th>Создана (UTC)</th><th>Завершена/начата (UTC)</th><th></th>
 </tr>
 </thead>
 <tbody>
 <?php if (empty($tasks)): ?>
-    <tr><td colspan="8" class="text-center text-muted py-4">Задач не найдено.</td></tr>
+    <tr><td colspan="9" class="text-center text-muted py-4">Задач не найдено.</td></tr>
 <?php endif; ?>
 <?php foreach ($tasks as $task): ?>
     <?php
@@ -60,6 +69,7 @@
         <td><code class="small"><?= esc($task['id']) ?></code></td>
         <td><?= esc($task['type']) ?></td>
         <td><span class="badge <?= $badge ?>"><?= esc($task['status']) ?></span></td>
+        <td class="small"><?= view('web/partials/task_pipeline', ['task' => $task, 'names' => $pipelines]) ?></td>
         <td><?= esc($task['scope_object'] ?? '—') ?></td>
         <td><?= (int) $task['completed_items'] ?>/<?= (int) $task['total_items'] ?>
             <?php if ((int) $task['failed_items'] > 0): ?>

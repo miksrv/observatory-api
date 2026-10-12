@@ -3,6 +3,7 @@
 namespace App\Controllers\Web;
 
 use App\Models\SourceChartModel;
+use App\Models\PipelineModel;
 use App\Models\TaskItemModel;
 use App\Models\TaskModel;
 use CodeIgniter\Controller;
@@ -20,9 +21,10 @@ class TasksController extends Controller
     {
         $model = new TaskModel();
 
-        $status = trim((string) ($this->request->getGet('status') ?? ''));
-        $type   = trim((string) ($this->request->getGet('type') ?? ''));
-        $object = trim((string) ($this->request->getGet('object') ?? ''));
+        $status   = trim((string) ($this->request->getGet('status') ?? ''));
+        $type     = trim((string) ($this->request->getGet('type') ?? ''));
+        $object   = trim((string) ($this->request->getGet('object') ?? ''));
+        $pipeline = trim((string) ($this->request->getGet('pipeline') ?? ''));
 
         if ($status !== '') {
             $model = $model->where('status', $status);
@@ -32,6 +34,17 @@ class TasksController extends Controller
         }
         if ($object !== '') {
             $model = $model->where('scope_object', $object);
+        }
+        // `pipeline` is a pipeline NAME (readable, linkable from the dashboard).
+        $pipelineNames = (new PipelineModel())->getAllNames();
+
+        if ($pipeline !== '') {
+            $pipelineId = array_search($pipeline, $pipelineNames, true) ?: '';
+            // Targeted at this pipeline or claimed by it (an untargeted task it picked up).
+            $model = $model->groupStart()
+                ->where('pipeline_id', $pipelineId)
+                ->orWhere('claimed_by', $pipelineId)
+                ->groupEnd();
         }
 
         $tasks = $model->orderBy('created_at', 'DESC')->findAll(200);
@@ -43,6 +56,8 @@ class TasksController extends Controller
             'filterStatus'  => $status,
             'filterType'    => $type,
             'filterObjectQ' => $object,
+            'pipelines'      => $pipelineNames,
+            'filterPipeline' => $pipeline,
         ]));
     }
 
@@ -70,9 +85,10 @@ class TasksController extends Controller
         }
 
         return $this->response->setBody(view('web/tasks_show', [
-            'task'         => $task,
-            'items'        => $items,
-            'chartsByItem' => $chartsByItem,
+            'task'          => $task,
+            'items'         => $items,
+            'chartsByItem'  => $chartsByItem,
+            'pipelineNames' => (new PipelineModel())->getAllNames(),
         ]));
     }
 

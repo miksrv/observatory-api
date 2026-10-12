@@ -4,7 +4,7 @@ namespace App\Controllers\Web;
 
 use App\Models\AnomalyModel;
 use App\Models\SourceChartModel;
-use App\Models\TaskItemModel;
+use App\Models\SourceObservationModel;
 use App\Models\TaskModel;
 use CodeIgniter\Controller;
 use CodeIgniter\HTTP\ResponseInterface;
@@ -16,6 +16,8 @@ use CodeIgniter\HTTP\ResponseInterface;
  */
 class AnomaliesController extends Controller
 {
+    use RedirectsToCreatedTasks;
+
     public function index(): ResponseInterface
     {
         $filters = [
@@ -139,6 +141,9 @@ class AnomaliesController extends Controller
      *
      * Each item's `payload.anomaly_ids` is scoped to just that type's own anomaly ids, for
      * traceability, rather than the whole group's flattened list.
+     *
+     * Items are split into one task per pipeline that can draw them — the owner of each source's
+     * latest frame (SourceObservationModel::getChartPipelineForSources()).
      */
     public function createTask(): ResponseInterface
     {
@@ -155,10 +160,15 @@ class AnomaliesController extends Controller
             return redirect()->back()->with('error', 'Ни одна из выбранных групп не привязана к источнику (source_id).');
         }
 
-        $items = [];
+        $owners = (new SourceObservationModel())
+            ->getChartPipelineForSources(array_values(array_unique(array_column($groupsData, 'source_id'))));
+
+        $itemsByPipeline = [];
+        $itemCount       = 0;
         foreach ($groupsData as $g) {
             foreach ($g['ids_by_type'] as $anomalyType => $anomalyIds) {
-                $items[] = [
+                $itemCount++;
+                $itemsByPipeline[$owners[$g['source_id']] ?? ''][] = [
                     'source_id' => $g['source_id'],
                     'payload'   => [
                         'anomaly_type' => $anomalyType,
@@ -170,25 +180,21 @@ class AnomaliesController extends Controller
         }
 
         $taskModel = new TaskModel();
-        $taskId    = $taskModel->insert([
-            'type'        => 'GENERATE_CHARTS',
-            'status'      => 'PENDING',
-            'total_items' => count($items),
-        ], true);
+        $created   = $taskModel->createPerPipeline('GENERATE_CHARTS', $itemsByPipeline);
 
-        if ($taskId === false) {
+        if ($created === false) {
             return redirect()->back()->with('error', 'Не удалось создать задачу: ' . implode(', ', $taskModel->errors()));
         }
 
-        (new TaskItemModel())->insertForTask($taskId, $items);
-
-        // count($items) can now exceed count($groupsData) — a group with both MOVING_UNKNOWN and
+        // The item count can exceed count($groupsData) — a group with both MOVING_UNKNOWN and
         // UNKNOWN anomalies contributes 2 items (one chart style each) from a single source — so
         // the message reports item and source counts separately rather than a single ambiguous
         // number.
-        return redirect()->to('/ui/tasks/' . $taskId)
-            ->with('success', "Задача {$taskId} создана: GENERATE_CHARTS, " . count($items)
-                . ' чарт(ов) для ' . count($groupsData) . ' источник(ов).');
+        return $this->redirectToCreatedTasks(
+            $created,
+            'GENERATE_CHARTS',
+            "Всего {$itemCount} чарт(ов) для " . count($groupsData) . ' источник(ов).',
+        );
     }
 
     /**

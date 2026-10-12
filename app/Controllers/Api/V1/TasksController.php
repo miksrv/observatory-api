@@ -3,6 +3,7 @@
 namespace App\Controllers\Api\V1;
 
 use App\Controllers\BaseApiController;
+use App\Libraries\PipelineIdentity;
 use App\Models\FrameModel;
 use App\Models\SourceChartModel;
 use App\Models\TaskItemModel;
@@ -20,6 +21,12 @@ use CodeIgniter\HTTP\ResponseInterface;
  * DELETE_FRAME is operator-initiated frame deletion — the pipeline only relocates the frame's file
  * (FITS_ARCHIVE -> FITS_REJECTED, never deleted); postItemsProgress() below performs the actual
  * DB-side cascade delete (FrameModel::deleteWithDependents()) once an item is reported DONE.
+ *
+ * Several pipelines can share this queue, each with its own API key (see PipelineIdentity). A
+ * task's `pipeline_id` targets it at the one pipeline holding the files it needs (NULL = any
+ * pipeline); the worker polls with `claimable=1` and the claim in update() refuses a targeted task
+ * to anyone else. A task created through this API is targeted at its creator — a pipeline only ever
+ * queues work on its own files (watcher batches, recovery re-queues).
  */
 class TasksController extends BaseApiController
 {
@@ -105,11 +112,14 @@ class TasksController extends BaseApiController
             return $this->respondError(400, 'parent_task_id does not refer to an existing task');
         }
 
+        $pipelineId = PipelineIdentity::currentId();
+
         $taskModel = new TaskModel();
 
         $taskId = $taskModel->insert([
             'type'            => $type,
             'status'          => 'PENDING',
+            'pipeline_id'     => $pipelineId,
             'scope_object'    => $scope['object'] ?? null,
             'scope_date_from' => $scopeDateFrom,
             'scope_date_to'   => $scopeDateTo,
@@ -131,6 +141,7 @@ class TasksController extends BaseApiController
             'id'          => (string) $taskId,
             'type'        => $type,
             'status'      => 'PENDING',
+            'pipeline_id' => $pipelineId,
             'total_items' => count($items),
             'message'     => 'Task created successfully',
         ]);
@@ -140,6 +151,10 @@ class TasksController extends BaseApiController
      * GET /api/v1/tasks
      *
      * List tasks. Filters (all optional): status, type, object.
+     *
+     * `claimable=1` (optional) narrows to the tasks the CALLER may claim: targeted at it, or
+     * untargeted. A worker polls with it, so a task waiting for a different (possibly offline)
+     * pipeline never sits at the head of its FIFO.
      *
      * `order` (optional, `asc`|`desc`, default `desc`) controls sort by `created_at`. Default
      * `desc` (most recent first) suits a human/dashboard view; a FIFO worker polling for
@@ -155,6 +170,8 @@ class TasksController extends BaseApiController
         $object = $this->request->getGet('object');
         $order  = $this->request->getGet('order');
 
+        $claimable = in_array($this->request->getGet('claimable'), ['1', 'true'], true);
+
         if ($status !== null && $status !== '') {
             $model = $model->where('status', $status);
         }
@@ -163,6 +180,12 @@ class TasksController extends BaseApiController
         }
         if ($object !== null && $object !== '') {
             $model = $model->where('scope_object', $object);
+        }
+        if ($claimable) {
+            $model = $model->groupStart()
+                ->where('pipeline_id', PipelineIdentity::currentId())
+                ->orWhere('pipeline_id', null)
+                ->groupEnd();
         }
 
         $sortDir = (is_string($order) && strtolower($order) === 'asc') ? 'ASC' : 'DESC';
@@ -267,8 +290,23 @@ class TasksController extends BaseApiController
         // (API audit 2026-08-20, finding C2). The status guard in the WHERE
         // clause lets exactly one of them through; the other gets 409 and
         // must not process the task.
+        //
+        // A targeted task (pipeline_id set) needs files only that pipeline has, so only that
+        // pipeline may claim it — identified by its API key. The worker already polls with
+        // claimable=1; this is the server-side guarantee behind it.
         // ----------------------------------------------------------------
         if ($status === 'RUNNING') {
+            $claimant = PipelineIdentity::currentId();
+
+            if ($task['pipeline_id'] !== null && $task['pipeline_id'] !== $claimant) {
+                return $this->respondError(409, 'Task is targeted at another pipeline', [
+                    'task_id'     => $id,
+                    'pipeline_id' => $task['pipeline_id'],
+                ]);
+            }
+
+            $data['claimed_by'] = $claimant;
+
             $db = \Config\Database::connect();
             $db->table('tasks')
                 ->where('id', $id)
@@ -286,6 +324,12 @@ class TasksController extends BaseApiController
             }
 
             return $this->respondOk(['task' => $this->formatTask($model->find($id))]);
+        }
+
+        // Back in the queue (an operator resetting a task a crashed worker left RUNNING): nobody
+        // holds it any more.
+        if ($status === 'PENDING') {
+            $data['claimed_by'] = null;
         }
 
         $model->update($id, $data);
@@ -525,6 +569,8 @@ class TasksController extends BaseApiController
             'id'              => $task['id'],
             'type'            => $task['type'],
             'status'          => $task['status'],
+            'pipeline_id'     => $task['pipeline_id'] ?? null,
+            'claimed_by'      => $task['claimed_by'] ?? null,
             'scope_object'    => $task['scope_object'],
             'scope_date_from' => $task['scope_date_from'] ? gmdate('Y-m-d\TH:i:s\Z', strtotime($task['scope_date_from'])) : null,
             'scope_date_to'   => $task['scope_date_to']   ? gmdate('Y-m-d\TH:i:s\Z', strtotime($task['scope_date_to']))   : null,

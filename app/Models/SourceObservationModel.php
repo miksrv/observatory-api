@@ -172,6 +172,42 @@ class SourceObservationModel extends BaseModel
     }
 
     /**
+     * Which pipeline should render each source's charts: the owner of the frame holding the
+     * source's latest observation. A finder chart is built on the latest epoch's pixels (every
+     * other epoch is only projected onto it or skipped when its file is not local — see
+     * observatory-pipeline's modules/finder_chart), so the pipeline holding that frame is the
+     * only one that can draw it at all.
+     *
+     * @param string[] $sourceIds
+     *
+     * @return array<string, ?string> source_id => pipeline_id (null = owner unknown); sources
+     *                                with no observations are absent.
+     */
+    public function getChartPipelineForSources(array $sourceIds): array
+    {
+        if ($sourceIds === []) {
+            return [];
+        }
+
+        $rows = $this->db->table($this->table . ' so')
+            ->select('so.source_id, f.pipeline_id')
+            ->join('frames f', 'f.id = so.frame_id')
+            ->whereIn('so.source_id', $sourceIds)
+            ->orderBy('so.source_id', 'ASC')
+            ->orderBy('so.obs_time', 'DESC')
+            ->get()->getResultArray();
+
+        $owners = [];
+        foreach ($rows as $row) {
+            if (! array_key_exists($row['source_id'], $owners)) {
+                $owners[$row['source_id']] = $row['pipeline_id'];
+            }
+        }
+
+        return $owners;
+    }
+
+    /**
      * Find every observation within radius of (ra, dec), nearest-first,
      * regardless of which source it belongs to.
      *

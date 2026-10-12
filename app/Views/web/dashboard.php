@@ -46,6 +46,59 @@
 </div>
 
 <div class="card shadow-sm mb-4">
+    <div class="card-header d-flex justify-content-between">
+        <span>Pipeline</span>
+        <span class="text-muted small">Общих задач в очереди (для любого pipeline): <?= (int) $pendingShared ?></span>
+    </div>
+    <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>ID</th><th>Статус</th><th>Последний запрос (UTC)</th><th>IP</th>
+                    <th>Выполняет</th><th>В очереди (свои)</th><th>Кадров</th><th>Зарегистрирован (UTC)</th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php if (empty($pipelines)): ?>
+                <tr><td colspan="8" class="text-center text-muted py-3">
+                    Pipeline не зарегистрированы. На сервере API:
+                    <code>php spark pipeline:create &lt;имя&gt;</code> — выдаст ключ для <code>API_KEY</code> в его <code>.env</code>.
+                </td></tr>
+            <?php endif; ?>
+            <?php foreach ($pipelines as $p): ?>
+                <?php
+                [$badge, $label] = match ($p['status']) {
+                    'online'  => ['bg-success', 'online'],
+                    'stale'   => ['bg-warning text-dark', 'давно не выходил на связь'],
+                    'revoked' => ['bg-secondary', 'ключ отозван'],
+                    default   => ['bg-danger', 'offline'],
+                };
+                $running = $p['running_task'];
+                ?>
+                <tr>
+                    <td><code><?= esc($p['name']) ?></code></td>
+                    <td><span class="badge <?= $badge ?>"><?= esc($label) ?></span></td>
+                    <td class="small"><?= esc($p['last_seen_at'] ?? '—') ?></td>
+                    <td class="small"><?= esc($p['last_ip'] ?? '—') ?></td>
+                    <td class="small">
+                        <?php if ($running !== null): ?>
+                            <a href="/ui/tasks/<?= esc($running['id']) ?>"><?= esc($running['type']) ?></a>
+                            <?= (int) $running['completed_items'] + (int) $running['failed_items'] ?>/<?= (int) $running['total_items'] ?>
+                        <?php else: ?>
+                            <span class="text-muted">простаивает</span>
+                        <?php endif; ?>
+                    </td>
+                    <td><a href="/ui/tasks?status=PENDING&amp;pipeline=<?= esc($p['name'], 'url') ?>"><?= (int) $p['pending_own'] ?></a></td>
+                    <td><a href="/ui/frames?pipeline=<?= esc($p['name'], 'url') ?>"><?= (int) $p['frame_count'] ?></a></td>
+                    <td class="small"><?= esc($p['created_at'] ?? '—') ?></td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card shadow-sm mb-4">
     <div class="card-header">Задачи по статусам</div>
     <div class="card-body p-0">
         <table class="table table-sm mb-0 text-center">

@@ -101,6 +101,7 @@ CLI commands, see [`../README.md`](../README.md).
 |--------|------|-------|
 | `id` | CHAR(24) PK | |
 | `filename` | VARCHAR(255) NOT NULL | |
+| `pipeline_id` | CHAR(24) NULL FK→pipelines.id, `ON DELETE SET NULL` | The pipeline holding this frame's file (the caller of `POST /frames`); frame-scoped tasks are routed to it. NULL = unknown (registered before multi-pipeline support) — claimed by the first pipeline that re-registers the frame |
 | `obs_time` | DATETIME NOT NULL | Observation start time UTC |
 | `ra_center`, `dec_center` | DOUBLE NOT NULL | Frame center (degrees) |
 | `fov_deg` | FLOAT NOT NULL | Field of view (degrees) |
@@ -122,7 +123,7 @@ CLI commands, see [`../README.md`](../README.md).
 | `qc_star_count` | INT | |
 | `created_at` | DATETIME | |
 
-**Indexes:** `(ra_center, dec_center)`, `obs_time`, `filename`
+**Indexes:** `(ra_center, dec_center)`, `obs_time`, `filename`, `pipeline_id`
 
 ### `sources` (Source Catalog)
 
@@ -239,6 +240,8 @@ one `anomaly_type` over its lifetime, each needing its own rendering (see
 | `id` | CHAR(24) PK | |
 | `type` | ENUM('ANALYZE', 'DETECT_ANOMALIES', 'GENERATE_CHARTS', 'PREVIEW_CATALOG_MATCH', 'DELETE_FRAME', 'RESTART') NOT NULL | `PREVIEW_CATALOG_MATCH` is a diagnostic tool; `DELETE_FRAME` is operator-initiated frame deletion (see below); `RESTART` is a signal task (no items) — see observatory-pipeline's CLAUDE.md |
 | `status` | ENUM('PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED') DEFAULT 'PENDING' | |
+| `pipeline_id` | CHAR(24) NULL FK→pipelines.id, `ON DELETE SET NULL` | Target: the only pipeline allowed to claim the task (`PATCH /tasks/{id}` → `409` for anyone else). NULL = any pipeline |
+| `claimed_by` | CHAR(24) NULL FK→pipelines.id, `ON DELETE SET NULL` | The pipeline that claimed it (display only); cleared when reset to `PENDING` |
 | `scope_object` | VARCHAR(100) NULL | Descriptive only — `task_items` is the authoritative scope |
 | `scope_date_from`, `scope_date_to` | DATETIME NULL | Descriptive only, same as above |
 | `total_items`, `completed_items`, `failed_items` | INT DEFAULT 0 | Progress counters, bumped atomically by `TaskModel::bumpProgress()` |
@@ -247,7 +250,7 @@ one `anomaly_type` over its lifetime, each needing its own rendering (see
 | `started_at`, `finished_at` | DATETIME NULL | |
 | `created_at` | DATETIME | |
 
-**Indexes:** `status`, `type`, `scope_object`, `parent_task_id`
+**Indexes:** `status`, `type`, `scope_object`, `parent_task_id`, `(status, pipeline_id)`, `claimed_by`
 
 Status reaches `COMPLETED` automatically once `completed_items + failed_items >= total_items`
 (see `TaskModel::bumpProgress()`) — `FAILED`/`CANCELLED` are always set explicitly via
@@ -274,6 +277,28 @@ Status reaches `COMPLETED` automatically once `completed_items + failed_items >=
 Exactly one of `filename` / `frame_id` / `source_id` is meaningful per row — which one depends on
 the parent task's `type`, not on the row itself; there's no discriminator column because the
 parent already disambiguates it.
+
+### `pipelines` (API Clients)
+
+One row per observatory-pipeline instance (one per observatory server) — its API key and
+heartbeat. Rows are managed with `php spark pipeline:create|list|rotate|revoke|rename`;
+`ApiKeyFilter` authenticates every `/api/v1` request against `key_hash` and refreshes
+`last_seen_at`/`last_ip` after each successful one. Feeds the debug UI's per-pipeline status
+(online < 5 min, stale < 30 min, offline otherwise) and the per-pipeline `RESTART` fan-out on a
+settings save. The migration registers the pre-existing `.env` `app.apiKey` as `default`.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | CHAR(24) PK | Generated; what `frames`/`tasks` reference, so renaming or rotating the key keeps ownership |
+| `name` | VARCHAR(64) NOT NULL UNIQUE | Display name (`A-Z a-z 0-9 . _ -`) |
+| `key_hash` | CHAR(64) NOT NULL UNIQUE | SHA-256 of the API key; the key itself is never stored |
+| `last_seen_at` | DATETIME NULL | UTC, last successful request |
+| `last_ip` | VARCHAR(45) NULL | Address of the last request |
+| `revoked_at` | DATETIME NULL | Set → key rejected (`pipeline:revoke`); cleared by `pipeline:rotate` |
+| `created_at` | DATETIME | |
+
+Pipelines are revoked, never deleted — frames and tasks keep pointing at them (the FKs are
+`ON DELETE SET NULL` only so a manual DELETE can't fail or cascade into science data).
 
 ### `settings` (Pipeline Configuration)
 
