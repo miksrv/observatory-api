@@ -1,7 +1,7 @@
 name: Deploy
 
-# Uploads the API to the shared hosting over FTP (same host as geometki, own
-# FTP account whose root is the site's document root). The production .env is
+# Uploads the API to the shared hosting (jino) over FTP with TLS, into an
+# account whose root is the site's document root. The production .env is
 # maintained by hand on the hosting and never uploaded or overwritten here; the
 # hosting has no shell, so migrations are not run here either — see README.
 on:
@@ -15,6 +15,11 @@ on:
       - 'Dockerfile'
       - '.github/workflows/tests.yml'
   workflow_dispatch:
+    inputs:
+      debug:
+        description: Log the full FTP dialog (lftp debug)
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-production
@@ -62,9 +67,23 @@ jobs:
           FTP_HOSTNAME: ${{ secrets.FTP_HOSTNAME }}
           FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
           LFTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+        # FTP_HOSTNAME is the bare host (FTP, port 21): the hosting's SFTP port
+        # 2222 is unreachable from GitHub's runners. An sftp://host:port URL
+        # still works from elsewhere. Secrets pasted into the web form can carry a
+        # stray newline/space, which the server rejects as a bad login: trim
+        # them and log the lengths (never the values).
         run: |
-          lftp --env-password -u "$FTP_USERNAME" "$FTP_HOSTNAME" <<'EOF'
+          trim() { printf '%s' "$1" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
+          FTP_HOSTNAME="$(trim "$FTP_HOSTNAME")"
+          FTP_USERNAME="$(trim "$FTP_USERNAME")"
+          LFTP_PASSWORD="$(printf '%s' "$LFTP_PASSWORD" | tr -d '\r\n')"
+          export LFTP_PASSWORD
+          echo "FTP host: ${#FTP_HOSTNAME} chars, user: ${#FTP_USERNAME} chars, password: ${#LFTP_PASSWORD} chars"
+          LFTP_ARGS=()
+          if [ "${{ inputs.debug }}" = "true" ]; then LFTP_ARGS=(-e "debug -t 3"); fi
+          lftp --env-password -u "$FTP_USERNAME" "${LFTP_ARGS[@]}" "$FTP_HOSTNAME" <<'EOF'
           set cmd:fail-exit yes
+          set sftp:auto-confirm yes
           set net:max-retries 3
           set net:timeout 30
           set ssl:verify-certificate false

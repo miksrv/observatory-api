@@ -112,10 +112,11 @@ The API will be available at: `http://localhost:8080/api/v1`
 
 Production runs on shared hosting at **https://observatory.miksoft.pro**, deployed by GitHub
 Actions (`.github/workflows/deploy.yml`) on every push to `main` that touches the app (docs,
-tests and Docker files are ignored), or by hand from the Actions tab (*Run workflow*).
+tests and Docker files are ignored), or by hand from the Actions tab (*Run workflow*;
+its *debug* option logs the full transfer dialog).
 
-The workflow installs Composer dependencies without dev packages and uploads over FTP into the
-root of a dedicated FTP account, which is the site's document root. The root `.htaccess` routes
+The workflow installs Composer dependencies without dev packages and uploads over FTP (TLS) into the
+root of a dedicated hosting account (jino), which is the site's document root. The root `.htaccess` routes
 every request into `public/`, so `app/`, `vendor/`, `writable/` and `.env` are never served.
 
 | Path on the hosting | On each deploy |
@@ -129,8 +130,8 @@ Repository settings (*Settings → Secrets and variables → Actions*):
 
 | Name | Kind | Value |
 |---|---|---|
-| `FTP_HOSTNAME` | secret | FTP host of the hosting |
-| `FTP_USERNAME` | secret | the FTP account whose root is the site's document root |
+| `FTP_HOSTNAME` | secret | the bare FTP host — not `sftp://…:2222`: that port is unreachable from GitHub's runners |
+| `FTP_USERNAME` | secret | the account whose root is the site's document root |
 | `FTP_PASSWORD` | secret | its password |
 | `APP_URL` | variable | `https://observatory.miksoft.pro` — enables the post-deploy smoke test of `GET /` |
 
