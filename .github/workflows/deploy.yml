@@ -1,0 +1,85 @@
+name: Deploy
+
+# Uploads the API to the shared hosting over FTP (same host as geometki, own
+# FTP account whose root is the site's document root). The production .env is
+# maintained by hand on the hosting and never uploaded or overwritten here; the
+# hosting has no shell, so migrations are not run here either — see README.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'tests/**'
+      - 'docker-compose.yml'
+      - 'Dockerfile'
+      - '.github/workflows/tests.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Production
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: intl, mbstring, json, mysqlnd
+          coverage: none
+
+      - name: Get composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-composer-${{ hashFiles('composer.lock') }}
+          restore-keys: ${{ runner.os }}-composer-
+
+      - name: Install dependencies
+        run: composer install --no-dev --no-progress --no-interaction --prefer-dist --optimize-autoloader
+
+      - name: Install lftp
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq lftp
+
+      # app/ and vendor/ are mirrored with --delete (stale files removed);
+      # public/ and writable/ never are — writable/uploads holds the charts
+      # the pipeline uploaded, writable/logs the server's logs. Nothing at the
+      # FTP root other than .htaccess and spark is touched (.env included).
+      - name: Upload
+        env:
+          FTP_HOSTNAME: ${{ secrets.FTP_HOSTNAME }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          LFTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+        run: |
+          lftp --env-password -u "$FTP_USERNAME" "$FTP_HOSTNAME" <<'EOF'
+          set cmd:fail-exit yes
+          set net:max-retries 3
+          set net:timeout 30
+          set ssl:verify-certificate false
+          put -O / .htaccess
+          put -O / spark
+          mirror -R --delete --parallel=10 app /app
+          mirror -R --delete --parallel=10 vendor /vendor
+          mirror -R --parallel=10 public /public
+          mirror -R --parallel=10 writable /writable
+          bye
+          EOF
+
+      - name: Smoke test
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        if: env.APP_URL != ''
+        run: |
+          curl -fsS --retry 3 --retry-delay 5 "$APP_URL/" | tee /dev/stderr | grep -Eq '"status": ?"ok"'

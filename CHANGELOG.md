@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1
+
+### Patch Changes
+
+- Deploy: GitHub Actions uploads the API to the shared hosting over FTP on every push to `main`; `.env` on the hosting is never overwritten
+
 ## 1.0.0
 
 ### Major Changes

@@ -1,0 +1,5 @@
+# Shared hosting serves the FTP root as the document root: route every request
+# into public/, so app/, vendor/, writable/ and .env are never reachable directly.
+RewriteEngine on
+RewriteCond %{REQUEST_URI} !^/public/
+RewriteRule ^(.*)$ public/$1 [L]

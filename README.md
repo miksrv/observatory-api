@@ -108,6 +108,38 @@ The API will be available at: `http://localhost:8080/api/v1`
 
 ---
 
+## Production Deployment
+
+Production runs on shared hosting at **https://observatory.miksoft.pro**, deployed by GitHub
+Actions (`.github/workflows/deploy.yml`) on every push to `main` that touches the app (docs,
+tests and Docker files are ignored), or by hand from the Actions tab (*Run workflow*).
+
+The workflow installs Composer dependencies without dev packages and uploads over FTP into the
+root of a dedicated FTP account, which is the site's document root. The root `.htaccess` routes
+every request into `public/`, so `app/`, `vendor/`, `writable/` and `.env` are never served.
+
+| Path on the hosting | On each deploy |
+|---|---|
+| `app/`, `vendor/` | mirrored, stale files deleted |
+| `public/`, `writable/` | uploaded, nothing deleted (`writable/uploads` holds the pipeline's charts) |
+| `.htaccess`, `spark` | overwritten |
+| `.env` | **never touched** — maintained by hand on the hosting |
+
+Repository settings (*Settings → Secrets and variables → Actions*):
+
+| Name | Kind | Value |
+|---|---|---|
+| `FTP_HOSTNAME` | secret | FTP host of the hosting |
+| `FTP_USERNAME` | secret | the FTP account whose root is the site's document root |
+| `FTP_PASSWORD` | secret | its password |
+| `APP_URL` | variable | `https://observatory.miksoft.pro` — enables the post-deploy smoke test of `GET /` |
+
+**First deployment:** after the first run, create the database and `.env` on the hosting
+(`CI_ENVIRONMENT = production`, `app.baseURL`, `database.default.*`, and `app.apiKey` — the
+migrations register that key as pipeline `default`), then run the migrations. The workflow
+does not run migrations: the hosting has no shell, so run them by hand after every release that
+adds one (its `CHANGELOG.md` line says so).
+
 ## Authentication
 
 Every request from the pipeline must include:
