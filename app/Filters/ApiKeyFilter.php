@@ -2,6 +2,8 @@
 
 namespace App\Filters;
 
+use App\Libraries\PipelineIdentity;
+use App\Models\PipelineModel;
 use CodeIgniter\Filters\FilterInterface;
 use CodeIgniter\HTTP\RequestInterface;
 use CodeIgniter\HTTP\ResponseInterface;
@@ -9,14 +11,18 @@ use CodeIgniter\HTTP\ResponseInterface;
 /**
  * ApiKeyFilter
  *
- * Validates the X-API-Key header on every request routed through it.
- * Returns 401 Unauthorized when the key is absent or does not match
- * the value configured in app.apiKey (.env).
+ * Validates the X-API-Key header on every request routed through it. Each observatory-pipeline
+ * instance has its own key, stored as a SHA-256 in `pipelines` (issued with
+ * `php spark pipeline:create`); the matching row becomes the request's identity
+ * (PipelineIdentity). Returns 401 Unauthorized when the key is absent, unknown or revoked.
+ *
+ * `app.apiKey` in .env is no longer read here — the migration that introduced `pipelines`
+ * registered its value as pipeline `default`.
  */
 class ApiKeyFilter implements FilterInterface
 {
     /**
-     * Checks the incoming X-API-Key header against the configured secret.
+     * Resolves the X-API-Key header to its pipeline.
      *
      * @param RequestInterface $request
      * @param list<string>|null $arguments
@@ -24,23 +30,23 @@ class ApiKeyFilter implements FilterInterface
      */
     public function before(RequestInterface $request, $arguments = null)
     {
-        $configuredKey = config('App')->apiKey;
-        $providedKey   = $request->getHeaderLine('X-API-Key');
+        PipelineIdentity::set(null);
 
-        // hash_equals() compares in constant time regardless of where the
-        // strings first differ, unlike !==, which short-circuits on the
-        // first mismatched byte and can leak timing information about the
-        // secret to an attacker probing the endpoint.
-        if ($configuredKey === '' || ! hash_equals($configuredKey, $providedKey)) {
+        $pipeline = (new PipelineModel())->findByKey($request->getHeaderLine('X-API-Key'));
+
+        if ($pipeline === null) {
             return response()
                 ->setStatusCode(ResponseInterface::HTTP_UNAUTHORIZED)
                 ->setJSON(['error' => 'Unauthorized', 'details' => (object) []]);
         }
+
+        PipelineIdentity::set($pipeline);
     }
 
     /**
-     * After a successful API request, update the pipeline heartbeat timestamp
-     * so we can tell whether the pipeline service is online.
+     * After a successful API request, update the calling pipeline's heartbeat so the UI can tell
+     * whether it is online — its own `pipelines` row, plus the legacy single
+     * `pipeline_last_seen_at` setting.
      *
      * @param RequestInterface  $request
      * @param ResponseInterface $response
@@ -50,11 +56,19 @@ class ApiKeyFilter implements FilterInterface
     public function after(RequestInterface $request, ResponseInterface $response, $arguments = null): void
     {
         // Only record heartbeat for successful (2xx) responses.
-        if ($response->getStatusCode() >= 200 && $response->getStatusCode() < 300) {
-            db_connect()
-                ->table('settings')
-                ->where('param', 'pipeline_last_seen_at')
-                ->update(['value' => gmdate('Y-m-d H:i:s')]);
+        if ($response->getStatusCode() < 200 || $response->getStatusCode() >= 300) {
+            return;
         }
+
+        $pipelineId = PipelineIdentity::currentId();
+
+        if ($pipelineId !== null) {
+            (new PipelineModel())->touch($pipelineId, $request->getIPAddress());
+        }
+
+        db_connect()
+            ->table('settings')
+            ->where('param', 'pipeline_last_seen_at')
+            ->update(['value' => gmdate('Y-m-d H:i:s')]);
     }
 }

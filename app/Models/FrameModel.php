@@ -18,6 +18,7 @@ class FrameModel extends BaseModel
     protected $allowedFields = [
         'id',
         'filename',
+        'pipeline_id',
         'obs_time',
         'ra_center',
         'dec_center',

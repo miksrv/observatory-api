@@ -39,6 +39,23 @@ abstract class DatabaseTestCase extends CIUnitTestCase
                 $name,
             ));
         }
+
+        $this->registerTestApiKey();
+    }
+
+    /**
+     * API keys live in `pipelines` (ApiKeyFilter), not in app.apiKey. Make the key every test sends
+     * (phpunit.xml's app.apiKey) a valid one, as pipeline `default` — the same row the
+     * AddPipelineRouting migration creates from the .env key, which in db_test was whatever .env
+     * held at migration time.
+     */
+    protected function registerTestApiKey(): void
+    {
+        $this->db()->query(
+            'INSERT INTO pipelines (id, name, key_hash) VALUES (?, ?, ?)'
+            . ' ON DUPLICATE KEY UPDATE key_hash = VALUES(key_hash), revoked_at = NULL',
+            [uniqid('', true), 'default', hash('sha256', (string) config('App')->apiKey)],
+        );
     }
 
     /**

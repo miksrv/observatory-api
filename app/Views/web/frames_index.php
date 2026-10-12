@@ -13,6 +13,16 @@
         </select>
     </div>
     <div class="col-auto">
+        <label class="form-label mb-0">Pipeline</label>
+        <select name="pipeline" class="form-select">
+            <option value="">— все —</option>
+            <?php foreach ($pipelines as $name): ?>
+                <option value="<?= esc($name) ?>" <?= $name === $filterPipeline ? 'selected' : '' ?>><?= esc($name) ?></option>
+            <?php endforeach; ?>
+            <option value="<?= esc($pipelineNone) ?>" <?= $filterPipeline === $pipelineNone ? 'selected' : '' ?>>(не указан)</option>
+        </select>
+    </div>
+    <div class="col-auto">
         <label class="form-label mb-0">С даты (obs_time ≥)</label>
         <input type="datetime-local" name="date_from" class="form-control" value="<?= esc($filterDateFrom) ?>">
     </div>
@@ -39,6 +49,7 @@
                 <tr>
                     <th><input type="checkbox" id="checkAll"></th>
                     <th>Filename</th>
+                    <th>Pipeline</th>
                     <th>Object</th>
                     <th>Obs time (UTC)</th>
                     <th>Filter</th>
@@ -53,7 +64,7 @@
             </thead>
             <tbody>
             <?php if (empty($frames)): ?>
-                <tr><td colspan="12" class="text-center text-muted py-4">Ничего не найдено по заданному фильтру.</td></tr>
+                <tr><td colspan="13" class="text-center text-muted py-4">Ничего не найдено по заданному фильтру.</td></tr>
             <?php endif; ?>
             <?php foreach ($frames as $frame): ?>
                 <?php
@@ -67,6 +78,7 @@
                 <tr>
                     <td><input type="checkbox" class="frame-checkbox" name="frame_ids[]" value="<?= esc($frame['id']) ?>"></td>
                     <td class="text-break small"><?= esc($frame['filename']) ?></td>
+                    <td class="small"><?= $frame['pipeline_id'] !== null ? esc($pipelines[$frame['pipeline_id']] ?? $frame['pipeline_id']) : '<span class="text-muted">—</span>' ?></td>
                     <td><?= esc($frame['object'] ?? '—') ?></td>
                     <td class="small"><?= esc(gmdate('Y-m-d H:i:s', strtotime($frame['obs_time']))) ?></td>
                     <td><?= esc($frame['filter'] ?? '—') ?></td>
@@ -97,7 +109,9 @@
                     ANALYZE — по filename (повторный разбор пайплайном с самого начала).<br>
                     PREVIEW_CATALOG_MATCH — по filename, диагностический предпросмотр сопоставления
                     с каталогом без регистрации кадра (обычно для ещё не разобранных файлов; здесь —
-                    просто повторный прогон по filename уже известного кадра).
+                    просто повторный прогон по filename уже известного кадра).<br>
+                    Задача уходит тому pipeline, который хранит файл кадра; выбор из кадров разных
+                    pipeline создаёт по задаче на каждый.
                 </div>
             </div>
             <div>

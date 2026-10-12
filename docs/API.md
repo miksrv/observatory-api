@@ -34,8 +34,21 @@ Content-Type: application/json
 Accept: application/json
 ```
 
-The key is compared against `app.apiKey` (from `.env`) with `hash_equals()`. Missing, empty, or
-mismatched key → **`401 Unauthorized`**:
+Every pipeline has its **own** key. Keys live in the `pipelines` table as SHA-256 hashes (the key
+itself is never stored) and are managed on the API host with spark commands:
+
+```bash
+php spark pipeline:create <name>     # register a pipeline, print its key (shown once)
+php spark pipeline:list              # names, online status, last seen, frames, queue
+php spark pipeline:rotate <name>     # new key, old one rejected at once; also un-revokes
+php spark pipeline:revoke <name>     # reject its key (frames stay assigned to it)
+php spark pipeline:rename <name> <new-name>
+```
+
+(In Docker: `docker compose exec <api-service> php spark pipeline:create <name>`.) The
+migration that introduced `pipelines` registered the then-current `app.apiKey` from `.env` as
+pipeline `default`, so an already deployed pipeline keeps working unchanged; `app.apiKey` is not
+read after that. Missing, unknown or revoked key → **`401 Unauthorized`**:
 
 ```json
 { "error": "Unauthorized", "details": {} }
@@ -45,6 +58,18 @@ mismatched key → **`401 Unauthorized`**:
 writes the current UTC timestamp into `settings.value` where `param = 'pipeline_last_seen_at'`
 (an `internal`-type setting, invisible to `GET /settings` and any future UI). This lets the system
 determine whether the pipeline service is online without a dedicated health-check endpoint.
+
+**Multiple pipelines.** Several observatory-pipeline instances (one per observatory server, each
+holding its own FITS files locally) share one API and database. The key identifies the caller,
+which drives:
+
+- **Heartbeat per pipeline** — every 2xx request updates that pipeline's `last_seen_at`/`last_ip`,
+  shown on the debug UI's dashboard and header (the legacy `pipeline_last_seen_at` setting is still
+  written).
+- **Frame ownership** — `POST /frames` records the caller as `frames.pipeline_id` (see below).
+- **Task routing** — a task's `pipeline_id` names the only pipeline allowed to claim it
+  (`PATCH /tasks/{id}`); the worker polls `GET /tasks?claimable=1`. Tasks created through
+  `POST /tasks` are targeted at their creator.
 
 ---
 
@@ -143,6 +168,12 @@ algorithm) update the frame's record rather than minting a second one; `object_s
 incremented on the genuinely-new-row path, never on an update. See `POST /frames/{id}/sources`
 below for how the sources side of the same re-analysis is reconciled.
 
+**Ownership:** the calling pipeline (identified by its API key) is stored as the frame's
+`pipeline_id` — the pipeline holding its file, which every later frame-scoped task is routed to.
+Re-registering a `filename` already owned by a **different** pipeline is refused with **`409`** (it
+would overwrite one observatory's frame with another's); a frame with no owner yet (registered
+before multi-pipeline support) is claimed by the first pipeline that re-registers it.
+
 **Exception — `pointing_error_arcsec`/`pointing_error_ra_arcsec`/`pointing_error_dec_arcsec` are
 NOT part of "all fields" above.** They're only ever written on the genuinely-new-row path; a
 re-analysis update leaves whatever was stored on first registration untouched, even though the
@@ -232,8 +263,9 @@ astrometry, or photometry run against it.
 The `id` is the same value in both cases when `filename` matches an existing row.
 
 **Errors:** `400` missing required field · `422` a required numeric field (`ra_center`,
-`dec_center`, `fov_deg`) isn't numeric, or `obs_time` isn't a parseable datetime · `500`
-insert/update failed
+`dec_center`, `fov_deg`) isn't numeric, or `obs_time` isn't a parseable datetime · `409`
+`filename` is already registered by another pipeline (`details.pipeline` names the owner,
+`details.frame_id` the frame) · `500` insert/update failed
 
 ---
 
@@ -599,6 +631,12 @@ ids a prior stage produced — without re-running whatever came before it. `REST
 task (no items) that tells the pipeline worker to exit and let Docker restart it with fresh
 remote settings.
 
+**Routing.** `tasks.pipeline_id` targets a task at one pipeline (the one holding the files it
+needs); `null` = any pipeline. The debug UI targets frame-scoped tasks at each frame's owner
+(`frames.pipeline_id`), `GENERATE_CHARTS` at the owner of the source's latest frame, and queues one
+`RESTART` per active pipeline; a task created through `POST /tasks` is targeted at its creator.
+`claimed_by` records which pipeline claimed it.
+
 ### POST /api/v1/tasks
 
 Create a task with its full, fixed item list.
@@ -610,7 +648,7 @@ Create a task with its full, fixed item list.
 `items` may be omitted or empty; any items passed for this type are silently ignored.
 **Optional:** `scope` (`object`, `date_from`, `date_to` — descriptive only, not queried against;
 the `items` array is the authoritative scope), `parent_task_id` (links a re-run to the task it
-re-runs — must refer to an existing task).
+re-runs — must refer to an existing task). The task is targeted at the calling pipeline.
 
 `PREVIEW_CATALOG_MATCH` is observatory-pipeline's diagnostic tool (not part of the
 ANALYZE/DETECT_ANOMALIES/GENERATE_CHARTS production chain) — its items use `filename` like
@@ -650,19 +688,23 @@ reports `DONE`, since the DB-side deletion is the actual goal.
 
 **Response `201 Created`:**
 ```json
-{ "id": "6612f9...", "type": "DETECT_ANOMALIES", "status": "PENDING", "total_items": 2, "message": "Task created successfully" }
+{ "id": "6612f9...", "type": "DETECT_ANOMALIES", "status": "PENDING", "pipeline_id": null, "total_items": 2, "message": "Task created successfully" }
 ```
 
 **Errors:** `400` invalid/missing `type`, missing/empty `items` (except `RESTART`), an item with
-none of `filename`/`frame_id`/`source_id`, unparseable `scope.date_from`/`scope.date_to`, or
-`parent_task_id` doesn't refer to an existing task
+none of `filename`/`frame_id`/`source_id`, unparseable `scope.date_from`/`scope.date_to`,
+or `parent_task_id` doesn't refer to an existing task
 
 ---
 
 ### GET /api/v1/tasks
 
 List tasks, most recent first. Filters (all optional): `status`, `type`, `object` (matches
-`scope_object` exactly). `limit` (default 50, capped at 500).
+`scope_object` exactly). `limit` (default 50, capped at 500). `order=asc` sorts oldest first.
+
+`claimable=1` narrows to the tasks the **calling** pipeline may claim — targeted at it, or
+untargeted. The worker polls `?status=PENDING&claimable=1&order=asc&limit=1`, so a task waiting
+for another (possibly offline) pipeline never sits at the head of its queue.
 
 **Response `200 OK`:**
 ```json
@@ -672,6 +714,8 @@ List tasks, most recent first. Filters (all optional): `status`, `type`, `object
       "id": "6612f9...",
       "type": "DETECT_ANOMALIES",
       "status": "RUNNING",
+      "pipeline_id": "6a1c0e5f2b9d41.20517033",
+      "claimed_by": "6a1c0e5f2b9d41.20517033",
       "scope_object": "M51",
       "scope_date_from": null,
       "scope_date_to": null,
@@ -733,11 +777,15 @@ lost the claim to another worker (or the task was cancelled/completed meanwhile)
 process the task. Every other transition is unconditional — an operator can still reset a stuck
 `RUNNING` task to `PENDING`, and a worker can still mark its own task `FAILED`/`COMPLETED`.
 
+A **targeted** task (`pipeline_id` set) can only be claimed by that pipeline (by its API key) —
+any other pipeline gets `409`. A successful claim records the caller as `claimed_by`; resetting to
+`PENDING` clears it.
+
 **Response `200 OK`:** `{ "task": { "...": "same shape as GET /tasks/{id}'s task" } }`
 
 **Errors:** `400` invalid/missing `status` · `404` task not found · `409` `status: "RUNNING"`
 requested but the task is no longer `PENDING` (`details.status` carries its current status,
-`details.task` the task)
+`details.task` the task), or it is targeted at another pipeline (`details.pipeline_id`)
 
 ---
 

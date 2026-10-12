@@ -4,6 +4,7 @@ namespace App\Controllers\Web;
 
 use App\Models\AnomalyModel;
 use App\Models\FrameModel;
+use App\Models\PipelineModel;
 use App\Models\SourceChartModel;
 use App\Models\SourceModel;
 use App\Models\TaskModel;
@@ -42,6 +43,9 @@ class DashboardController extends Controller
         return $this->response->setBody(view('web/dashboard', [
             'stats'         => $stats,
             'tasksByStatus' => $tasksByStatus,
+            'pipelines'     => (new PipelineModel())->getOverview(),
+            // Untargeted PENDING tasks — any pipeline may take them.
+            'pendingShared' => (new TaskModel())->where('status', 'PENDING')->where('pipeline_id', null)->countAllResults(),
         ]));
     }
 }

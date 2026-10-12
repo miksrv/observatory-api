@@ -7,30 +7,56 @@ $title        = $title ?? 'Observatory — Debug UI';
 $flashSuccess = session()->getFlashdata('success');
 $flashError   = session()->getFlashdata('error');
 
-// Pipeline heartbeat — read directly, no controller dependency.
-$_lastSeen = db_connect()->table('settings')
-    ->where('param', 'pipeline_last_seen_at')
-    ->get()->getRowArray();
-$_lastSeenValue = $_lastSeen['value'] ?? null;
-
-if ($_lastSeenValue !== null && $_lastSeenValue !== '') {
-    $_ago = time() - strtotime($_lastSeenValue . ' UTC');
-    if ($_ago < 60) {
-        $_heartbeatText  = $_ago . ' сек назад';
-        $_heartbeatClass = 'text-success';    // online
-    } elseif ($_ago < 3600) {
-        $_heartbeatText  = intdiv($_ago, 60) . ' мин назад';
-        $_heartbeatClass = $_ago < 300 ? 'text-success' : 'text-warning';
-    } elseif ($_ago < 86400) {
-        $_heartbeatText  = intdiv($_ago, 3600) . ' ч назад';
-        $_heartbeatClass = 'text-warning';
-    } else {
-        $_heartbeatText  = intdiv($_ago, 86400) . ' д назад';
-        $_heartbeatClass = 'text-danger';     // offline
+// Pipeline heartbeats — read directly, no controller dependency. One badge per active (not
+// revoked) pipeline in `pipelines`; with none registered, the legacy single
+// `pipeline_last_seen_at` setting.
+$_agoText = static function (?string $utc): string {
+    if ($utc === null || $utc === '') {
+        return 'нет данных';
     }
-} else {
-    $_heartbeatText  = 'нет данных';
-    $_heartbeatClass = 'text-secondary';
+    $ago = max(0, time() - strtotime($utc . ' UTC'));
+
+    return match (true) {
+        $ago < 60    => $ago . ' сек назад',
+        $ago < 3600  => intdiv($ago, 60) . ' мин назад',
+        $ago < 86400 => intdiv($ago, 3600) . ' ч назад',
+        default      => intdiv($ago, 86400) . ' д назад',
+    };
+};
+$_statusClass = [
+    'online'  => 'text-success',
+    'stale'   => 'text-warning',
+    'offline' => 'text-danger',
+];
+
+try {
+    $_pipelines = (new \App\Models\PipelineModel())->where('revoked_at', null)->orderBy('name', 'ASC')->findAll();
+} catch (\Throwable $e) {
+    $_pipelines = [];  // migration not run yet
+}
+
+$_heartbeats = [];
+foreach ($_pipelines as $_p) {
+    $_heartbeats[] = [
+        'label' => $_p['name'],
+        'text'  => $_agoText($_p['last_seen_at']),
+        'class' => $_statusClass[\App\Models\PipelineModel::statusFor($_p['last_seen_at'])],
+    ];
+}
+
+if ($_heartbeats === []) {
+    $_lastSeen = db_connect()->table('settings')
+        ->where('param', 'pipeline_last_seen_at')
+        ->get()->getRowArray();
+    $_lastSeenValue = $_lastSeen['value'] ?? null;
+
+    $_heartbeats[] = [
+        'label' => 'Pipeline',
+        'text'  => $_agoText($_lastSeenValue),
+        'class' => ($_lastSeenValue === null || $_lastSeenValue === '')
+            ? 'text-secondary'
+            : $_statusClass[\App\Models\PipelineModel::statusFor($_lastSeenValue)],
+    ];
 }
 ?>
 <!doctype html>
@@ -66,7 +92,10 @@ if ($_lastSeenValue !== null && $_lastSeenValue !== '') {
                 <li class="nav-item"><a class="nav-link" href="/ui/settings">Настройки</a></li>
             </ul>
             <span class="navbar-text ms-auto small">
-                Pipeline: <span class="<?= $_heartbeatClass ?> fw-semibold"><?= $_heartbeatText ?></span>
+                <?php foreach ($_heartbeats as $_i => $_hb): ?>
+                    <?= $_i > 0 ? '<span class="mx-1">·</span>' : '' ?>
+                    <?= esc($_hb['label']) ?>: <span class="<?= $_hb['class'] ?> fw-semibold"><?= esc($_hb['text']) ?></span>
+                <?php endforeach; ?>
             </span>
         </div>
     </div>

@@ -66,8 +66,10 @@ database.default.password = password
 database.default.DBDriver = MySQLi
 database.default.port     = 3306
 
-# API key for authenticating pipeline requests
-API_KEY = your-secret-api-key-here
+# Initial pipeline API key. `php spark migrate` registers it once as pipeline `default`;
+# after that keys are managed with `php spark pipeline:*` (see Authentication) and this value
+# is no longer read.
+app.apiKey = your-secret-api-key-here
 ```
 
 ### 3. Start the database (Docker)
@@ -117,6 +119,23 @@ Accept: application/json
 ```
 
 Invalid or missing key → `401 Unauthorized`.
+
+Every pipeline (one per observatory server, each keeping its FITS files locally) has its **own**
+key, which is also how the API knows who is calling: frames are recorded as owned by the pipeline
+that registered them, and tasks for them are claimable only by that pipeline. Keys are stored only
+as SHA-256 hashes and managed on the API host:
+
+```bash
+php spark pipeline:create observatory-b   # prints the key once → that server's API_KEY
+php spark pipeline:list                   # status, last seen, frames, queue
+php spark pipeline:rotate <name>          # replace a key (old one stops working)
+php spark pipeline:revoke <name>          # disable a server
+php spark pipeline:rename <name> <new>
+```
+
+In Docker, prefix with `docker compose exec <api-service>`. The debug UI's dashboard (`/ui`) lists
+every pipeline with its online status, current task and queue. See
+[`docs/API.md`](docs/API.md) → Authentication.
 
 ---
 

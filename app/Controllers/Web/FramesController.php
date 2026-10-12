@@ -3,8 +3,8 @@
 namespace App\Controllers\Web;
 
 use App\Models\FrameModel;
+use App\Models\PipelineModel;
 use App\Models\SourceObservationModel;
-use App\Models\TaskItemModel;
 use App\Models\TaskModel;
 use CodeIgniter\Controller;
 use CodeIgniter\HTTP\ResponseInterface;
@@ -18,6 +18,11 @@ use CodeIgniter\HTTP\ResponseInterface;
  */
 class FramesController extends Controller
 {
+    use RedirectsToCreatedTasks;
+
+    /** `pipeline` filter value selecting frames with no recorded owner. */
+    private const PIPELINE_NONE = '__none__';
+
     /**
      * Task types this page can create from a checked set of *already registered* frames.
      * `item_key` is the task_items column that gets populated (see TaskItemModel); `frame_column`
@@ -30,6 +35,8 @@ class FramesController extends Controller
      * itself via GET /frames/{id} (see observatory-pipeline's worker.py::_run_delete_frame_task()),
      * moves the file to FITS_REJECTED, and TasksController::postItemsProgress() performs the
      * actual DB-side cascade delete once the item is reported DONE.
+     * Every type here needs the frame's FITS file, so createTask() targets each task at the
+     * pipeline that registered the frame (frames.pipeline_id) — one task per owning pipeline.
      * GENERATE_CHARTS is deliberately not offered here — it scopes by source_id, not
      * frame_id/filename, so it doesn't fit a frame checklist at all.
      */
@@ -45,6 +52,7 @@ class FramesController extends Controller
         $object   = trim((string) ($this->request->getGet('object') ?? ''));
         $dateFrom = trim((string) ($this->request->getGet('date_from') ?? ''));
         $dateTo   = trim((string) ($this->request->getGet('date_to') ?? ''));
+        $pipeline = trim((string) ($this->request->getGet('pipeline') ?? ''));
         $limit    = (int) ($this->request->getGet('limit') ?? 200);
         $limit    = $limit > 0 ? min($limit, 2000) : 200;
 
@@ -52,6 +60,15 @@ class FramesController extends Controller
 
         if ($object !== '') {
             $model = $model->where('object', $object);
+        }
+
+        // `pipeline` is a pipeline NAME (readable, linkable from the dashboard).
+        $pipelineNames = (new PipelineModel())->getAllNames();
+
+        if ($pipeline === self::PIPELINE_NONE) {
+            $model = $model->where('pipeline_id', null);
+        } elseif ($pipeline !== '') {
+            $model = $model->where('pipeline_id', array_search($pipeline, $pipelineNames, true) ?: '');
         }
 
         if ($dateFrom !== '') {
@@ -91,6 +108,9 @@ class FramesController extends Controller
         return $this->response->setBody(view('web/frames_index', [
             'frames'         => $frames,
             'objects'        => array_column($objects, 'object'),
+            'pipelines'      => $pipelineNames,
+            'pipelineNone'   => self::PIPELINE_NONE,
+            'filterPipeline' => $pipeline,
             'filterObject'   => $object,
             'filterDateFrom' => $dateFrom,
             'filterDateTo'   => $dateTo,
@@ -130,26 +150,18 @@ class FramesController extends Controller
         $itemKey     = self::CREATABLE_TYPES[$type]['item_key'];
         $frameColumn = self::CREATABLE_TYPES[$type]['frame_column'];
 
-        $items = [];
+        $itemsByPipeline = [];
         foreach ($frames as $frame) {
-            $items[] = [$itemKey => $frame[$frameColumn]];
+            $itemsByPipeline[$frame['pipeline_id'] ?? ''][] = [$itemKey => $frame[$frameColumn]];
         }
 
         $taskModel = new TaskModel();
-        $taskId    = $taskModel->insert([
-            'type'         => $type,
-            'status'       => 'PENDING',
-            'scope_object' => $scopeObj !== '' ? $scopeObj : null,
-            'total_items'  => count($items),
-        ], true);
+        $created   = $taskModel->createPerPipeline($type, $itemsByPipeline, $scopeObj !== '' ? $scopeObj : null);
 
-        if ($taskId === false) {
+        if ($created === false) {
             return redirect()->back()->with('error', 'Не удалось создать задачу: ' . implode(', ', $taskModel->errors()));
         }
 
-        (new TaskItemModel())->insertForTask($taskId, $items);
-
-        return redirect()->to('/ui/tasks/' . $taskId)
-            ->with('success', "Задача {$taskId} создана: {$type}, " . count($items) . ' элемент(ов).');
+        return $this->redirectToCreatedTasks($created, $type);
     }
 }

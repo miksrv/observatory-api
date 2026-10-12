@@ -117,10 +117,23 @@ README.md's Architecture section for the full picture.
   written/read by the API itself and excluded from the settings endpoint and any configuration UI.
   `SettingModel::getAllAsMap()` and `getConfigurable()` filter on `type = 'config'` automatically;
   `getAll()` returns everything including internal rows.
-- **Pipeline heartbeat** (`pipeline_last_seen_at`) is updated in `ApiKeyFilter::after()` on every
-  successful (2xx) authenticated API request — not in any controller. This is a cross-cutting
-  concern handled entirely in the filter layer; adding a new controller or endpoint requires no
-  extra work for the heartbeat to keep working.
+- **Pipeline heartbeat** (`pipeline_last_seen_at`, and per pipeline the `pipelines` row) is updated
+  in `ApiKeyFilter::after()` on every successful (2xx) authenticated API request — not in any
+  controller. This is a cross-cutting concern handled entirely in the filter layer; adding a new
+  controller or endpoint requires no extra work for the heartbeat to keep working.
+- **Several pipelines share one database** (one per observatory server; each holds its own FITS
+  files). Each has its own API key (`pipelines.key_hash`, SHA-256; issued by
+  `php spark pipeline:*`, never by the unauthenticated `/ui`); `ApiKeyFilter` resolves the key to
+  the caller and stores it in `App\Libraries\PipelineIdentity` for the request. `app.apiKey` in
+  .env is only read once, by the migration, to register it as pipeline `default`.
+  `frames.pipeline_id` = who holds the file; `tasks.pipeline_id` = the only pipeline that may claim
+  the task (NULL = any) — enforced in `TasksController::update()`'s claim; the worker polls
+  `GET /tasks?claimable=1`, and `POST /tasks` targets the caller. Anything that creates a task needing
+  local files must target it: the Web controllers go through `TaskModel::createPerPipeline()`
+  (frame tasks → frame owner, `GENERATE_CHARTS` → owner of the source's latest frame,
+  `SourceObservationModel::getChartPipelineForSources()`), `RESTART` → `TaskModel::queueRestart()`
+  per known pipeline. `POST /frames` refuses (`409`) to let one pipeline overwrite another's
+  `filename`. Feature tests: `DatabaseTestCase` registers phpunit's `app.apiKey` as `default`.
 
 ---
 
@@ -134,6 +147,47 @@ README.md's Architecture section for the full picture.
 - Migrations: `app/Database/Migrations/`
 - Run migrations: `php spark migrate`
 - Dev server: `php spark serve`
+
+---
+
+## Versioning and releases
+
+The version lives in one place: the top `## X.Y.Z` heading of `CHANGELOG.md` (repo root). There
+is no other version field to keep in sync.
+
+**While working on a branch:** every change worth noting gets one short line in the top section
+of `CHANGELOG.md`. If the top section is already released (its `vX.Y.Z` tag exists), start a new
+one above it first. Format, as in the existing sections:
+
+```markdown
+## 1.2.0
+
+### Minor Changes
+
+- Tasks: each pipeline polls only the tasks it may claim
+```
+
+- `### Patch Changes` by default; `### Minor Changes` for noticeable new features or behaviour
+  changes (a new endpoint or task type, a schema migration, a changed contract); a major bump
+  practically never.
+- One line per change, `- Area: what changed`, written for someone deploying it, English only.
+- A change that needs the matching release of observatory-pipeline says so on its line, e.g.
+  `(requires observatory-pipeline 1.2.0)` — the two are deployed separately.
+
+**Pull request:** from the feature branch into `main`, titled with the new version (`v1.2.0`),
+the body summarising that version's `CHANGELOG.md` section.
+
+## Release
+
+Only when asked, and only after the version's PR is merged into `main`:
+
+1. `git checkout main && git pull` — release what is on `origin/main`, nothing local.
+2. Tag the merge commit with `v` + the top `CHANGELOG.md` version and push the tag:
+   `git tag v1.2.0 && git push origin v1.2.0`.
+3. Create the GitHub release for that tag: title is the tag name, body is that version's section
+   from `CHANGELOG.md` without the `## X.Y.Z` heading (it starts with `### Minor Changes` /
+   `### Patch Changes`), marked as latest:
+   `gh release create v1.2.0 --title v1.2.0 --notes-file <section.md> --latest`.
 
 ---
 

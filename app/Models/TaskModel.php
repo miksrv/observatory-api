@@ -36,6 +36,8 @@ class TaskModel extends BaseModel
         'id',
         'type',
         'status',
+        'pipeline_id',
+        'claimed_by',
         'scope_object',
         'scope_date_from',
         'scope_date_to',
@@ -47,6 +49,91 @@ class TaskModel extends BaseModel
         'started_at',
         'finished_at',
     ];
+
+    /**
+     * Create one task with its items in one go — the Web UI's path (Api\V1\TasksController::create()
+     * validates a request body first and inserts the same way).
+     *
+     * `$pipelineId` targets the task: only that pipeline may claim it (see
+     * TasksController::update()). NULL = any pipeline, which is right only for work that needs
+     * no local FITS file.
+     *
+     * @return string|false The new task id, or false if the insert failed.
+     */
+    public function createWithItems(string $type, array $items, ?string $pipelineId = null, ?string $scopeObject = null)
+    {
+        $taskId = $this->insert([
+            'type'         => $type,
+            'status'       => 'PENDING',
+            'pipeline_id'  => $pipelineId,
+            'scope_object' => $scopeObject,
+            'total_items'  => count($items),
+        ], true);
+
+        if ($taskId !== false && $items !== []) {
+            (new TaskItemModel())->insertForTask($taskId, $items);
+        }
+
+        return $taskId;
+    }
+
+    /**
+     * Split one operator selection into one task per owning pipeline.
+     *
+     * Frames (and the sources seen on them) live on whichever pipeline registered them, so a
+     * selection that spans two observatories has to become two tasks, each claimable only by the
+     * pipeline that actually holds the files.
+     *
+     * @param array<string, list<array>> $itemsByPipeline Items keyed by pipeline id; '' = no
+     *                                                    known owner (untargeted task).
+     *
+     * @return list<array{id: string, pipeline_id: ?string, items: int}>|false False if any insert
+     *                                                                        failed.
+     */
+    public function createPerPipeline(string $type, array $itemsByPipeline, ?string $scopeObject = null)
+    {
+        ksort($itemsByPipeline, SORT_STRING);
+
+        $created = [];
+
+        foreach ($itemsByPipeline as $pipelineId => $items) {
+            $pipelineId = $pipelineId === '' ? null : (string) $pipelineId;
+            $taskId     = $this->createWithItems($type, $items, $pipelineId, $scopeObject);
+
+            if ($taskId === false) {
+                return false;
+            }
+
+            $created[] = ['id' => (string) $taskId, 'pipeline_id' => $pipelineId, 'items' => count($items)];
+        }
+
+        return $created;
+    }
+
+    /**
+     * Queue a RESTART for one pipeline (or for whichever claims it first, when `$pipelineId` is
+     * null), cancelling that target's older still-PENDING RESTARTs first: they ask for the same
+     * thing, and a pipeline that has been offline for a while would otherwise restart once per
+     * settings save it missed.
+     *
+     * @return string|false The new task id.
+     */
+    public function queueRestart(?string $pipelineId)
+    {
+        $superseded = $this->db->table($this->table)
+            ->where('type', 'RESTART')
+            ->where('status', 'PENDING');
+        $superseded = $pipelineId === null
+            ? $superseded->where('pipeline_id IS NULL')
+            : $superseded->where('pipeline_id', $pipelineId);
+        $superseded->update([
+            'status'      => 'CANCELLED',
+            'error'       => 'Superseded by a newer RESTART',
+            'finished_at' => date('Y-m-d H:i:s'),
+        ]);
+
+        return $this->createWithItems('RESTART', [], $pipelineId);
+    }
 
     public static function isValidType(string $type): bool
     {
