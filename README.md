@@ -70,6 +70,10 @@ database.default.port     = 3306
 # after that keys are managed with `php spark pipeline:*` (see Authentication) and this value
 # is no longer read.
 app.apiKey = your-secret-api-key-here
+
+# Web UI account (see Web UI). Without both, /ui accepts no sign-in.
+ui.username = operator
+ui.password = 'a-long-password'
 ```
 
 ### 3. Start the database (Docker)
@@ -104,7 +108,36 @@ php spark migrate
 php spark serve
 ```
 
-The API will be available at: `http://localhost:8080/api/v1`
+The API will be available at: `http://localhost:8080/api/v1`, the web UI at `http://localhost:8080/ui`.
+
+---
+
+## Web UI
+
+`/ui` is the operator console for the pipelines: their status and current task, frames, sources,
+anomalies, charts, the task queue and the pipeline settings. Tasks are created from a selection of
+frames, sources or anomalies and go to the pipeline holding the files they need. It is
+server-rendered (`app/Controllers/Web`, `app/Views/web`) with its own stylesheet and script in
+`public/assets/ui` — no build step, no framework. Day, night and red (night-vision) themes.
+
+**Sign-in.** One account, from `.env`:
+
+```ini
+ui.username = operator
+ui.password = '$2y$12$…'   # a hash from `php spark ui:password`, or the password itself
+```
+
+| Setting | Default | |
+|---|---|---|
+| `ui.username`, `ui.password` | — | both required; without them nobody can sign in |
+| `ui.idleMinutes` | `120` | sign the browser out after this long without a request (keep ≤ `session.expiration`, 7200 s) |
+| `ui.maxFailures` | `5` | wrong passwords from one address within `ui.lockMinutes`… |
+| `ui.lockMinutes` | `15` | …lock that address for this long |
+
+Prefer a hash: `php spark ui:password` asks for the password twice and prints the `ui.password`
+line (keep the single quotes — the hash contains `$`). Changing either value in `.env` signs every
+browser out. Every form carries a CSRF token, sign-ins are logged (`writable/logs`), and UI pages
+are sent `no-store` and never framed. Serve it over HTTPS only.
 
 ---
 
@@ -136,8 +169,9 @@ Repository settings (*Settings → Secrets and variables → Actions*):
 | `APP_URL` | variable | `https://observatory.miksoft.pro` — enables the post-deploy smoke test of `GET /` |
 
 **First deployment:** after the first run, create the database and `.env` on the hosting
-(`CI_ENVIRONMENT = production`, `app.baseURL`, `database.default.*`, and `app.apiKey` — the
-migrations register that key as pipeline `default`), then run the migrations. The workflow
+(`CI_ENVIRONMENT = production`, `app.baseURL`, `database.default.*`, `app.apiKey` — the
+migrations register that key as pipeline `default` — and `ui.username` / `ui.password` for the
+web UI), then run the migrations. The workflow
 does not run migrations: the hosting has no shell, so run them by hand after every release that
 adds one (its `CHANGELOG.md` line says so).
 
@@ -166,7 +200,7 @@ php spark pipeline:revoke <name>          # disable a server
 php spark pipeline:rename <name> <new>
 ```
 
-In Docker, prefix with `docker compose exec <api-service>`. The debug UI's dashboard (`/ui`) lists
+In Docker, prefix with `docker compose exec <api-service>`. The web UI's overview (`/ui`) lists
 every pipeline with its online status, current task and queue. See
 [`docs/API.md`](docs/API.md) → Authentication.
 
@@ -247,6 +281,9 @@ php spark migrate
 
 # Rebuild object statistics from scratch
 php spark recalculate:object-stats
+
+# Hash a password for the web UI's ui.password
+php spark ui:password
 
 # Start the dev server
 php spark serve
