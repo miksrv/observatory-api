@@ -126,12 +126,26 @@
     /* ---------- selection: checkboxes + the floating action bar ---------- */
 
     // The bars are fixed over the page: while one shows, the page needs room beneath its last rows.
+    // A one-window list page (.page.fill) keeps its size instead; its table gets padding only for
+    // as much of it as the bar actually covers, so its last row can scroll out from under the bar.
     function syncSelbarRoom() {
-        var open = $$('.selbar').some(function (bar) {
-            return !bar.hasAttribute('data-empty');
+        var bar = $$('.selbar').filter(function (b) {
+            return !b.hasAttribute('data-empty');
+        })[0];
+        document.body.classList.toggle('selbar-open', !!bar);
+        $$('.page.fill .table-wrap').forEach(function (wrap) {
+            wrap.style.paddingBottom = '';
+            // On a phone the page scrolls as a whole (not one window high): nothing to pad.
+            if (!bar || getComputedStyle(wrap.closest('.page')).display !== 'flex') return;
+            var overlap = wrap.getBoundingClientRect().bottom - bar.getBoundingClientRect().top;
+            if (overlap > 0) wrap.style.paddingBottom = Math.ceil(overlap + 12) + 'px';
         });
-        document.body.classList.toggle('selbar-open', open);
     }
+    window.addEventListener('resize', syncSelbarRoom);
+    // The bar slides in: measure again where it settles.
+    $$('.selbar').forEach(function (bar) {
+        bar.addEventListener('transitionend', syncSelbarRoom);
+    });
 
     function selectedIn(form) {
         var scope = form.closest('[data-select-scope]') || $('[data-select-scope]');

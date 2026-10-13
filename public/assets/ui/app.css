@@ -562,10 +562,19 @@ code {
     font-size: 9.5px;
     line-height: 15px;
 }
+/* A group heading becomes a thin divider: the groups stay apart, the text goes. */
 .shell.collapsed .rail-group {
     display: block;
-    height: 14px;
+    height: 1px;
+    margin: 10px 6px;
     padding: 0;
+    overflow: hidden;
+    font-size: 0;
+    background: var(--rail-line);
+}
+.shell.collapsed .rail-group:first-child {
+    margin-top: 4px;
+    background: none;
 }
 .shell.collapsed .rail-foot {
     padding: 12px 8px;
@@ -1197,6 +1206,9 @@ input[type='datetime-local'].input {
 .filters .field {
     width: 180px;
 }
+.filters .field.auto {
+    width: auto;
+}
 .filters .field.wide {
     width: 220px;
 }
@@ -1808,6 +1820,11 @@ tr:hover td.empty-cell {
 body.selbar-open .page {
     padding-bottom: 96px;
 }
+/* A one-window list page keeps its size: the bar lies over its foot, and where it also covers
+   the table's last rows (a narrow window wraps the bar), app.js pads the table by just that much. */
+body.selbar-open .page.fill {
+    padding-bottom: 20px;
+}
 .selbar .count {
     display: inline-flex;
     align-items: center;
@@ -2258,6 +2275,62 @@ dialog::backdrop {
     .rail-toggle {
         display: none !important;
     }
+    /* The drawer is never collapsed, whatever the desktop rail was left as: undo every collapsed rule. */
+    .shell.collapsed .rail-brand {
+        flex-direction: row;
+        padding: 18px 14px 18px 18px;
+        gap: 10px;
+    }
+    .shell.collapsed .rail-nav {
+        padding: 4px 10px;
+    }
+    .shell.collapsed .rail-link {
+        justify-content: flex-start;
+        padding: 8px 10px;
+    }
+    .shell.collapsed .rail-link.active::before {
+        left: -10px;
+    }
+    .shell.collapsed .rail-count {
+        position: static;
+        min-width: 20px;
+        padding: 0 6px;
+        font-size: 11px;
+        line-height: 18px;
+    }
+    .shell.collapsed .rail-foot {
+        padding: 12px 12px 14px;
+        align-items: stretch;
+    }
+    .shell.collapsed .rail-pipes {
+        flex-direction: column;
+        padding: 0 6px;
+    }
+    .shell.collapsed .theme-switch {
+        grid-template-columns: repeat(3, 1fr);
+    }
+    .shell.collapsed .theme-switch button {
+        width: auto;
+    }
+    .shell.collapsed .rail-user {
+        flex-direction: row;
+        background: var(--rail-hover);
+        padding: 6px;
+    }
+    .shell.collapsed .rail-version {
+        padding: 0 6px;
+        font-size: 11px;
+        text-align: left;
+    }
+    .shell.collapsed .rail-group,
+    .shell.collapsed .rail-group:first-child {
+        height: auto;
+        margin: 0;
+        padding: 16px 10px 6px;
+        overflow: visible;
+        font-size: 10.5px;
+        background: none;
+    }
     .scrim {
         display: block;
         position: fixed;
@@ -2369,7 +2442,8 @@ dialog::backdrop {
     .selbar[data-empty] {
         transform: translateY(12px);
     }
-    body.selbar-open .page {
+    body.selbar-open .page,
+    body.selbar-open .page.fill {
         padding-bottom: 150px;
     }
     .selbar select.input {
@@ -2384,4 +2458,90 @@ dialog::backdrop {
         padding: 12px;
         gap: 12px;
     }
+}
+
+/* ---------- sorting and pages ---------- */
+/* Page numbers are .page-link, never .page: .page is the page itself (its padding rules would
+   stretch every number). */
+
+.table th.sortable {
+    padding: 0;
+}
+.table th.sortable a {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 10px 14px;
+    color: inherit;
+}
+.table th.num.sortable a {
+    justify-content: flex-end;
+}
+.table th.sortable a:hover {
+    color: var(--text);
+    text-decoration: none;
+}
+.table th.sortable .icon {
+    opacity: 0.35;
+}
+.table th.sortable a.active {
+    color: var(--text);
+}
+.table th.sortable a.active .icon {
+    opacity: 1;
+    color: var(--accent);
+}
+.pager {
+    flex-wrap: wrap;
+}
+.pages {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+.pages .page-link {
+    min-width: 28px;
+    height: 28px;
+    padding: 0 6px;
+    display: inline-grid;
+    place-items: center;
+    border-radius: var(--r-xs);
+    color: var(--text-2);
+    font: 12.5px var(--mono);
+}
+a.page-link:hover {
+    background: var(--surface-3);
+    color: var(--text);
+    text-decoration: none;
+}
+.pages .page-link.current {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+}
+.pages .gap {
+    padding: 0 4px;
+    color: var(--muted);
+}
+.per-page {
+    margin: 0;
+}
+.per-page .input {
+    width: auto;
+    height: 28px;
+    padding-left: 9px;
+    font: 12.5px var(--mono);
+}
+.gallery-sort {
+    display: flex;
+    gap: 6px;
+}
+/* Same height as the filter inputs beside them. */
+.gallery-sort .btn {
+    height: 34px;
+}
+.gallery-sort .btn.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-soft);
 }

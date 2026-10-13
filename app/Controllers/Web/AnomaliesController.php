@@ -2,16 +2,19 @@
 
 namespace App\Controllers\Web;
 
+use App\Libraries\UiListQuery;
 use App\Models\AnomalyModel;
 use App\Models\SourceChartModel;
 use App\Models\SourceObservationModel;
 use App\Models\TaskModel;
+use CodeIgniter\Database\BaseBuilder;
 use CodeIgniter\HTTP\ResponseInterface;
 
 /**
  * Web UI page: "Anomalies" — anomalies grouped by source, joined with their frame
  * (object/filename/obs_time) and source (catalog identity) for context. Each row in the list
- * represents one source with all its anomalies aggregated together.
+ * represents one source with all its anomalies aggregated together; the groups are counted,
+ * sorted and paged in SQL.
  */
 class AnomaliesController extends BaseWebController
 {
@@ -27,40 +30,67 @@ class AnomaliesController extends BaseWebController
             'source_id'    => trim((string) ($this->request->getGet('source_id') ?? '')),
         ];
 
-        $model = (new AnomalyModel())
+        // One row per source; an anomaly without a source is a group of its own (keyed by its id).
+        // Grouping, counting and sorting happen in SQL so the pages cover every anomaly.
+        $groupKey = 'COALESCE(anomalies.source_id, anomalies.id)';
+
+        $list = new UiListQuery(
+            [
+                'designation' => 'designation',
+                'object'      => 'object',
+                'count'       => 'anomaly_count',
+                'alert'       => 'has_alert',
+                'last_obs'    => 'last_obs',
+            ],
+            'last_obs',
+            'desc',
+            ['count', 'alert', 'last_obs'],
+            'group_key',
+        );
+
+        $db = db_connect();
+
+        $total = (int) $db->query(
+            'SELECT COUNT(*) AS n FROM ('
+            . $this->filtered($db->table('anomalies')->select($groupKey . ' AS group_key', false), $filters)
+                ->groupBy('group_key')
+                ->getCompiledSelect()
+            . ') AS g'
+        )->getRow()->n;
+        $list->paginate($total);
+
+        $page = $this->filtered($db->table('anomalies'), $filters)
+            ->select($groupKey . ' AS group_key', false)
+            ->select('COUNT(*) AS anomaly_count, MAX(anomalies.is_alert) AS has_alert', false)
+            ->select('MAX(frames.obs_time) AS last_obs, MAX(frames.object) AS object', false)
+            ->select('COALESCE(MAX(anomalies.mpc_designation), MAX(sources.catalog_id)) AS designation', false)
+            ->groupBy('group_key')
+            ->orderBy($list->orderBy(), '', false)
+            ->limit($list->perPage, $list->offset())
+            ->get()->getResultArray();
+
+        $keys = array_column($page, 'group_key');
+
+        // The page's anomalies themselves, newest first, under the same filter.
+        $anomalies = $keys === [] ? [] : $this->filtered((new AnomalyModel())->builder(), $filters)
             ->select(
                 'anomalies.*, frames.object AS object, frames.filename AS filename, '
                 . 'frames.obs_time AS obs_time, sources.catalog_name AS catalog_name, '
-                . 'sources.catalog_id AS catalog_id'
+                . 'sources.catalog_id AS catalog_id, ' . $groupKey . ' AS group_key',
+                false
             )
-            ->join('frames', 'frames.id = anomalies.frame_id', 'left')
-            ->join('sources', 'sources.id = anomalies.source_id', 'left');
+            // The key is an expression, which whereIn() can't quote as a column; the values are
+            // escaped here instead.
+            ->where($groupKey . ' IN (' . implode(', ', array_map([$db, 'escape'], $keys)) . ')', null, false)
+            ->orderBy('frames.obs_time', 'DESC')
+            ->get()->getResultArray();
 
-        if ($filters['anomaly_type'] !== '') {
-            $model = $model->where('anomalies.anomaly_type', $filters['anomaly_type']);
-        }
-        if ($filters['is_alert'] !== '') {
-            $model = $model->where('anomalies.is_alert', (int) $filters['is_alert']);
-        }
-        if ($filters['object'] !== '') {
-            $model = $model->where('frames.object', $filters['object']);
-        }
-        if ($filters['frame_id'] !== '') {
-            $model = $model->where('anomalies.frame_id', $filters['frame_id']);
-        }
-        if ($filters['source_id'] !== '') {
-            $model = $model->where('anomalies.source_id', $filters['source_id']);
-        }
-
-        $anomalies = $model->orderBy('frames.obs_time', 'DESC')->findAll(500);
-
-        // Group anomalies by source_id (null source_id anomalies each get their own group).
-        $groups = [];
-        $nullIdx = 0;
+        // Groups in the page's order; each collects its anomalies.
+        $groups = array_fill_keys($keys, null);
 
         foreach ($anomalies as $a) {
-            $key = $a['source_id'] ? 'src_' . $a['source_id'] : 'null_' . ($nullIdx++);
-            if (! isset($groups[$key])) {
+            $key = $a['group_key'];
+            if ($groups[$key] === null) {
                 $groups[$key] = [
                     'source_id'    => $a['source_id'],
                     'catalog_name' => $a['catalog_name'] ?? null,
@@ -76,29 +106,30 @@ class AnomaliesController extends BaseWebController
                     'has_alert'    => false,
                     'first_obs'    => $a['obs_time'],
                     'last_obs'     => $a['obs_time'],
-                    'mpc_designation' => $a['mpc_designation'] ?? null,
+                    'mpc_designation' => null,
+                    // The newest anomaly's position (rows come newest first).
                     'ra'           => $a['ra'],
                     'dec'          => $a['dec'],
                 ];
             }
 
-            $groups[$key]['anomaly_ids'][] = $a['id'];
-            $groups[$key]['types'][]       = $a['anomaly_type'];
-            $groups[$key]['ids_by_type'][$a['anomaly_type']][] = $a['id'];
-            if ($a['is_alert']) {
-                $groups[$key]['has_alert'] = true;
+            $g = &$groups[$key];
+            $g['anomaly_ids'][] = $a['id'];
+            $g['types'][]       = $a['anomaly_type'];
+            $g['ids_by_type'][$a['anomaly_type']][] = $a['id'];
+            $g['has_alert']     = $g['has_alert'] || (bool) $a['is_alert'];
+
+            if ($a['obs_time'] && ($g['first_obs'] === null || $a['obs_time'] < $g['first_obs'])) {
+                $g['first_obs'] = $a['obs_time'];
             }
-            // Track date range.
-            if ($a['obs_time'] && ($groups[$key]['first_obs'] === null || $a['obs_time'] < $groups[$key]['first_obs'])) {
-                $groups[$key]['first_obs'] = $a['obs_time'];
+            if ($a['obs_time'] && ($g['last_obs'] === null || $a['obs_time'] > $g['last_obs'])) {
+                $g['last_obs'] = $a['obs_time'];
             }
-            if ($a['obs_time'] && ($groups[$key]['last_obs'] === null || $a['obs_time'] > $groups[$key]['last_obs'])) {
-                $groups[$key]['last_obs'] = $a['obs_time'];
+            // The newest MPC designation wins.
+            if ($g['mpc_designation'] === null && ! empty($a['mpc_designation'])) {
+                $g['mpc_designation'] = $a['mpc_designation'];
             }
-            // Keep latest MPC designation if set.
-            if (! empty($a['mpc_designation'])) {
-                $groups[$key]['mpc_designation'] = $a['mpc_designation'];
-            }
+            unset($g);
         }
 
         // Deduplicate types within each group, and resolve a single display
@@ -111,17 +142,49 @@ class AnomaliesController extends BaseWebController
         // always carried designation=null into the GENERATE_CHARTS task
         // payload below, even though the same source's catalog identity is
         // already visible right here via the sources join.
+        $groups = array_values(array_filter($groups));
         foreach ($groups as &$g) {
-            $g['types'] = array_unique($g['types']);
+            $g['types']       = array_values(array_unique($g['types']));
             $g['designation'] = $g['mpc_designation'] ?: $g['catalog_id'];
         }
         unset($g);
 
         return $this->response->setBody(view('web/anomalies_index', [
-            'groups'       => array_values($groups),
+            'groups'       => $groups,
             'anomalyTypes' => AnomalyModel::ALLOWED_TYPES,
             'filters'      => $filters,
+            'list'         => $list,
         ]));
+    }
+
+    /**
+     * The anomalies list's filter on a builder over `anomalies`, with the frame and source joined
+     * (the filter and the grouped columns read both).
+     *
+     * @param array<string, string> $filters
+     */
+    private function filtered(BaseBuilder $builder, array $filters): BaseBuilder
+    {
+        $builder->join('frames', 'frames.id = anomalies.frame_id', 'left')
+            ->join('sources', 'sources.id = anomalies.source_id', 'left');
+
+        if ($filters['anomaly_type'] !== '') {
+            $builder->where('anomalies.anomaly_type', $filters['anomaly_type']);
+        }
+        if ($filters['is_alert'] !== '') {
+            $builder->where('anomalies.is_alert', (int) $filters['is_alert']);
+        }
+        if ($filters['object'] !== '') {
+            $builder->where('frames.object', $filters['object']);
+        }
+        if ($filters['frame_id'] !== '') {
+            $builder->where('anomalies.frame_id', $filters['frame_id']);
+        }
+        if ($filters['source_id'] !== '') {
+            $builder->where('anomalies.source_id', $filters['source_id']);
+        }
+
+        return $builder;
     }
 
     /**

@@ -6,7 +6,7 @@
  * @var string       $filterCatalog
  * @var string       $filterObjectType
  * @var string       $filterSearch
- * @var int          $limit
+ * @var \App\Libraries\UiListQuery $list
  */
 $this->extend('web/layout');
 $this->setVar('title', 'Источники');
@@ -52,10 +52,9 @@ $filtered = $filterCatalog !== '' || $filterObjectType !== '' || $filterSearch !
                 <?php endforeach; ?>
             </select>
         </label>
-        <label class="field narrow">
-            <span class="label">Лимит</span>
-            <input class="input mono" type="number" name="limit" value="<?= (int) $limit ?>" min="1" max="2000">
-        </label>
+        <?php foreach ($list->keptParams('search', 'catalog_name', 'object_type', 'page', 'limit') as $name => $value): ?>
+            <input type="hidden" name="<?= esc($name, 'attr') ?>" value="<?= esc($value, 'attr') ?>">
+        <?php endforeach; ?>
         <div class="actions">
             <?php if ($filtered): ?><a class="btn ghost" href="/ui/sources"><?= ui_icon('x', 14) ?>Сбросить</a><?php endif; ?>
             <button class="btn" type="submit"><?= ui_icon('search', 14) ?>Показать</button>
@@ -66,13 +65,13 @@ $filtered = $filterCatalog !== '' || $filterObjectType !== '' || $filterSearch !
         <table class="table">
             <thead>
             <tr>
-                <th>Обозначение</th>
-                <th>Тип</th>
-                <th class="num">Mag кат.</th>
+                <?= ui_th($list, 'designation', 'Обозначение') ?>
+                <?= ui_th($list, 'type', 'Тип') ?>
+                <?= ui_th($list, 'catalog_mag', 'Mag кат.', 'num') ?>
                 <th class="num">Mag посл.</th>
                 <th>RA / Dec</th>
-                <th class="num">Наблюдений</th>
-                <th>Период</th>
+                <?= ui_th($list, 'observations', 'Наблюдений', 'num') ?>
+                <?= ui_th($list, 'last_seen', 'Период', '', 'Первое и последнее наблюдение; сортировка — по последнему') ?>
                 <th></th>
             </tr>
             </thead>
@@ -123,9 +122,7 @@ $filtered = $filterCatalog !== '' || $filterObjectType !== '' || $filterSearch !
             </tbody>
         </table>
     </div>
-    <div class="panel-foot">
-        <span>Показано <?= count($sources) ?><?= count($sources) >= $limit ? ' — достигнут лимит ' . $limit : '' ?></span>
-    </div>
+    <?= view('web/partials/pager', ['list' => $list, 'noun' => 'источник|источника|источников']) ?>
 </div>
 
 <?= $this->endSection() ?>

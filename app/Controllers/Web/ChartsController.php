@@ -2,6 +2,7 @@
 
 namespace App\Controllers\Web;
 
+use App\Libraries\UiListQuery;
 use App\Models\SourceChartModel;
 use CodeIgniter\HTTP\ResponseInterface;
 
@@ -24,6 +25,21 @@ class ChartsController extends BaseWebController
     {
         $sourceId = trim((string) ($this->request->getGet('source_id') ?? ''));
         $style    = trim((string) ($this->request->getGet('style') ?? ''));
+
+        $list = new UiListQuery(
+            [
+                'updated'     => 'source_charts.updated_at',
+                'epochs'      => 'source_charts.frame_count',
+                'designation' => 'sources.catalog_id',
+                'style'       => 'source_charts.style',
+            ],
+            'updated',
+            'desc',
+            ['updated', 'epochs'],
+            'source_charts.id',
+            24,
+            [24, 48, 96],
+        );
 
         $model = (new SourceChartModel())
             ->select(
@@ -49,13 +65,15 @@ class ChartsController extends BaseWebController
             $model = $model->where('source_charts.style', $style);
         }
 
-        $charts = $model->orderBy('source_charts.updated_at', 'DESC')->findAll(200);
+        $list->paginate($model->countAllResults(false));
+        $charts = $model->orderBy($list->orderBy(), '', false)->findAll($list->perPage, $list->offset());
 
         return $this->response->setBody(view('web/charts_index', [
             'charts'         => $charts,
             'styles'         => SourceChartModel::ALLOWED_STYLES,
             'filterSourceId' => $sourceId,
             'filterStyle'    => $style,
+            'list'           => $list,
         ]));
     }
 

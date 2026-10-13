@@ -17,9 +17,12 @@ $isBool = static fn (?string $v): bool => in_array(strtolower((string) $v), ['tr
         <p class="sub">Параметры, которые pipeline читает из базы. После сохранения каждый активный pipeline
             получает задачу RESTART и перезапускается с новыми значениями. Внутренние параметры скрыты.</p>
     </div>
-    <div class="actions">
-        <button class="btn primary" type="submit" form="settings-form"><?= ui_icon('save') ?>Сохранить</button>
-    </div>
+    <?php // Saving is the bar that appears on the first change (app.js); without a script, this. ?>
+    <noscript>
+        <div class="actions">
+            <button class="btn primary" type="submit" form="settings-form"><?= ui_icon('save') ?>Сохранить</button>
+        </div>
+    </noscript>
 </div>
 
 <?php if ($settings === []): ?>

@@ -46,6 +46,9 @@ if (! function_exists('ui_icon')) {
             'save'      => '<path d="M5 3h11l3 3v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M7 3v5h8V3M7 21v-7h10v7"/>',
             'stop'      => '<rect x="6" y="6" width="12" height="12" rx="1.5"/>',
             'maximize'  => '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+            'sort'      => '<path d="M8 10l4-4 4 4M8 14l4 4 4-4"/>',
+            'sort-asc'  => '<path d="M8 14l4-4 4 4"/>',
+            'sort-desc' => '<path d="M8 10l4 4 4-4"/>',
         ];
 
         if (! isset($paths[$name])) {
@@ -269,9 +272,27 @@ if (! function_exists('ui_query')) {
         $request = service('request');
         $params  = array_merge((array) $request->getGet(), $changes);
         $params  = array_filter($params, static fn ($v): bool => $v !== null && $v !== '');
-        $path    = '/' . trim($request->getUri()->getPath(), '/');
+        $path    = '/' . trim($request->getUri()->getRoutePath(), '/');
 
         return $path . ($params === [] ? '' : '?' . http_build_query($params));
+    }
+}
+
+if (! function_exists('ui_th')) {
+    /**
+     * A sortable table header: links to sorting by `$key` (UiListQuery::sortUrl()), marked with
+     * the direction when it's the current sort.
+     */
+    function ui_th(\App\Libraries\UiListQuery $list, string $key, string $label, string $class = '', string $title = ''): string
+    {
+        $active = $list->isSorted($key);
+        $arrow  = $active ? ui_icon($list->dir === 'asc' ? 'sort-asc' : 'sort-desc', 12) : ui_icon('sort', 12);
+        $aria   = $active ? ' aria-sort="' . ($list->dir === 'asc' ? 'ascending' : 'descending') . '"' : '';
+
+        return '<th class="' . esc(trim($class . ' sortable'), 'attr') . '"' . $aria
+            . ($title !== '' ? ' title="' . esc($title, 'attr') . '"' : '') . '>'
+            . '<a href="' . esc($list->sortUrl($key), 'attr') . '" class="' . ($active ? 'active' : '') . '">'
+            . esc($label) . $arrow . '</a></th>';
     }
 }
 

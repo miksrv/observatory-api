@@ -8,7 +8,7 @@
  * @var string                $filterObject
  * @var string                $filterDateFrom
  * @var string                $filterDateTo
- * @var int                   $limit
+ * @var \App\Libraries\UiListQuery $list
  * @var list<string>          $taskTypes
  */
 $this->extend('web/layout');
@@ -56,10 +56,9 @@ $filtered = $filterObject !== '' || $filterPipeline !== '' || $filterDateFrom !=
             <span class="label">До (UTC)</span>
             <input class="input" type="datetime-local" name="date_to" value="<?= esc($filterDateTo, 'attr') ?>">
         </label>
-        <label class="field narrow">
-            <span class="label">Лимит</span>
-            <input class="input mono" type="number" name="limit" value="<?= (int) $limit ?>" min="1" max="2000">
-        </label>
+        <?php foreach ($list->keptParams('object', 'pipeline', 'date_from', 'date_to', 'page', 'limit') as $name => $value): ?>
+            <input type="hidden" name="<?= esc($name, 'attr') ?>" value="<?= esc($value, 'attr') ?>">
+        <?php endforeach; ?>
         <div class="actions">
             <?php if ($filtered): ?><a class="btn ghost" href="/ui/frames"><?= ui_icon('x', 14) ?>Сбросить</a><?php endif; ?>
             <button class="btn" type="submit"><?= ui_icon('search', 14) ?>Показать</button>
@@ -73,17 +72,17 @@ $filtered = $filterObject !== '' || $filterPipeline !== '' || $filterDateFrom !=
                 <thead>
                 <tr>
                     <th class="check-col"><input class="check" type="checkbox" data-pick-all aria-label="Выбрать все"></th>
-                    <th>Файл</th>
-                    <th>Объект</th>
-                    <th>Наблюдение (UTC)</th>
-                    <th>Фильтр</th>
-                    <th class="num">Выдержка</th>
-                    <th class="num">FOV°</th>
-                    <th>QC</th>
-                    <th class="num" title="Звёзд найдено QC / распознано и сохранено">Звёзды</th>
-                    <th class="num">FWHM</th>
-                    <th class="num">SNR</th>
-                    <th class="num">Фон</th>
+                    <?= ui_th($list, 'filename', 'Файл') ?>
+                    <?= ui_th($list, 'object', 'Объект') ?>
+                    <?= ui_th($list, 'obs_time', 'Наблюдение (UTC)') ?>
+                    <?= ui_th($list, 'filter', 'Фильтр') ?>
+                    <?= ui_th($list, 'exptime', 'Выдержка', 'num') ?>
+                    <?= ui_th($list, 'fov', 'FOV°', 'num') ?>
+                    <?= ui_th($list, 'qc', 'QC') ?>
+                    <?= ui_th($list, 'stars', 'Звёзды', 'num', 'Звёзд найдено QC / распознано и сохранено; сортировка — по найденным') ?>
+                    <?= ui_th($list, 'fwhm', 'FWHM', 'num') ?>
+                    <?= ui_th($list, 'snr', 'SNR', 'num') ?>
+                    <?= ui_th($list, 'background', 'Фон', 'num') ?>
                     <th>Pipeline</th>
                 </tr>
                 </thead>
@@ -114,10 +113,6 @@ $filtered = $filterObject !== '' || $filterPipeline !== '' || $filterDateFrom !=
                 </tbody>
             </table>
         </div>
-        <div class="panel-foot">
-            <span>Показано <?= count($frames) ?><?= count($frames) >= $limit ? ' — достигнут лимит ' . $limit : '' ?></span>
-            <span>Shift+клик выделяет диапазон</span>
-        </div>
 
         <input type="hidden" name="scope_object" value="<?= esc($filterObject, 'attr') ?>">
 
@@ -135,6 +130,9 @@ $filtered = $filterObject !== '' || $filterPipeline !== '' || $filterDateFrom !=
             <button class="btn icon" type="button" data-pick-none title="Снять выделение" aria-label="Снять выделение"><?= ui_icon('x') ?></button>
         </div>
     </form>
+
+    <?php // Outside the task form: the pager holds a form of its own. ?>
+    <?= view('web/partials/pager', ['list' => $list, 'noun' => 'кадр|кадра|кадров']) ?>
 </div>
 
 <?= $this->endSection() ?>

@@ -2,6 +2,7 @@
 
 namespace App\Controllers\Web;
 
+use App\Libraries\UiListQuery;
 use App\Models\FrameModel;
 use App\Models\PipelineModel;
 use App\Models\SourceObservationModel;
@@ -52,8 +53,25 @@ class FramesController extends BaseWebController
         $dateFrom = trim((string) ($this->request->getGet('date_from') ?? ''));
         $dateTo   = trim((string) ($this->request->getGet('date_to') ?? ''));
         $pipeline = trim((string) ($this->request->getGet('pipeline') ?? ''));
-        $limit    = (int) ($this->request->getGet('limit') ?? 200);
-        $limit    = $limit > 0 ? min($limit, 2000) : 200;
+
+        $list = new UiListQuery(
+            [
+                'filename'   => 'filename',
+                'object'     => 'object',
+                'obs_time'   => 'obs_time',
+                'filter'     => 'filter',
+                'exptime'    => 'exptime',
+                'fov'        => 'fov_deg',
+                'qc'         => 'quality_flag',
+                'stars'      => 'qc_star_count',
+                'fwhm'       => 'qc_fwhm_median',
+                'snr'        => 'qc_snr_median',
+                'background' => 'qc_sky_background',
+            ],
+            'obs_time',
+            'desc',
+            ['obs_time', 'exptime', 'stars', 'snr'],
+        );
 
         $model = new FrameModel();
 
@@ -84,7 +102,8 @@ class FramesController extends BaseWebController
             }
         }
 
-        $frames = $model->orderBy('obs_time', 'DESC')->findAll($limit);
+        $list->paginate($model->countAllResults(false));
+        $frames = $model->orderBy($list->orderBy(), '', false)->findAll($list->perPage, $list->offset());
 
         // "Stars" column: qc_star_count (raw pipeline detection count) vs. how many of a
         // frame's stars actually got recognized/persisted as source_observations rows — one
@@ -113,7 +132,7 @@ class FramesController extends BaseWebController
             'filterObject'   => $object,
             'filterDateFrom' => $dateFrom,
             'filterDateTo'   => $dateTo,
-            'limit'          => $limit,
+            'list'           => $list,
             'taskTypes'      => array_keys(self::CREATABLE_TYPES),
         ]));
     }

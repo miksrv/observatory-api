@@ -7,6 +7,7 @@
 - Web UI: sign-in with the account from `.env` (`ui.username`, `ui.password` — set both before deploying, or nobody can sign in); idle sign-out, a lock after repeated wrong passwords, CSRF on every form; `php spark ui:password` hashes the password
 - Web UI: redesigned as a permanent console — overview of pipelines, tasks and alerts, selection bars for creating tasks, a chart gallery with a viewer, settings by group, day / night / red themes, phone layout; no Bootstrap
 - Web UI: the sidebar shows the running version, read from `CHANGELOG.md`, which the deploy now uploads too
+- Web UI: frames, sources, anomalies and charts sort by their columns and are paged, so every row is reachable — the row limit is gone, and anomalies are no longer cut off at the latest 500
 
 ### Patch Changes
 

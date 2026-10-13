@@ -20,7 +20,8 @@ class UiAuthFilter implements FilterInterface
 
     public function before(RequestInterface $request, $arguments = null)
     {
-        $path = trim($request->getUri()->getPath(), '/');
+        // The route path, not getPath(): with app.indexPage set, that one starts with "index.php/".
+        $path = trim($request->getUri()->getRoutePath(), '/');
 
         if (in_array($path, self::PUBLIC_PATHS, true)) {
             return null;

@@ -3,6 +3,7 @@
  * @var list<array>           $groups  anomalies grouped by source (AnomaliesController::index())
  * @var list<string>          $anomalyTypes
  * @var array<string, string> $filters
+ * @var \App\Libraries\UiListQuery $list
  */
 $this->extend('web/layout');
 $this->setVar('title', 'Аномалии');
@@ -29,13 +30,15 @@ $typeTone = static fn (string $type): string => match ($type) {
 
 <div class="panel" data-select-scope>
     <nav class="tabs" aria-label="Алерты">
-        <a href="<?= esc(ui_query(['is_alert' => null]), 'attr') ?>" class="<?= $filters['is_alert'] === '' ? 'active' : '' ?>">Все</a>
-        <a href="<?= esc(ui_query(['is_alert' => '1']), 'attr') ?>" class="<?= $filters['is_alert'] === '1' ? 'active' : '' ?>">Только алерты</a>
-        <a href="<?= esc(ui_query(['is_alert' => '0']), 'attr') ?>" class="<?= $filters['is_alert'] === '0' ? 'active' : '' ?>">Без алертов</a>
+        <a href="<?= esc(ui_query(['is_alert' => null, 'page' => null]), 'attr') ?>" class="<?= $filters['is_alert'] === '' ? 'active' : '' ?>">Все</a>
+        <a href="<?= esc(ui_query(['is_alert' => '1', 'page' => null]), 'attr') ?>" class="<?= $filters['is_alert'] === '1' ? 'active' : '' ?>">Только алерты</a>
+        <a href="<?= esc(ui_query(['is_alert' => '0', 'page' => null]), 'attr') ?>" class="<?= $filters['is_alert'] === '0' ? 'active' : '' ?>">Без алертов</a>
     </nav>
 
     <form class="filters" method="get" action="/ui/anomalies" style="border-radius: 0">
-        <?php if ($filters['is_alert'] !== ''): ?><input type="hidden" name="is_alert" value="<?= esc($filters['is_alert'], 'attr') ?>"><?php endif; ?>
+        <?php foreach ($list->keptParams('anomaly_type', 'object', 'frame_id', 'source_id', 'page') as $name => $value): ?>
+            <input type="hidden" name="<?= esc($name, 'attr') ?>" value="<?= esc($value, 'attr') ?>">
+        <?php endforeach; ?>
         <label class="field wide">
             <span class="label">Тип</span>
             <select class="input" name="anomaly_type" data-autosubmit>
@@ -58,7 +61,7 @@ $typeTone = static fn (string $type): string => match ($type) {
             <input class="input mono" type="text" name="source_id" value="<?= esc($filters['source_id'], 'attr') ?>">
         </label>
         <div class="actions">
-            <?php if ($filtered): ?><a class="btn ghost" href="<?= esc(ui_query(['anomaly_type' => null, 'object' => null, 'frame_id' => null, 'source_id' => null]), 'attr') ?>"><?= ui_icon('x', 14) ?>Сбросить</a><?php endif; ?>
+            <?php if ($filtered): ?><a class="btn ghost" href="<?= esc(ui_query(['anomaly_type' => null, 'object' => null, 'frame_id' => null, 'source_id' => null, 'page' => null]), 'attr') ?>"><?= ui_icon('x', 14) ?>Сбросить</a><?php endif; ?>
             <button class="btn" type="submit"><?= ui_icon('search', 14) ?>Показать</button>
         </div>
     </form>
@@ -70,12 +73,12 @@ $typeTone = static fn (string $type): string => match ($type) {
                 <thead>
                 <tr>
                     <th class="check-col"><input class="check" type="checkbox" data-pick-all aria-label="Выбрать все"></th>
-                    <th>Источник</th>
-                    <th>Объект</th>
-                    <th>Типы</th>
+                    <?= ui_th($list, 'designation', 'Источник') ?>
+                    <?= ui_th($list, 'object', 'Объект') ?>
+                    <?= ui_th($list, 'alert', 'Типы', '', 'Сортировка — сначала с алертами или без') ?>
                     <th>RA / Dec</th>
-                    <th class="num">Аномалий</th>
-                    <th>Период наблюдений (UTC)</th>
+                    <?= ui_th($list, 'count', 'Аномалий', 'num') ?>
+                    <?= ui_th($list, 'last_obs', 'Период наблюдений (UTC)', '', 'Сортировка — по последнему наблюдению') ?>
                     <th></th>
                 </tr>
                 </thead>
@@ -132,10 +135,6 @@ $typeTone = static fn (string $type): string => match ($type) {
                 </tbody>
             </table>
         </div>
-        <div class="panel-foot">
-            <span><?= count($groups) ?> <?= ui_plural(count($groups), 'группа', 'группы', 'групп') ?><?= array_sum(array_map(static fn ($g) => count($g['anomaly_ids']), $groups)) >= 500 ? ' — из последних 500 аномалий' : '' ?></span>
-            <span>Shift+клик выделяет диапазон</span>
-        </div>
 
         <div class="selbar" data-empty>
             <span class="count"><b data-sel-count>0</b>выбрано</span>
@@ -151,6 +150,9 @@ $typeTone = static fn (string $type): string => match ($type) {
             <button class="btn icon" type="button" data-pick-none title="Снять выделение" aria-label="Снять выделение"><?= ui_icon('x') ?></button>
         </div>
     </form>
+
+    <?php // Outside the actions form: the pager holds a form of its own. ?>
+    <?= view('web/partials/pager', ['list' => $list, 'noun' => 'группа|группы|групп']) ?>
 </div>
 
 <?= $this->endSection() ?>

@@ -2,6 +2,7 @@
 
 namespace App\Controllers\Web;
 
+use App\Libraries\UiListQuery;
 use App\Models\SourceModel;
 use App\Models\SourceObservationModel;
 use App\Models\TaskModel;
@@ -24,8 +25,21 @@ class SourcesController extends BaseWebController
         $catalogName = trim((string) ($this->request->getGet('catalog_name') ?? ''));
         $objectType  = trim((string) ($this->request->getGet('object_type') ?? ''));
         $search      = trim((string) ($this->request->getGet('search') ?? ''));
-        $limit       = (int) ($this->request->getGet('limit') ?? 200);
-        $limit       = $limit > 0 ? min($limit, 2000) : 200;
+
+        // ra / dec / the latest mag come from each row's latest observation, looked up per page
+        // below — not columns of `sources`, so not sortable.
+        $list = new UiListQuery(
+            [
+                'designation'  => 'catalog_id',
+                'type'         => 'object_type',
+                'catalog_mag'  => 'catalog_mag',
+                'observations' => 'observation_count',
+                'last_seen'    => 'last_observed_at',
+            ],
+            'last_seen',
+            'desc',
+            ['observations', 'last_seen'],
+        );
 
         $model = new SourceModel();
 
@@ -41,7 +55,8 @@ class SourcesController extends BaseWebController
             $model = $model->like('catalog_id', $search);
         }
 
-        $sources = $model->orderBy('last_observed_at', 'DESC')->findAll($limit);
+        $list->paginate($model->countAllResults(false));
+        $sources = $model->orderBy($list->orderBy(), '', false)->findAll($list->perPage, $list->offset());
 
         $positions = (new SourceObservationModel())
             ->getLatestObservationsForSources(array_column($sources, 'id'));
@@ -75,7 +90,7 @@ class SourcesController extends BaseWebController
             'filterCatalog'    => $catalogName,
             'filterObjectType' => $objectType,
             'filterSearch'     => $search,
-            'limit'            => $limit,
+            'list'             => $list,
         ]));
     }
 
