@@ -61,7 +61,8 @@ jobs:
       # app/ and vendor/ are mirrored with --delete (stale files removed);
       # public/ and writable/ never are — writable/uploads holds the charts
       # the pipeline uploaded, writable/logs the server's logs. Nothing at the
-      # FTP root other than .htaccess and spark is touched (.env included).
+      # FTP root other than .htaccess, spark and CHANGELOG.md is touched (.env
+      # included); CHANGELOG.md's top heading is the version the web UI shows.
       - name: Upload
         env:
           FTP_HOSTNAME: ${{ secrets.FTP_HOSTNAME }}
@@ -89,6 +90,7 @@ jobs:
           set ssl:verify-certificate false
           put -O / .htaccess
           put -O / spark
+          put -O / CHANGELOG.md
           mirror -R --delete --parallel=10 app /app
           mirror -R --delete --parallel=10 vendor /vendor
           mirror -R --parallel=10 public /public
