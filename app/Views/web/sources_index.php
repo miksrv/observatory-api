@@ -1,110 +1,131 @@
-<?= view('web/partials/header', ['title' => 'Источники (sources)']) ?>
+<?php
+/**
+ * @var list<array>  $sources  each with ra / dec / mag from its latest observation
+ * @var list<string> $catalogNames
+ * @var list<string> $objectTypes
+ * @var string       $filterCatalog
+ * @var string       $filterObjectType
+ * @var string       $filterSearch
+ * @var int          $limit
+ */
+$this->extend('web/layout');
+$this->setVar('title', 'Источники');
+$this->setVar('active', 'sources');
+$this->setVar('fill', true);
 
-<h1 class="h4 mb-3">Источники (sources)</h1>
-<p class="text-muted small">
-    Позиция каждого источника берётся из его самого свежего наблюдения
-    (<code>source_observations</code>) — у <code>sources</code> нет собственных ra/dec, см. CLAUDE.md.
-    Клик по строке открывает <a href="https://aladin.cds.unistra.fr/AladinLite/" target="_blank" rel="noopener">Aladin Lite</a>
-    с центром на этих координатах.
-</p>
+$filtered = $filterCatalog !== '' || $filterObjectType !== '' || $filterSearch !== '';
+?>
+<?= $this->section('content') ?>
 
-<form method="get" action="/ui/sources" class="row g-2 align-items-end mb-3">
-    <div class="col-auto">
-        <label class="form-label mb-0">Каталог</label>
-        <select name="catalog_name" class="form-select">
-            <option value="">— все —</option>
-            <?php foreach ($catalogNames as $c): ?>
-                <option value="<?= esc($c) ?>" <?= $c === $filterCatalog ? 'selected' : '' ?>><?= esc($c) ?></option>
-            <?php endforeach; ?>
-        </select>
+<div class="page-head">
+    <div>
+        <h1>Источники</h1>
+        <p class="sub">
+            Каталог обнаруженных объектов. Позиция — по последнему наблюдению (у источника нет своих
+            координат: движущиеся объекты смещаются от кадра к кадру). Клик по строке открывает
+            <a href="https://aladin.cds.unistra.fr/AladinLite/" target="_blank" rel="noopener">Aladin Lite</a>.
+        </p>
     </div>
-    <div class="col-auto">
-        <label class="form-label mb-0">Тип объекта</label>
-        <select name="object_type" class="form-select">
-            <option value="">— все —</option>
-            <?php foreach ($objectTypes as $t): ?>
-                <option value="<?= esc($t) ?>" <?= $t === $filterObjectType ? 'selected' : '' ?>><?= esc($t) ?></option>
-            <?php endforeach; ?>
-        </select>
-    </div>
-    <div class="col-auto">
-        <label class="form-label mb-0">catalog_id содержит</label>
-        <input type="text" name="search" class="form-control" value="<?= esc($filterSearch) ?>">
-    </div>
-    <div class="col-auto">
-        <label class="form-label mb-0">Лимит</label>
-        <input type="number" name="limit" class="form-control" style="width: 100px" value="<?= (int) $limit ?>" min="1" max="2000">
-    </div>
-    <div class="col-auto">
-        <button type="submit" class="btn btn-outline-primary">Фильтровать</button>
-    </div>
-    <div class="col-auto">
-        <a href="/ui/sources" class="btn btn-outline-secondary">Сбросить</a>
-    </div>
-</form>
-
-<div class="table-responsive border rounded bg-white">
-<table class="table table-sm table-hover table-striped mb-0">
-<thead class="table-light sticky-top">
-<tr>
-    <th>Каталог</th><th>ID каталога</th><th>Тип</th><th>Mag (каталог)</th><th>Mag (посл.)</th>
-    <th>RA / Dec</th><th>Наблюдений</th><th>Первое / последнее</th><th></th>
-</tr>
-</thead>
-<tbody>
-<?php if (empty($sources)): ?>
-    <tr><td colspan="9" class="text-center text-muted py-4">Ничего не найдено по заданному фильтру.</td></tr>
-<?php endif; ?>
-<?php foreach ($sources as $source): ?>
-    <?php
-    $hasPosition = $source['ra'] !== null && $source['dec'] !== null;
-    $aladinUrl   = $hasPosition
-        ? 'https://aladin.cds.unistra.fr/AladinLite/?target='
-            . rawurlencode(number_format((float) $source['ra'], 6, '.', '') . ' ' . number_format((float) $source['dec'], 6, '.', ''))
-            . '&fov=0.25&survey=P%2FDSS2%2Fcolor'
-        : null;
-    ?>
-    <tr class="<?= $hasPosition ? 'cursor-pointer' : '' ?>"
-        <?php if ($hasPosition): ?>
-            onclick="window.open('<?= esc($aladinUrl, 'attr') ?>', '_blank', 'noopener')" role="link"
-        <?php endif; ?>
-    >
-        <td><?= esc($source['catalog_name'] ?? '—') ?></td>
-        <td class="text-break small"><?= esc($source['catalog_id'] ?? '—') ?></td>
-        <td><?= esc($source['object_type'] ?? '—') ?></td>
-        <td><?= $source['catalog_mag'] !== null ? number_format((float) $source['catalog_mag'], 2) : '—' ?></td>
-        <td><?= $source['mag'] !== null ? number_format((float) $source['mag'], 2) : '—' ?></td>
-        <td class="small">
-            <?php if ($hasPosition): ?>
-                <a href="<?= esc($aladinUrl) ?>" target="_blank" rel="noopener" onclick="event.stopPropagation()">
-                    <?= number_format((float) $source['ra'], 5) ?> / <?= number_format((float) $source['dec'], 5) ?>
-                </a>
-            <?php else: ?>
-                <span class="text-muted">нет наблюдений</span>
-            <?php endif; ?>
-        </td>
-        <td><?= (int) $source['observation_count'] ?></td>
-        <td class="small">
-            <?= $source['first_observed_at'] ? esc(gmdate('Y-m-d H:i', strtotime($source['first_observed_at']))) : '—' ?>
-            /
-            <?= $source['last_observed_at'] ? esc(gmdate('Y-m-d H:i', strtotime($source['last_observed_at']))) : '—' ?>
-        </td>
-        <td class="small text-nowrap">
-            <a href="/ui/charts?source_id=<?= esc($source['id']) ?>" onclick="event.stopPropagation()">графики</a>
-            ·
-            <a href="/ui/anomalies?source_id=<?= esc($source['id']) ?>" onclick="event.stopPropagation()">аномалии</a>
-            ·
-            <form method="post" action="/ui/sources/generate-charts" class="d-inline" onclick="event.stopPropagation()">
-                <input type="hidden" name="source_id" value="<?= esc($source['id']) ?>">
-                <button type="submit" class="btn btn-link btn-sm p-0 align-baseline">построить графики</button>
-            </form>
-        </td>
-    </tr>
-<?php endforeach; ?>
-</tbody>
-</table>
 </div>
 
-<style>.cursor-pointer { cursor: pointer; }</style>
+<div class="panel">
+    <form class="filters" method="get" action="/ui/sources">
+        <label class="field wide">
+            <span class="label">catalog_id содержит</span>
+            <span class="search"><?= ui_icon('search', 14) ?><input class="input" type="search" name="search" value="<?= esc($filterSearch, 'attr') ?>" placeholder="Gaia DR3 …, V* …"></span>
+        </label>
+        <label class="field">
+            <span class="label">Каталог</span>
+            <select class="input" name="catalog_name" data-autosubmit>
+                <option value="">Все каталоги</option>
+                <?php foreach ($catalogNames as $c): ?>
+                    <option value="<?= esc($c, 'attr') ?>" <?= $c === $filterCatalog ? 'selected' : '' ?>><?= esc($c) ?></option>
+                <?php endforeach; ?>
+            </select>
+        </label>
+        <label class="field">
+            <span class="label">Тип объекта</span>
+            <select class="input" name="object_type" data-autosubmit>
+                <option value="">Все типы</option>
+                <?php foreach ($objectTypes as $t): ?>
+                    <option value="<?= esc($t, 'attr') ?>" <?= $t === $filterObjectType ? 'selected' : '' ?>><?= esc($t) ?></option>
+                <?php endforeach; ?>
+            </select>
+        </label>
+        <label class="field narrow">
+            <span class="label">Лимит</span>
+            <input class="input mono" type="number" name="limit" value="<?= (int) $limit ?>" min="1" max="2000">
+        </label>
+        <div class="actions">
+            <?php if ($filtered): ?><a class="btn ghost" href="/ui/sources"><?= ui_icon('x', 14) ?>Сбросить</a><?php endif; ?>
+            <button class="btn" type="submit"><?= ui_icon('search', 14) ?>Показать</button>
+        </div>
+    </form>
 
-<?= view('web/partials/footer') ?>
+    <div class="table-wrap">
+        <table class="table">
+            <thead>
+            <tr>
+                <th>Обозначение</th>
+                <th>Тип</th>
+                <th class="num">Mag кат.</th>
+                <th class="num">Mag посл.</th>
+                <th>RA / Dec</th>
+                <th class="num">Наблюдений</th>
+                <th>Период</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody>
+            <?php if (empty($sources)): ?>
+                <tr><td colspan="8" class="empty-cell"><div class="empty"><?= ui_icon('sources') ?><strong>Источников не найдено</strong><span>Измените или сбросьте фильтр.</span></div></td></tr>
+            <?php endif; ?>
+            <?php foreach ($sources as $source): ?>
+                <?php
+                $hasPosition = $source['ra'] !== null && $source['dec'] !== null;
+                $aladinUrl   = $hasPosition ? ui_aladin($source['ra'], $source['dec']) : null;
+                ?>
+                <tr<?= $hasPosition ? ' data-href="' . esc($aladinUrl, 'attr') . '" data-target="_blank"' : '' ?>>
+                    <td>
+                        <span class="primary"><?= esc($source['catalog_id'] ?? 'Без обозначения') ?></span>
+                        <span class="sub"><?= esc($source['catalog_name'] ?? 'не сопоставлен с каталогом') ?> · <span class="id"><?= esc($source['id']) ?></span></span>
+                    </td>
+                    <td><?= $source['object_type'] ? ui_chip($source['object_type'], 'cyan') : '<span class="dim">—</span>' ?></td>
+                    <td class="num"><?= ui_num($source['catalog_mag'], 2) ?></td>
+                    <td class="num"><?= ui_num($source['mag'], 2) ?></td>
+                    <td>
+                        <?php if ($hasPosition): ?>
+                            <a class="coords" href="<?= esc($aladinUrl, 'attr') ?>" target="_blank" rel="noopener" title="Открыть в Aladin Lite">
+                                <?= ui_num($source['ra'], 5) ?> / <?= ui_num($source['dec'], 5) ?>
+                            </a>
+                        <?php else: ?>
+                            <span class="dim small">нет наблюдений</span>
+                        <?php endif; ?>
+                    </td>
+                    <td class="num"><?= (int) $source['observation_count'] ?></td>
+                    <td class="mono small nowrap">
+                        <?= ui_time($source['first_observed_at']) ?><br>
+                        <span class="dim"><?= ui_time($source['last_observed_at']) ?></span>
+                    </td>
+                    <td class="actions">
+                        <span class="row-actions">
+                            <a class="btn icon sm" href="/ui/charts?source_id=<?= esc($source['id'], 'url') ?>" title="Графики источника"><?= ui_icon('charts') ?></a>
+                            <a class="btn icon sm" href="/ui/anomalies?source_id=<?= esc($source['id'], 'url') ?>" title="Аномалии источника"><?= ui_icon('anomalies') ?></a>
+                            <form class="inline" method="post" action="/ui/sources/generate-charts">
+                                <?= csrf_field() ?>
+                                <input type="hidden" name="source_id" value="<?= esc($source['id'], 'attr') ?>">
+                                <button type="submit" class="btn sm" title="Создать задачу GENERATE_CHARTS"><?= ui_icon('refresh', 14) ?>Построить графики</button>
+                            </form>
+                        </span>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+    <div class="panel-foot">
+        <span>Показано <?= count($sources) ?><?= count($sources) >= $limit ? ' — достигнут лимит ' . $limit : '' ?></span>
+    </div>
+</div>
+
+<?= $this->endSection() ?>

@@ -1,77 +1,83 @@
-<?= view('web/partials/header', ['title' => 'Observatory — Настройки']) ?>
+<?php
+/**
+ * @var list<array>                $settings  config-type rows (SettingModel::getConfigurable())
+ * @var array<string, list<array>> $groups    the same rows by name prefix (QC_, STAR_, …)
+ */
+$this->extend('web/layout');
+$this->setVar('title', 'Настройки');
+$this->setVar('active', 'settings');
 
-<div class="d-flex justify-content-between align-items-center mb-3">
-    <h1 class="h4 mb-0">Настройки pipeline</h1>
-    <span class="text-muted small">Только параметры с type&nbsp;=&nbsp;<code>config</code>. Внутренние параметры скрыты.</span>
+$isBool = static fn (?string $v): bool => in_array(strtolower((string) $v), ['true', 'false'], true);
+?>
+<?= $this->section('content') ?>
+
+<div class="page-head">
+    <div>
+        <h1>Настройки pipeline</h1>
+        <p class="sub">Параметры, которые pipeline читает из базы. После сохранения каждый активный pipeline
+            получает задачу RESTART и перезапускается с новыми значениями. Внутренние параметры скрыты.</p>
+    </div>
+    <div class="actions">
+        <button class="btn primary" type="submit" form="settings-form"><?= ui_icon('save') ?>Сохранить</button>
+    </div>
 </div>
 
-<form method="post" action="/ui/settings">
+<?php if ($settings === []): ?>
+    <div class="panel"><div class="empty"><?= ui_icon('settings') ?><strong>Настраиваемых параметров нет</strong><span>Они появляются после <code>php spark migrate</code>.</span></div></div>
+<?php else: ?>
+    <nav class="settings-nav" aria-label="Группы">
+        <?php foreach ($groups as $prefix => $rows): ?>
+            <a href="#group-<?= esc(strtolower($prefix), 'attr') ?>"><?= esc($prefix) ?> <span class="dim"><?= count($rows) ?></span></a>
+        <?php endforeach; ?>
+    </nav>
 
-    <div class="card shadow-sm mb-4">
-        <div class="card-body p-0">
-            <div class="table-responsive">
-                <table class="table table-sm table-striped mb-0">
-                    <thead class="table-light">
-                        <tr>
-                            <th style="width: 25%">Параметр</th>
-                            <th style="width: 30%">Значение</th>
-                            <th>Описание</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php
-                        $currentGroup = '';
-                        foreach ($settings as $setting):
-                            $parts = explode('_', $setting['param'], 2);
-                            $prefix = $parts[0];
-                            if ($prefix !== $currentGroup):
-                                $currentGroup = $prefix;
-                        ?>
-                            <tr class="table-secondary">
-                                <td colspan="3" class="fw-semibold small text-uppercase py-1 px-3">
-                                    <?= esc($currentGroup) ?>
-                                </td>
-                            </tr>
-                        <?php endif; ?>
-                        <tr>
-                            <td>
-                                <code><?= esc($setting['param']) ?></code>
-                            </td>
-                            <td>
-                                <?php
-                                $val = $setting['value'] ?? '';
-                                $fieldName = 'setting_' . $setting['id'];
-                                // Boolean-like values get a select
-                                if (in_array(strtolower($val), ['true', 'false'], true)):
-                                ?>
-                                    <select name="<?= esc($fieldName) ?>" class="form-select form-select-sm">
-                                        <option value="true" <?= $val === 'true' ? 'selected' : '' ?>>true</option>
-                                        <option value="false" <?= $val === 'false' ? 'selected' : '' ?>>false</option>
-                                    </select>
-                                <?php else: ?>
-                                    <input type="text"
-                                           name="<?= esc($fieldName) ?>"
-                                           value="<?= esc($val) ?>"
-                                           class="form-control form-control-sm"
-                                    >
-                                <?php endif; ?>
-                            </td>
-                            <td class="text-muted small"><?= esc($setting['description'] ?? '') ?></td>
-                        </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
+    <form method="post" action="/ui/settings" id="settings-form" data-settings-form>
+        <?= csrf_field() ?>
+        <?php foreach ($groups as $prefix => $rows): ?>
+            <section class="panel section" id="group-<?= esc(strtolower($prefix), 'attr') ?>">
+                <div class="panel-head">
+                    <div class="title"><h3 class="mono"><?= esc($prefix) ?></h3></div>
+                    <span class="hint"><?= count($rows) ?> <?= ui_plural(count($rows), 'параметр', 'параметра', 'параметров') ?></span>
+                </div>
+                <?php foreach ($rows as $setting): ?>
+                    <?php
+                    $val   = (string) ($setting['value'] ?? '');
+                    $name  = 'setting_' . $setting['id'];
+                    $field = 'f-' . $setting['id'];
+                    ?>
+                    <div class="setting">
+                        <label for="<?= $field ?>">
+                            <div class="param"><?= esc($setting['param']) ?></div>
+                            <?php if (! empty($setting['description'])): ?><div class="desc"><?= esc($setting['description']) ?></div><?php endif; ?>
+                        </label>
+                        <div>
+                            <?php if ($isBool($val)): ?>
+                                <label class="switch">
+                                    <!-- Unchecked submits the hidden "false"; checked, the checkbox's "true" comes later and wins. -->
+                                    <input type="hidden" name="<?= esc($name, 'attr') ?>" value="false">
+                                    <input type="checkbox" id="<?= $field ?>" name="<?= esc($name, 'attr') ?>" value="true"
+                                           data-original="<?= esc(strtolower($val), 'attr') ?>" data-on="true" data-off="false"
+                                           <?= strtolower($val) === 'true' ? 'checked' : '' ?>>
+                                    <span class="track"></span>
+                                    <span class="state"><?= esc(strtolower($val)) ?></span>
+                                </label>
+                            <?php else: ?>
+                                <input class="input mono" type="text" id="<?= $field ?>" name="<?= esc($name, 'attr') ?>"
+                                       value="<?= esc($val, 'attr') ?>" data-original="<?= esc($val, 'attr') ?>" spellcheck="false">
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            </section>
+        <?php endforeach; ?>
+
+        <div class="selbar" data-empty data-dirty-bar>
+            <span class="count"><b data-dirty-count>0</b>изменено</span>
+            <span class="hint">Сохранение перезапустит pipeline.</span>
+            <button class="btn" type="reset">Отменить</button>
+            <button class="btn primary" type="submit"><?= ui_icon('save', 14) ?>Сохранить и перезапустить</button>
         </div>
-    </div>
+    </form>
+<?php endif; ?>
 
-    <div class="d-flex gap-2 align-items-center">
-        <button type="submit" class="btn btn-primary">
-            💾 Сохранить и перезагрузить pipeline
-        </button>
-        <span class="text-muted small">После сохранения будет создана задача RESTART — pipeline подхватит новые настройки.</span>
-    </div>
-</form>
-
-<?= view('web/partials/footer') ?>
-
+<?= $this->endSection() ?>

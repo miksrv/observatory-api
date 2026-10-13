@@ -8,20 +8,19 @@ use App\Models\PipelineModel;
 use App\Models\SourceChartModel;
 use App\Models\SourceModel;
 use App\Models\TaskModel;
-use CodeIgniter\Controller;
 use CodeIgniter\HTTP\ResponseInterface;
 
 /**
- * Temporary debug web UI — landing page.
+ * Web UI — overview: the pipelines, the catalogue's totals, the task queue, recent tasks and
+ * alerts.
  *
- * This whole `Web` namespace is a throwaway operator dashboard for manually driving the
- * pipeline (browse frames, create tasks, look at charts/anomalies). It only ever *reads*
- * through the existing models (same ones Api\V1\* uses) and, where it writes, calls their
- * existing public methods (TaskModel::insert(), TaskItemModel::insertForTask(), ...) — nothing
- * in app/Controllers/Api or app/Models is modified for this to work. See Config/Routes.php's
- * `ui` group docblock for why it's unauthenticated and kept out of the `api/v1` group entirely.
+ * The whole `Web` namespace is the operator console for driving the pipeline (browse frames,
+ * create tasks, look at charts/anomalies). It reads through the same models Api\V1\* uses and,
+ * where it writes, calls their existing public methods (TaskModel::createPerPipeline(), ...). See
+ * Config/Routes.php's `ui` group docblock for how it's signed in to and why it's kept out of the
+ * `api/v1` group.
  */
-class DashboardController extends Controller
+class DashboardController extends BaseWebController
 {
     public function index(): ResponseInterface
     {
@@ -40,10 +39,29 @@ class DashboardController extends Controller
             'charts'    => (new SourceChartModel())->countAllResults(),
         ];
 
+        $recentTasks = (new TaskModel())
+            ->where('type !=', 'RESTART')
+            ->orderBy('created_at', 'DESC')
+            ->findAll(6);
+
+        $recentAlerts = (new AnomalyModel())
+            ->select(
+                'anomalies.id, anomalies.anomaly_type, anomalies.source_id, anomalies.mpc_designation, '
+                . 'anomalies.ra, anomalies.dec, frames.object, frames.obs_time, sources.catalog_id'
+            )
+            ->join('frames', 'frames.id = anomalies.frame_id', 'left')
+            ->join('sources', 'sources.id = anomalies.source_id', 'left')
+            ->where('anomalies.is_alert', 1)
+            ->orderBy('frames.obs_time', 'DESC')
+            ->findAll(6);
+
         return $this->response->setBody(view('web/dashboard', [
             'stats'         => $stats,
+            'recentTasks'   => $recentTasks,
+            'recentAlerts'  => $recentAlerts,
             'tasksByStatus' => $tasksByStatus,
             'pipelines'     => (new PipelineModel())->getOverview(),
+            'pipelineNames' => (new PipelineModel())->getAllNames(),
             // Untargeted PENDING tasks — any pipeline may take them.
             'pendingShared' => (new TaskModel())->where('status', 'PENDING')->where('pipeline_id', null)->countAllResults(),
         ]));

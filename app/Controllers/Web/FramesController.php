@@ -6,17 +6,16 @@ use App\Models\FrameModel;
 use App\Models\PipelineModel;
 use App\Models\SourceObservationModel;
 use App\Models\TaskModel;
-use CodeIgniter\Controller;
 use CodeIgniter\HTTP\ResponseInterface;
 
 /**
- * Debug UI page: "Frames" — list already-registered FITS frames, filter by object, and create
- * a task from a checked selection. Part of the temporary Web\* dashboard (see
+ * Web UI page: "Frames" — list already-registered FITS frames, filter by object, and create
+ * a task from a checked selection. Part of the Web\* console (see
  * DashboardController's docblock) — reads `frames` via the existing FrameModel and creates tasks
  * via TaskModel/TaskItemModel's existing public methods, the same ones
  * Api\V1\TasksController::create() uses, just without going through that HTTP endpoint.
  */
-class FramesController extends Controller
+class FramesController extends BaseWebController
 {
     use RedirectsToCreatedTasks;
 

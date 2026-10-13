@@ -5,18 +5,17 @@ namespace App\Controllers\Web;
 use App\Models\SourceModel;
 use App\Models\SourceObservationModel;
 use App\Models\TaskModel;
-use CodeIgniter\Controller;
 use CodeIgniter\HTTP\ResponseInterface;
 
 /**
- * Debug UI page: "Sources" — the source catalog, each row showing its current position resolved
+ * Web UI page: "Sources" — the source catalog, each row showing its current position resolved
  * from its most recent `source_observations` row (see CLAUDE.md: `sources` has no ra/dec of its
  * own). Every row with a resolved position links out to Aladin Lite (aladin.cds.unistra.fr)
  * centered on that ra/dec, so an operator can eyeball what the pipeline actually matched against
  * a real sky survey image. Sources with zero observations (shouldn't normally happen — a source
  * is only ever created alongside its first observation) show as unlinked.
  */
-class SourcesController extends Controller
+class SourcesController extends BaseWebController
 {
     use RedirectsToCreatedTasks;
 

@@ -6,15 +6,14 @@ use App\Models\AnomalyModel;
 use App\Models\SourceChartModel;
 use App\Models\SourceObservationModel;
 use App\Models\TaskModel;
-use CodeIgniter\Controller;
 use CodeIgniter\HTTP\ResponseInterface;
 
 /**
- * Debug UI page: "Anomalies" — anomalies grouped by source, joined with their frame
+ * Web UI page: "Anomalies" — anomalies grouped by source, joined with their frame
  * (object/filename/obs_time) and source (catalog identity) for context. Each row in the list
  * represents one source with all its anomalies aggregated together.
  */
-class AnomaliesController extends Controller
+class AnomaliesController extends BaseWebController
 {
     use RedirectsToCreatedTasks;
 
@@ -238,8 +237,9 @@ class AnomaliesController extends Controller
             $charts     = $chartModel->whereIn('source_id', $sourceIds)->findAll();
 
             foreach ($charts as $chart) {
-                // Delete chart image file from disk.
-                $filePath = WRITEPATH . 'uploads/charts/' . $chart['source_id'] . '_' . $chart['style'] . '.png';
+                // Delete chart image file from disk — a GIF style's file is .gif (see CLAUDE.md).
+                $ext      = in_array($chart['style'], SourceChartModel::GIF_STYLES, true) ? 'gif' : 'png';
+                $filePath = WRITEPATH . 'uploads/charts/' . $chart['source_id'] . '_' . $chart['style'] . '.' . $ext;
                 if (is_file($filePath)) {
                     unlink($filePath);
                 }

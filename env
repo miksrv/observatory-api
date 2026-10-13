@@ -1,71 +1,89 @@
 #--------------------------------------------------------------------
-# Example Environment Configuration file
+# observatory-api environment template
 #
-# This file can be used as a starting point for your own
-# custom .env files, and contains most of the possible settings
-# available in a default install.
+# Production (hosting): copy this file to `.env` in the hosting root and
+# replace every <...> placeholder. The deploy workflow never uploads or
+# overwrites `.env` — it is maintained by hand there.
 #
-# By default, all of the settings are commented out. If you want
-# to override the setting, you must un-comment it by removing the '#'
-# at the beginning of the line.
+# Local development: `cp env .env`, then switch to the development values
+# noted next to each setting (see README.md, "Configure the environment").
+#
+# CodeIgniter's DotEnv never overrides a variable that is already set, so
+# the first occurrence of a key wins — don't append duplicates below.
 #--------------------------------------------------------------------
 
 #--------------------------------------------------------------------
 # ENVIRONMENT
 #--------------------------------------------------------------------
 
-# CI_ENVIRONMENT = production
+# production on the hosting; development locally.
+CI_ENVIRONMENT = production
 
 #--------------------------------------------------------------------
 # APP
 #--------------------------------------------------------------------
 
-# app.baseURL = ''
-# If you have trouble with `.`, you could also use `_`.
-# app_baseURL = ''
-# app.forceGlobalSecureRequests = false
-# app.CSPEnabled = false
+# Public URL with a trailing slash; locally 'http://localhost:8080/'.
+app.baseURL = 'https://observatory.miksoft.pro/'
+
+# public/.htaccess rewrites every request to index.php, so generated URLs
+# don't need it.
+app.indexPage = ''
+
+# Redirect plain HTTP to HTTPS. Enable only once HTTPS is confirmed working
+# on the hosting — a misdetected proxy setup turns this into a redirect loop.
+# app.forceGlobalSecureRequests = true
+
+# Initial pipeline API key (X-API-Key). `php spark migrate` registers it once
+# as pipeline `default`; after that keys are managed with `php spark pipeline:*`
+# and this value is no longer read. Must match the pipeline's API_KEY.
+# Generate with: php -r 'echo bin2hex(random_bytes(32));'
+app.apiKey = <64-hex-character-key>
+
+# Web UI (/ui) sign-in: one operator account. Without both values nobody can
+# sign in. Prefer a hash for the password: `php spark ui:password` prints the
+# line to paste here (keep the single quotes — the hash contains `$`).
+# Changing either value signs every browser out.
+ui.username = <operator-login>
+ui.password = '<password-hash>'
+
+# Optional: sign out after this many idle minutes (keep within the session
+# lifetime, 120); lock an address for ui.lockMinutes after ui.maxFailures
+# wrong passwords.
+# ui.idleMinutes = 120
+# ui.maxFailures = 5
+# ui.lockMinutes = 15
 
 #--------------------------------------------------------------------
 # DATABASE
 #--------------------------------------------------------------------
 
-# database.default.hostname = localhost
-# database.default.database = ci4
-# database.default.username = root
-# database.default.password = root
-# database.default.DBDriver = MySQLi
-# database.default.DBPrefix =
-# database.default.port = 3306
+# Hosting: the MariaDB credentials from the hosting control panel.
+# Locally: matches docker-compose.yml (127.0.0.1 / db / user / password).
+database.default.hostname = localhost
+database.default.database = <database-name>
+database.default.username = <database-user>
+database.default.password = <database-password>
+database.default.DBDriver = MySQLi
+database.default.DBPrefix =
+database.default.port = 3306
 
-# database.tests.* — the connection the test suite uses (CI_ENVIRONMENT=testing).
-# It MUST be a throwaway database whose name ends in "_test": the feature tests
-# DELETE FROM every application table in setUp(), and Tests\Support\DatabaseTestCase
-# refuses to run against any other name. Create it once next to the working
-# database and migrate it with `php spark migrate -g tests` — see README.md, "Tests".
-database.tests.hostname = 127.0.0.1
-database.tests.database = db_test
-database.tests.username = user
-database.tests.password = password
-database.tests.DBDriver = MySQLi
-database.tests.DBPrefix =
-database.tests.port = 3306
-
-#--------------------------------------------------------------------
-# ENCRYPTION
-#--------------------------------------------------------------------
-
-# encryption.key =
-
-#--------------------------------------------------------------------
-# SESSION
-#--------------------------------------------------------------------
-
-# session.driver = 'CodeIgniter\Session\Handlers\FileHandler'
-# session.savePath = null
+# database.tests.* — local development only, never on the hosting: the
+# connection the test suite uses (CI_ENVIRONMENT=testing). It MUST be a
+# throwaway database whose name ends in "_test": the feature tests DELETE FROM
+# every application table in setUp(), and Tests\Support\DatabaseTestCase
+# refuses to run against any other name. See README.md, "Tests".
+# database.tests.hostname = 127.0.0.1
+# database.tests.database = db_test
+# database.tests.username = user
+# database.tests.password = password
+# database.tests.DBDriver = MySQLi
+# database.tests.DBPrefix =
+# database.tests.port = 3306
 
 #--------------------------------------------------------------------
 # LOGGER
 #--------------------------------------------------------------------
 
+# Defaults: 4 (errors and above) in production, 9 (everything) otherwise.
 # logger.threshold = 4

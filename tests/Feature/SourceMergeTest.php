@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\SourceModel;
 use Tests\Support\DatabaseTestCase;
+use Tests\Support\SignsInToUi;
 use CodeIgniter\Test\FeatureTestTrait;
 
 /**
@@ -29,6 +30,7 @@ use CodeIgniter\Test\FeatureTestTrait;
 final class SourceMergeTest extends DatabaseTestCase
 {
     use FeatureTestTrait;
+    use SignsInToUi;
 
     // Same minimal-but-signed PNG body SourceChartsTest.php uses — enough to
     // exercise file-existence/cleanup assertions without a real renderer.
@@ -37,6 +39,7 @@ final class SourceMergeTest extends DatabaseTestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $this->signInToUi();
         $this->emptyAppTables();
     }
 
@@ -158,7 +161,7 @@ final class SourceMergeTest extends DatabaseTestCase
     {
         $frag = $this->createFragmentedSource('2021-04-27 17:43:16', 222.606, 32.552);
 
-        $result = $this->post('/ui/sources/merge', ['source_ids' => [$frag['source_id']]]);
+        $result = $this->post('/ui/sources/merge', $this->uiForm(['source_ids' => [$frag['source_id']]]));
 
         $result->assertRedirect();
         $result->assertSessionHas('error');
@@ -180,9 +183,9 @@ final class SourceMergeTest extends DatabaseTestCase
 
         $db = \Config\Database::connect();
 
-        $result = $this->post('/ui/sources/merge', [
+        $result = $this->post('/ui/sources/merge', $this->uiForm([
             'source_ids' => [$a['source_id'], $b['source_id'], $c['source_id']],
-        ]);
+        ]));
 
         $result->assertRedirectTo('/ui/charts');
         $result->assertSessionHas('success');
@@ -244,9 +247,9 @@ final class SourceMergeTest extends DatabaseTestCase
         $this->assertFileExists($this->chartsDir() . $a['source_id'] . '_track.png');
         $this->assertFileExists($this->chartsDir() . $b['source_id'] . '_track.png');
 
-        $result = $this->post('/ui/sources/merge', [
+        $result = $this->post('/ui/sources/merge', $this->uiForm([
             'source_ids' => [$a['source_id'], $b['source_id']],
-        ]);
+        ]));
         $result->assertSessionHas('success');
 
         $db = \Config\Database::connect();
@@ -269,9 +272,9 @@ final class SourceMergeTest extends DatabaseTestCase
         $a = $this->createFragmentedSource('2021-04-27 17:43:16', 222.606, 32.552);
         $b = $this->createFragmentedSource('2021-04-27 18:34:28', 222.487, 32.643);
 
-        $result = $this->post('/ui/sources/merge', [
+        $result = $this->post('/ui/sources/merge', $this->uiForm([
             'source_ids' => [$a['source_id'], $b['source_id'], 'does-not-exist.12345678'],
-        ]);
+        ]));
 
         $result->assertSessionHas('success');
         $this->assertStringContainsString('does-not-exist.12345678', $_SESSION['success']);

@@ -1,88 +1,122 @@
-<?= view('web/partials/header', ['title' => 'Задачи (tasks)']) ?>
+<?php
+/**
+ * @var list<array>           $tasks
+ * @var array<string, int>    $counts  per status, within the other filters
+ * @var list<string>          $statuses
+ * @var list<string>          $types
+ * @var string                $filterStatus
+ * @var string                $filterType
+ * @var string                $filterObjectQ
+ * @var array<string, string> $pipelines id => name
+ * @var string                $filterPipeline
+ */
+$this->extend('web/layout');
+$this->setVar('title', 'Задачи');
+$this->setVar('active', 'tasks');
+$this->setVar('fill', true);
 
-<h1 class="h4 mb-3">Задачи (tasks)</h1>
+// Refresh while anything in view is still moving.
+if ($counts['RUNNING'] > 0 || $counts['PENDING'] > 0) {
+    $this->setVar('autorefresh', 15);
+}
 
-<form method="get" action="/ui/tasks" class="row g-2 align-items-end mb-3">
-    <div class="col-auto">
-        <label class="form-label mb-0">Статус</label>
-        <select name="status" class="form-select">
-            <option value="">— все —</option>
-            <?php foreach ($statuses as $s): ?>
-                <option value="<?= esc($s) ?>" <?= $s === $filterStatus ? 'selected' : '' ?>><?= esc($s) ?></option>
-            <?php endforeach; ?>
-        </select>
-    </div>
-    <div class="col-auto">
-        <label class="form-label mb-0">Тип</label>
-        <select name="type" class="form-select">
-            <option value="">— все —</option>
-            <?php foreach ($types as $t): ?>
-                <option value="<?= esc($t) ?>" <?= $t === $filterType ? 'selected' : '' ?>><?= esc($t) ?></option>
-            <?php endforeach; ?>
-        </select>
-    </div>
-    <div class="col-auto">
-        <label class="form-label mb-0">Pipeline</label>
-        <select name="pipeline" class="form-select">
-            <option value="">— все —</option>
-            <?php foreach ($pipelines as $name): ?>
-                <option value="<?= esc($name) ?>" <?= $name === $filterPipeline ? 'selected' : '' ?>><?= esc($name) ?></option>
-            <?php endforeach; ?>
-        </select>
-    </div>
-    <div class="col-auto">
-        <label class="form-label mb-0">Объект (scope_object)</label>
-        <input type="text" name="object" class="form-control" value="<?= esc($filterObjectQ) ?>">
-    </div>
-    <div class="col-auto">
-        <button type="submit" class="btn btn-outline-primary">Фильтровать</button>
-    </div>
-    <div class="col-auto">
-        <a href="/ui/tasks" class="btn btn-outline-secondary">Сбросить</a>
-    </div>
-</form>
+$filtered = $filterType !== '' || $filterObjectQ !== '' || $filterPipeline !== '';
+?>
+<?= $this->section('content') ?>
 
-<div class="table-responsive border rounded bg-white">
-<table class="table table-sm table-hover table-striped mb-0">
-<thead class="table-light">
-<tr>
-    <th>ID</th><th>Тип</th><th>Статус</th><th>Pipeline</th><th>Объект</th><th>Прогресс</th>
-    <th>Создана (UTC)</th><th>Завершена/начата (UTC)</th><th></th>
-</tr>
-</thead>
-<tbody>
-<?php if (empty($tasks)): ?>
-    <tr><td colspan="9" class="text-center text-muted py-4">Задач не найдено.</td></tr>
-<?php endif; ?>
-<?php foreach ($tasks as $task): ?>
-    <?php
-    $badge = match ($task['status']) {
-        'COMPLETED' => 'bg-success',
-        'FAILED'    => 'bg-danger',
-        'RUNNING'   => 'bg-primary',
-        'CANCELLED' => 'bg-secondary',
-        default     => 'bg-warning text-dark',
-    };
-    $lastTime = $task['finished_at'] ?? $task['started_at'];
-    ?>
-    <tr>
-        <td><code class="small"><?= esc($task['id']) ?></code></td>
-        <td><?= esc($task['type']) ?></td>
-        <td><span class="badge <?= $badge ?>"><?= esc($task['status']) ?></span></td>
-        <td class="small"><?= view('web/partials/task_pipeline', ['task' => $task, 'names' => $pipelines]) ?></td>
-        <td><?= esc($task['scope_object'] ?? '—') ?></td>
-        <td><?= (int) $task['completed_items'] ?>/<?= (int) $task['total_items'] ?>
-            <?php if ((int) $task['failed_items'] > 0): ?>
-                <span class="text-danger">(<?= (int) $task['failed_items'] ?> failed)</span>
-            <?php endif; ?>
-        </td>
-        <td class="small"><?= $task['created_at'] ? esc(gmdate('Y-m-d H:i:s', strtotime($task['created_at']))) : '—' ?></td>
-        <td class="small"><?= $lastTime ? esc(gmdate('Y-m-d H:i:s', strtotime($lastTime))) : '—' ?></td>
-        <td><a class="btn btn-sm btn-outline-primary" href="/ui/tasks/<?= esc($task['id']) ?>">Детали</a></td>
-    </tr>
-<?php endforeach; ?>
-</tbody>
-</table>
+<div class="page-head">
+    <div>
+        <h1>Задачи</h1>
+        <p class="sub">Очередь заданий pipeline. Задачи создаются на страницах кадров, источников и аномалий
+            или самим pipeline.<?= $counts['RUNNING'] > 0 || $counts['PENDING'] > 0 ? ' Страница обновляется автоматически.' : '' ?></p>
+    </div>
+    <div class="actions">
+        <a class="btn primary" href="/ui/frames"><?= ui_icon('play') ?>Новая задача</a>
+    </div>
 </div>
 
-<?= view('web/partials/footer') ?>
+<div class="panel">
+    <nav class="tabs" aria-label="Статус">
+        <a href="<?= esc(ui_query(['status' => null]), 'attr') ?>" class="<?= $filterStatus === '' ? 'active' : '' ?>">Все <span class="count"><?= array_sum($counts) ?></span></a>
+        <?php foreach ($statuses as $s): ?>
+            <a href="<?= esc(ui_query(['status' => $s]), 'attr') ?>" class="<?= $s === $filterStatus ? 'active' : '' ?>" title="<?= $s ?>">
+                <?= esc(ui_task_status_label($s)) ?> <span class="count"><?= (int) $counts[$s] ?></span>
+            </a>
+        <?php endforeach; ?>
+    </nav>
+
+    <form class="filters" method="get" action="/ui/tasks" style="border-radius: 0">
+        <?php if ($filterStatus !== ''): ?><input type="hidden" name="status" value="<?= esc($filterStatus, 'attr') ?>"><?php endif; ?>
+        <label class="field wide">
+            <span class="label">Тип</span>
+            <select class="input" name="type" data-autosubmit>
+                <option value="">Все типы</option>
+                <?php foreach ($types as $t): ?>
+                    <option value="<?= esc($t, 'attr') ?>" <?= $t === $filterType ? 'selected' : '' ?>><?= esc($t) ?></option>
+                <?php endforeach; ?>
+            </select>
+        </label>
+        <label class="field">
+            <span class="label">Pipeline</span>
+            <select class="input" name="pipeline" data-autosubmit>
+                <option value="">Все</option>
+                <?php foreach ($pipelines as $name): ?>
+                    <option value="<?= esc($name, 'attr') ?>" <?= $name === $filterPipeline ? 'selected' : '' ?>><?= esc($name) ?></option>
+                <?php endforeach; ?>
+            </select>
+        </label>
+        <label class="field">
+            <span class="label">Объект</span>
+            <input class="input" type="text" name="object" value="<?= esc($filterObjectQ, 'attr') ?>" placeholder="scope_object">
+        </label>
+        <div class="actions">
+            <?php if ($filtered): ?><a class="btn ghost" href="<?= esc(ui_query(['type' => null, 'object' => null, 'pipeline' => null]), 'attr') ?>"><?= ui_icon('x', 14) ?>Сбросить</a><?php endif; ?>
+            <button class="btn" type="submit"><?= ui_icon('search', 14) ?>Показать</button>
+        </div>
+    </form>
+
+    <div class="table-wrap">
+        <table class="table">
+            <thead>
+            <tr>
+                <th>Задача</th>
+                <th>Статус</th>
+                <th>Прогресс</th>
+                <th>Pipeline</th>
+                <th>Объект</th>
+                <th>Создана</th>
+                <th>Начата / завершена</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody>
+            <?php if (empty($tasks)): ?>
+                <tr><td colspan="8" class="empty-cell"><div class="empty"><?= ui_icon('tasks') ?><strong>Задач не найдено</strong><span>Измените фильтр или создайте задачу на странице кадров.</span></div></td></tr>
+            <?php endif; ?>
+            <?php foreach ($tasks as $task): ?>
+                <tr data-href="/ui/tasks/<?= esc($task['id'], 'url') ?>">
+                    <td>
+                        <a class="primary mono" href="/ui/tasks/<?= esc($task['id'], 'url') ?>"><?= esc($task['type']) ?></a>
+                        <span class="sub id"><?= esc($task['id']) ?></span>
+                    </td>
+                    <td><?= ui_task_status($task['status']) ?></td>
+                    <td><?= view('web/partials/progress', ['task' => $task]) ?></td>
+                    <td><?= view('web/partials/task_pipeline', ['task' => $task, 'names' => $pipelines]) ?></td>
+                    <td class="nowrap"><?= esc($task['scope_object'] ?? '—') ?></td>
+                    <td class="small nowrap"><?= ui_when($task['created_at']) ?></td>
+                    <td class="small nowrap">
+                        <?= $task['started_at'] ? ui_when($task['started_at']) : '<span class="dim">не начата</span>' ?>
+                        <?php if ($task['finished_at']): ?><span class="sub"><?= ui_when($task['finished_at']) ?></span><?php endif; ?>
+                    </td>
+                    <td class="actions"><span class="dim"><?= ui_icon('chevron') ?></span></td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+    <div class="panel-foot">
+        <span>Показано <?= count($tasks) ?><?= count($tasks) >= 200 ? ' — последние 200' : '' ?></span>
+    </div>
+</div>
+
+<?= $this->endSection() ?>
