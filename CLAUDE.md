@@ -123,7 +123,7 @@ README.md's Architecture section for the full picture.
   controller or endpoint requires no extra work for the heartbeat to keep working.
 - **Several pipelines share one database** (one per observatory server; each holds its own FITS
   files). Each has its own API key (`pipelines.key_hash`, SHA-256; issued by
-  `php spark pipeline:*`, never by the unauthenticated `/ui`); `ApiKeyFilter` resolves the key to
+  `php spark pipeline:*`, never by the web UI); `ApiKeyFilter` resolves the key to
   the caller and stores it in `App\Libraries\PipelineIdentity` for the request. `app.apiKey` in
   .env is only read once, by the migration, to register it as pipeline `default`.
   `frames.pipeline_id` = who holds the file; `tasks.pipeline_id` = the only pipeline that may claim
@@ -134,6 +134,18 @@ README.md's Architecture section for the full picture.
   `SourceObservationModel::getChartPipelineForSources()`), `RESTART` → `TaskModel::queueRestart()`
   per known pipeline. `POST /frames` refuses (`409`) to let one pipeline overwrite another's
   `filename`. Feature tests: `DatabaseTestCase` registers phpunit's `app.apiKey` as `default`.
+- **The web UI (`/ui`, `App\Controllers\Web\*`) is signed in to with ONE account from `.env`**
+  (`ui.username`/`ui.password`, `Config\Ui`; the password may be a `password_hash()`, made with
+  `php spark ui:password`) — not with pipeline API keys, and there is no users table. The `ui`
+  route group runs `csrf` + `ui_auth` (`UiAuthFilter` → `App\Libraries\UiAuth`): every page but
+  `/ui/login` needs a session, which holds a fingerprint of the configured credentials (changing
+  them signs everyone out) and expires after `ui.idleMinutes` idle; wrong passwords lock the address
+  (`ui.maxFailures` within `ui.lockMinutes`, kept in the cache). CSRF is session-backed with one
+  token per session (`Config\Security`), so every UI form needs `csrf_field()`. Feature tests that
+  hit `/ui` use `Tests\Support\SignsInToUi` (`signInToUi()` in setUp, POST bodies through
+  `uiForm()`). Views extend `web/layout`, set `title`/`active` with `$this->setVar()`, and format
+  through `app/Helpers/ui_helper.php`; styles and behaviour are plain files in `public/assets/ui`
+  (no build step) — `app.js` is progressive, every form must still work without it.
 
 ---
 

@@ -3,6 +3,7 @@
 namespace Config;
 
 use App\Filters\ApiKeyFilter;
+use App\Filters\UiAuthFilter;
 use CodeIgniter\Config\Filters as BaseFilters;
 use CodeIgniter\Filters\Cors;
 use CodeIgniter\Filters\CSRF;
@@ -27,6 +28,7 @@ class Filters extends BaseFilters
      */
     public array $aliases = [
         'api_key'       => ApiKeyFilter::class,
+        'ui_auth'       => UiAuthFilter::class,
         'csrf'          => CSRF::class,
         'toolbar'       => DebugToolbar::class,
         'honeypot'      => Honeypot::class,

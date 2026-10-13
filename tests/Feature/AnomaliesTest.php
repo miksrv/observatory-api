@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use Tests\Support\DatabaseTestCase;
+use Tests\Support\SignsInToUi;
 use CodeIgniter\Test\FeatureTestTrait;
 
 /**
@@ -13,6 +14,7 @@ use CodeIgniter\Test\FeatureTestTrait;
 final class AnomaliesTest extends DatabaseTestCase
 {
     use FeatureTestTrait;
+    use SignsInToUi;
 
     private const API_KEY = 'your-secret-key-here';
 
@@ -490,6 +492,7 @@ final class AnomaliesTest extends DatabaseTestCase
             ])
             ->assertStatus(201);
 
+        $this->signInToUi();
         $result = $this->get('/ui/anomalies');
 
         $result->assertStatus(200);

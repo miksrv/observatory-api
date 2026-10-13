@@ -6,56 +6,68 @@ use App\Models\SourceChartModel;
 use App\Models\PipelineModel;
 use App\Models\TaskItemModel;
 use App\Models\TaskModel;
-use CodeIgniter\Controller;
 use CodeIgniter\HTTP\ResponseInterface;
 
 /**
- * Debug UI page: "Tasks" — browse the tasks/task_items queue, whether a task was created by
+ * Web UI page: "Tasks" — browse the tasks/task_items queue, whether a task was created by
  * observatory-pipeline via POST /api/v1/tasks or from this dashboard's
  * Web\FramesController::createTask(). Read-only except cancel(), which flips a task's status via
  * TaskModel::update() — the exact same call PATCH /api/v1/tasks/{id} makes.
  */
-class TasksController extends Controller
+class TasksController extends BaseWebController
 {
     public function index(): ResponseInterface
     {
-        $model = new TaskModel();
-
         $status   = trim((string) ($this->request->getGet('status') ?? ''));
         $type     = trim((string) ($this->request->getGet('type') ?? ''));
         $object   = trim((string) ($this->request->getGet('object') ?? ''));
         $pipeline = trim((string) ($this->request->getGet('pipeline') ?? ''));
 
-        if ($status !== '') {
-            $model = $model->where('status', $status);
-        }
-        if ($type !== '') {
-            $model = $model->where('type', $type);
-        }
-        if ($object !== '') {
-            $model = $model->where('scope_object', $object);
-        }
         // `pipeline` is a pipeline NAME (readable, linkable from the dashboard).
         $pipelineNames = (new PipelineModel())->getAllNames();
+        $pipelineId    = $pipeline !== '' ? (array_search($pipeline, $pipelineNames, true) ?: '') : null;
 
-        if ($pipeline !== '') {
-            $pipelineId = array_search($pipeline, $pipelineNames, true) ?: '';
-            // Targeted at this pipeline or claimed by it (an untargeted task it picked up).
-            $model = $model->groupStart()
-                ->where('pipeline_id', $pipelineId)
-                ->orWhere('claimed_by', $pipelineId)
-                ->groupEnd();
+        // Every filter but the status: the status tabs count within the rest of the filter.
+        $filtered = static function () use ($type, $object, $pipelineId): TaskModel {
+            $model = new TaskModel();
+
+            if ($type !== '') {
+                $model->where('type', $type);
+            }
+            if ($object !== '') {
+                $model->where('scope_object', $object);
+            }
+            if ($pipelineId !== null) {
+                // Targeted at this pipeline or claimed by it (an untargeted task it picked up).
+                $model->groupStart()
+                    ->where('pipeline_id', $pipelineId)
+                    ->orWhere('claimed_by', $pipelineId)
+                    ->groupEnd();
+            }
+
+            return $model;
+        };
+
+        $counts = array_fill_keys(TaskModel::STATUSES, 0);
+        foreach ($filtered()->select('status, COUNT(*) AS n')->groupBy('status')->findAll() as $row) {
+            $counts[$row['status']] = (int) $row['n'];
+        }
+
+        $model = $filtered();
+        if ($status !== '') {
+            $model->where('status', $status);
         }
 
         $tasks = $model->orderBy('created_at', 'DESC')->findAll(200);
 
         return $this->response->setBody(view('web/tasks_index', [
-            'tasks'         => $tasks,
-            'statuses'      => TaskModel::STATUSES,
-            'types'         => TaskModel::TYPES,
-            'filterStatus'  => $status,
-            'filterType'    => $type,
-            'filterObjectQ' => $object,
+            'tasks'          => $tasks,
+            'counts'         => $counts,
+            'statuses'       => TaskModel::STATUSES,
+            'types'          => TaskModel::TYPES,
+            'filterStatus'   => $status,
+            'filterType'     => $type,
+            'filterObjectQ'  => $object,
             'pipelines'      => $pipelineNames,
             'filterPipeline' => $pipeline,
         ]));

@@ -56,8 +56,9 @@ jobs:
           # testing environment itself, while `spark` under that environment
           # expects PHPUnit-only constants (SUPPORTPATH) and dies. Migrations
           # run in the development environment against the `tests` DB group.
-          cp env .env
-          echo "" >> .env
+          # Built from scratch, not from the `env` template: that holds
+          # production values, and DotEnv keeps the first occurrence of a key.
+          echo "CI_ENVIRONMENT=development" > .env
           echo "database.default.hostname=127.0.0.1" >> .env
           echo "database.default.database=db_test" >> .env
           echo "database.default.username=user" >> .env

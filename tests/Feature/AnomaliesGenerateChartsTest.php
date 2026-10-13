@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use Tests\Support\DatabaseTestCase;
+use Tests\Support\SignsInToUi;
 use CodeIgniter\Test\FeatureTestTrait;
 
 /**
@@ -20,12 +21,14 @@ use CodeIgniter\Test\FeatureTestTrait;
 final class AnomaliesGenerateChartsTest extends DatabaseTestCase
 {
     use FeatureTestTrait;
+    use SignsInToUi;
 
     private const MINIMAL_PNG = "\x89PNG\r\n\x1a\n" . 'rest-of-a-fake-but-signed-png-body';
 
     protected function setUp(): void
     {
         parent::setUp();
+        $this->signInToUi();
         $this->emptyAppTables();
     }
 
@@ -161,7 +164,7 @@ final class AnomaliesGenerateChartsTest extends DatabaseTestCase
             'designation' => null,
         ]);
 
-        $result = $this->post('/ui/anomalies/generate-charts', ['group_data' => [$groupData]]);
+        $result = $this->post('/ui/anomalies/generate-charts', $this->uiForm(['group_data' => [$groupData]]));
 
         $result->assertSessionHas('success');
 
@@ -208,7 +211,7 @@ final class AnomaliesGenerateChartsTest extends DatabaseTestCase
             'designation' => '4 Vesta',
         ]);
 
-        $result = $this->post('/ui/anomalies/generate-charts', ['group_data' => [$groupData]]);
+        $result = $this->post('/ui/anomalies/generate-charts', $this->uiForm(['group_data' => [$groupData]]));
         $result->assertSessionHas('success');
 
         $task  = $db->table('tasks')->where('type', 'GENERATE_CHARTS')->get()->getRowArray();
@@ -228,7 +231,7 @@ final class AnomaliesGenerateChartsTest extends DatabaseTestCase
             'designation' => null,
         ]);
 
-        $result = $this->post('/ui/anomalies/generate-charts', ['group_data' => [$groupData]]);
+        $result = $this->post('/ui/anomalies/generate-charts', $this->uiForm(['group_data' => [$groupData]]));
 
         $result->assertSessionHas('error');
         $db = \Config\Database::connect();
@@ -264,7 +267,7 @@ final class AnomaliesGenerateChartsTest extends DatabaseTestCase
             'designation' => null,
         ]);
 
-        $result = $this->post('/ui/anomalies/delete', ['group_data' => [$groupData]]);
+        $result = $this->post('/ui/anomalies/delete', $this->uiForm(['group_data' => [$groupData]]));
         $result->assertSessionHas('success');
 
         $this->assertSame(0, $db->table('anomalies')->countAllResults());

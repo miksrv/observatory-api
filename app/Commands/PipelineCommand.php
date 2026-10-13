@@ -9,7 +9,7 @@ use CodeIgniter\CLI\CLI;
 /**
  * Shared base for the `pipeline:*` commands that manage observatory-pipeline clients and their API
  * keys (see PipelineModel). Keys are issued here, on the API server's command line, and never
- * through the unauthenticated debug UI.
+ * through the web UI.
  */
 abstract class PipelineCommand extends BaseCommand
 {

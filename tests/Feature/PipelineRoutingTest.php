@@ -7,6 +7,7 @@ use CodeIgniter\Test\FeatureTestTrait;
 use CodeIgniter\Test\StreamFilterTrait;
 use CodeIgniter\Test\TestResponse;
 use Tests\Support\DatabaseTestCase;
+use Tests\Support\SignsInToUi;
 
 /**
  * Feature tests for multi-pipeline support (migration 2026-10-12-000001_AddPipelineRouting):
@@ -25,6 +26,7 @@ use Tests\Support\DatabaseTestCase;
 final class PipelineRoutingTest extends DatabaseTestCase
 {
     use FeatureTestTrait;
+    use SignsInToUi;
     use StreamFilterTrait;
 
     /** @var array<string, array{id: string, key: string}> */
@@ -36,6 +38,7 @@ final class PipelineRoutingTest extends DatabaseTestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $this->signInToUi();
         $db = $this->db();
         $db->query('DELETE FROM task_items');
         $db->query('DELETE FROM tasks');
@@ -309,10 +312,10 @@ final class PipelineRoutingTest extends DatabaseTestCase
 
     public function testAFrameSelectionBecomesOneTaskPerOwningPipeline(): void
     {
-        $result = $this->post('/ui/tasks', [
+        $result = $this->post('/ui/tasks', $this->uiForm([
             'type'      => 'ANALYZE',
             'frame_ids' => [$this->createFrame('a'), $this->createFrame('a'), $this->createFrame('b'), $this->createFrame(null)],
-        ]);
+        ]));
         $result->assertRedirectTo('/ui/tasks');
 
         $countByTarget = [];
@@ -328,7 +331,7 @@ final class PipelineRoutingTest extends DatabaseTestCase
 
     public function testASinglePipelineSelectionStillOpensItsTask(): void
     {
-        $result = $this->post('/ui/tasks', ['type' => 'DELETE_FRAME', 'frame_ids' => [$this->createFrame('a')]]);
+        $result = $this->post('/ui/tasks', $this->uiForm(['type' => 'DELETE_FRAME', 'frame_ids' => [$this->createFrame('a')]]));
 
         $task = $this->db()->table('tasks')->get()->getRowArray();
         $this->assertSame($this->id('a'), $task['pipeline_id']);
@@ -358,7 +361,7 @@ final class PipelineRoutingTest extends DatabaseTestCase
             ]);
         }
 
-        $this->post('/ui/sources/generate-charts', ['source_id' => $sourceId]);
+        $this->post('/ui/sources/generate-charts', $this->uiForm(['source_id' => $sourceId]));
 
         $task = $this->db()->table('tasks')->get()->getRowArray();
         $this->assertSame('GENERATE_CHARTS', $task['type']);
@@ -374,7 +377,7 @@ final class PipelineRoutingTest extends DatabaseTestCase
         $setting = $db->table('settings')->where('type', 'config')->get()->getRowArray();
         $this->settingsToRestore[$setting['id']] = $setting['value'];
 
-        $this->post('/ui/settings', ['setting_' . $setting['id'] => ($setting['value'] ?? '') . '-changed']);
+        $this->post('/ui/settings', $this->uiForm(['setting_' . $setting['id'] => ($setting['value'] ?? '') . '-changed']));
 
         $targets = array_column(
             $db->table('tasks')->where('type', 'RESTART')->where('status', 'PENDING')->get()->getResultArray(),
@@ -400,7 +403,7 @@ final class PipelineRoutingTest extends DatabaseTestCase
         $dashboard = $this->get('/ui');
         $dashboard->assertStatus(200);
         $dashboard->assertSee('observatory-a');
-        $dashboard->assertSee('online');
+        $dashboard->assertSee('на связи');
 
         $this->get('/ui/frames?pipeline=observatory-a')->assertSee('observatory-a');
         $this->get('/ui/tasks?pipeline=observatory-a')->assertSee($taskId);

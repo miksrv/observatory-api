@@ -14,8 +14,11 @@ class Security extends BaseConfig
      * Protection Method for Cross Site Request Forgery protection.
      *
      * @var string 'cookie' or 'session'
+     *
+     * Session: the CSRF filter only guards the web UI (the `ui` route group), which already
+     * keeps a signed-in session — the token lives there instead of in a second cookie.
      */
-    public string $csrfProtection = 'cookie';
+    public string $csrfProtection = 'session';
 
     /**
      * --------------------------------------------------------------------------
@@ -70,8 +73,11 @@ class Security extends BaseConfig
      * --------------------------------------------------------------------------
      *
      * Regenerate CSRF Token on every submission.
+     *
+     * Off: one token per session, so a form left open in a second tab still submits after the
+     * first one did.
      */
-    public bool $regenerate = true;
+    public bool $regenerate = false;
 
     /**
      * --------------------------------------------------------------------------
@@ -82,5 +88,5 @@ class Security extends BaseConfig
      *
      * @see https://codeigniter4.github.io/userguide/libraries/security.html#redirection-on-failure
      */
-    public bool $redirect = (ENVIRONMENT === 'production');
+    public bool $redirect = true;
 }

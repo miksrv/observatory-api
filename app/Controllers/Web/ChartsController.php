@@ -2,12 +2,12 @@
 
 namespace App\Controllers\Web;
 
+use App\Libraries\UiListQuery;
 use App\Models\SourceChartModel;
-use CodeIgniter\Controller;
 use CodeIgniter\HTTP\ResponseInterface;
 
 /**
- * Debug UI page: "Charts" — a gallery of generated chart PNGs from `source_charts`, which is
+ * Web UI page: "Charts" — a gallery of generated chart PNGs from `source_charts`, which is
  * dual-keyed (see CLAUDE.md): a per-source finder chart (track/stamp_strip/before_after) links
  * onward to /ui/anomalies?source_id=..., while a PREVIEW_CATALOG_MATCH diagnostic chart
  * (catalog_preview) has no source at all and links onward to its task instead — both are joined
@@ -16,15 +16,30 @@ use CodeIgniter\HTTP\ResponseInterface;
  * Api\V1\SourcesController::chart() and Api\V1\TasksController::itemChart() read
  * (writable/uploads/charts/{source_id|task_item_id}.png) — one id namespace, so the same method
  * serves both kinds of chart. No X-API-Key here since this route lives outside the `api/v1` group
- * entirely (see Config/Routes.php), so it's fine for it to duplicate that one file-read instead of
- * calling into the API controllers.
+ * entirely, behind the UI's own sign-in (see Config/Routes.php), so it's fine for it to duplicate
+ * that one file-read instead of calling into the API controllers.
  */
-class ChartsController extends Controller
+class ChartsController extends BaseWebController
 {
     public function index(): ResponseInterface
     {
         $sourceId = trim((string) ($this->request->getGet('source_id') ?? ''));
         $style    = trim((string) ($this->request->getGet('style') ?? ''));
+
+        $list = new UiListQuery(
+            [
+                'updated'     => 'source_charts.updated_at',
+                'epochs'      => 'source_charts.frame_count',
+                'designation' => 'sources.catalog_id',
+                'style'       => 'source_charts.style',
+            ],
+            'updated',
+            'desc',
+            ['updated', 'epochs'],
+            'source_charts.id',
+            24,
+            [24, 48, 96],
+        );
 
         $model = (new SourceChartModel())
             ->select(
@@ -50,13 +65,15 @@ class ChartsController extends Controller
             $model = $model->where('source_charts.style', $style);
         }
 
-        $charts = $model->orderBy('source_charts.updated_at', 'DESC')->findAll(200);
+        $list->paginate($model->countAllResults(false));
+        $charts = $model->orderBy($list->orderBy(), '', false)->findAll($list->perPage, $list->offset());
 
         return $this->response->setBody(view('web/charts_index', [
             'charts'         => $charts,
             'styles'         => SourceChartModel::ALLOWED_STYLES,
             'filterSourceId' => $sourceId,
             'filterStyle'    => $style,
+            'list'           => $list,
         ]));
     }
 

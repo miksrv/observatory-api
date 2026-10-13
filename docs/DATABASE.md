@@ -283,7 +283,7 @@ parent already disambiguates it.
 One row per observatory-pipeline instance (one per observatory server) — its API key and
 heartbeat. Rows are managed with `php spark pipeline:create|list|rotate|revoke|rename`;
 `ApiKeyFilter` authenticates every `/api/v1` request against `key_hash` and refreshes
-`last_seen_at`/`last_ip` after each successful one. Feeds the debug UI's per-pipeline status
+`last_seen_at`/`last_ip` after each successful one. Feeds the web UI's per-pipeline status
 (online < 5 min, stale < 30 min, offline otherwise) and the per-pipeline `RESTART` fan-out on a
 settings save. The migration registers the pre-existing `.env` `app.apiKey` as `default`.
 

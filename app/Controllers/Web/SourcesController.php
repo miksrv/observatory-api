@@ -2,21 +2,21 @@
 
 namespace App\Controllers\Web;
 
+use App\Libraries\UiListQuery;
 use App\Models\SourceModel;
 use App\Models\SourceObservationModel;
 use App\Models\TaskModel;
-use CodeIgniter\Controller;
 use CodeIgniter\HTTP\ResponseInterface;
 
 /**
- * Debug UI page: "Sources" — the source catalog, each row showing its current position resolved
+ * Web UI page: "Sources" — the source catalog, each row showing its current position resolved
  * from its most recent `source_observations` row (see CLAUDE.md: `sources` has no ra/dec of its
  * own). Every row with a resolved position links out to Aladin Lite (aladin.cds.unistra.fr)
  * centered on that ra/dec, so an operator can eyeball what the pipeline actually matched against
  * a real sky survey image. Sources with zero observations (shouldn't normally happen — a source
  * is only ever created alongside its first observation) show as unlinked.
  */
-class SourcesController extends Controller
+class SourcesController extends BaseWebController
 {
     use RedirectsToCreatedTasks;
 
@@ -25,8 +25,21 @@ class SourcesController extends Controller
         $catalogName = trim((string) ($this->request->getGet('catalog_name') ?? ''));
         $objectType  = trim((string) ($this->request->getGet('object_type') ?? ''));
         $search      = trim((string) ($this->request->getGet('search') ?? ''));
-        $limit       = (int) ($this->request->getGet('limit') ?? 200);
-        $limit       = $limit > 0 ? min($limit, 2000) : 200;
+
+        // ra / dec / the latest mag come from each row's latest observation, looked up per page
+        // below — not columns of `sources`, so not sortable.
+        $list = new UiListQuery(
+            [
+                'designation'  => 'catalog_id',
+                'type'         => 'object_type',
+                'catalog_mag'  => 'catalog_mag',
+                'observations' => 'observation_count',
+                'last_seen'    => 'last_observed_at',
+            ],
+            'last_seen',
+            'desc',
+            ['observations', 'last_seen'],
+        );
 
         $model = new SourceModel();
 
@@ -42,7 +55,8 @@ class SourcesController extends Controller
             $model = $model->like('catalog_id', $search);
         }
 
-        $sources = $model->orderBy('last_observed_at', 'DESC')->findAll($limit);
+        $list->paginate($model->countAllResults(false));
+        $sources = $model->orderBy($list->orderBy(), '', false)->findAll($list->perPage, $list->offset());
 
         $positions = (new SourceObservationModel())
             ->getLatestObservationsForSources(array_column($sources, 'id'));
@@ -76,7 +90,7 @@ class SourcesController extends Controller
             'filterCatalog'    => $catalogName,
             'filterObjectType' => $objectType,
             'filterSearch'     => $search,
-            'limit'            => $limit,
+            'list'             => $list,
         ]));
     }
 

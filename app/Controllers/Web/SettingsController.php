@@ -5,18 +5,17 @@ namespace App\Controllers\Web;
 use App\Models\PipelineModel;
 use App\Models\SettingModel;
 use App\Models\TaskModel;
-use CodeIgniter\Controller;
 use CodeIgniter\HTTP\ResponseInterface;
 
 /**
- * Debug UI page: "Settings" — view and edit user-configurable pipeline parameters.
+ * Web UI page: "Settings" — view and edit user-configurable pipeline parameters.
  *
  * Only rows with `type = 'config'` are shown (internal rows like `pipeline_last_seen_at` are
  * hidden). On save, a RESTART signal task is created so the pipeline worker picks up the new
  * configuration — it marks the task completed and exits, letting Docker restart the container
  * with fresh remote settings.
  */
-class SettingsController extends Controller
+class SettingsController extends BaseWebController
 {
     /**
      * GET /ui/settings — show all configurable parameters in an editable form.
@@ -58,6 +57,12 @@ class SettingsController extends Controller
 
             $newValue = trim((string) $posted[$key]);
             $oldValue = $setting['value'] ?? '';
+
+            // The form's switch always posts lowercase true/false; a stored "True" is the same value.
+            $isBool = static fn (string $v): bool => in_array(strtolower($v), ['true', 'false'], true);
+            if ($isBool($oldValue) && strtolower($newValue) === strtolower($oldValue)) {
+                continue;
+            }
 
             if ($newValue !== $oldValue) {
                 $model->update($setting['id'], ['value' => $newValue]);

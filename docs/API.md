@@ -64,7 +64,7 @@ holding its own FITS files locally) share one API and database. The key identifi
 which drives:
 
 - **Heartbeat per pipeline** — every 2xx request updates that pipeline's `last_seen_at`/`last_ip`,
-  shown on the debug UI's dashboard and header (the legacy `pipeline_last_seen_at` setting is still
+  shown on the web UI's overview and sidebar (the legacy `pipeline_last_seen_at` setting is still
   written).
 - **Frame ownership** — `POST /frames` records the caller as `frames.pipeline_id` (see below).
 - **Task routing** — a task's `pipeline_id` names the only pipeline allowed to claim it
@@ -632,7 +632,7 @@ task (no items) that tells the pipeline worker to exit and let Docker restart it
 remote settings.
 
 **Routing.** `tasks.pipeline_id` targets a task at one pipeline (the one holding the files it
-needs); `null` = any pipeline. The debug UI targets frame-scoped tasks at each frame's owner
+needs); `null` = any pipeline. The web UI targets frame-scoped tasks at each frame's owner
 (`frames.pipeline_id`), `GENERATE_CHARTS` at the owner of the source's latest frame, and queues one
 `RESTART` per active pipeline; a task created through `POST /tasks` is targeted at its creator.
 `claimed_by` records which pipeline claimed it.

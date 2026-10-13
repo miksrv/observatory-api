@@ -78,13 +78,17 @@ $routes->group('api/v1', ['filter' => 'api_key'], static function (RouteCollecti
     });
 });
 
-// Temporary debug web UI (App\Controllers\Web\*) — a small server-rendered dashboard for
-// manually driving the pipeline: browse frames, create tasks from a checked selection, and view
-// generated charts/anomalies. Deliberately outside the `api/v1` group so it's unauthenticated (no
-// api_key filter — it's operator-only tooling, not a client-facing surface) and so it never shares
-// route/controller code with the real API. Meant to be deleted once it's no longer needed; nothing
-// under app/Controllers/Api or app/Models is touched by it.
-$routes->group('ui', static function (RouteCollection $routes): void {
+// Operator web UI (App\Controllers\Web\*) — a server-rendered console for driving the pipeline:
+// pipelines' status, frames, sources, anomalies, charts, the task queue and settings; tasks are
+// created from a checked selection. Deliberately outside the `api/v1` group (no X-API-Key, never
+// shares route/controller code with the API). Signed in with the one account from .env
+// (`ui.username` / `ui.password`, Config\Ui): `ui_auth` sends every page but the sign-in form to
+// /ui/login without a session, and `csrf` (session-backed, Config\Security) guards every POST.
+$routes->group('ui', ['filter' => ['csrf', 'ui_auth']], static function (RouteCollection $routes): void {
+    $routes->get('login', 'Web\AuthController::login');
+    $routes->post('login', 'Web\AuthController::attempt');
+    $routes->post('logout', 'Web\AuthController::logout');
+
     $routes->get('/', 'Web\DashboardController::index');
 
     $routes->get('frames', 'Web\FramesController::index');

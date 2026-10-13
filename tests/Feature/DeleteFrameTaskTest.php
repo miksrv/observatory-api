@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use Tests\Support\DatabaseTestCase;
+use Tests\Support\SignsInToUi;
 use CodeIgniter\Test\FeatureTestTrait;
 
 /**
@@ -25,12 +26,14 @@ use CodeIgniter\Test\FeatureTestTrait;
 final class DeleteFrameTaskTest extends DatabaseTestCase
 {
     use FeatureTestTrait;
+    use SignsInToUi;
 
     private const API_KEY = 'your-secret-key-here';
 
     protected function setUp(): void
     {
         parent::setUp();
+        $this->signInToUi();
         $this->emptyAppTables();
     }
 
@@ -267,10 +270,10 @@ final class DeleteFrameTaskTest extends DatabaseTestCase
 
         // The Web UI routes carry NO api_key filter (see Routes.php's own comment on the `ui`
         // group) — no X-API-Key header here, unlike the API assertions above.
-        $result = $this->post('/ui/tasks', [
+        $result = $this->post('/ui/tasks', $this->uiForm([
             'type'      => 'DELETE_FRAME',
             'frame_ids' => [$frameA, $frameB],
-        ]);
+        ]));
 
         $result->assertRedirect();
         $result->assertSessionHas('success');
