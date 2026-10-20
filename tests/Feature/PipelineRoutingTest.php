@@ -171,6 +171,9 @@ final class PipelineRoutingTest extends DatabaseTestCase
         $this->assertSame('1.4.0', $this->row('pipelines', $this->id('a'))['version']);
 
         $this->assertNull($this->row('pipelines', $this->id('b'))['version']);
+
+        // Shown beside the name on the dashboard card.
+        $this->get('/ui')->assertSee('v1.4.0');
     }
 
     public function testAnUnknownKeyIsRejected(): void
@@ -422,7 +425,6 @@ final class PipelineRoutingTest extends DatabaseTestCase
         $dashboard->assertStatus(200);
         $dashboard->assertSee('observatory-a');
         $dashboard->assertSee('на связи');
-        $dashboard->assertSee('Версия');
 
         $this->get('/ui/frames?pipeline=observatory-a')->assertSee('observatory-a');
         $this->get('/ui/tasks?pipeline=observatory-a')->assertSee($taskId);
