@@ -21,7 +21,7 @@ class PipelineList extends PipelineCommand
         $rows = [];
 
         foreach ((new PipelineModel())->getOverview() as $p) {
-            $rows[] = [$p['name'], $p['status'], $p['last_seen_at'] ?? '—', $p['last_ip'] ?? '—', $p['frame_count'], $p['pending_own']];
+            $rows[] = [$p['name'], $p['status'], $p['last_seen_at'] ?? '—', $p['last_ip'] ?? '—', $p['version'] ?? '—', $p['frame_count'], $p['pending_own']];
         }
 
         if ($rows === []) {
@@ -30,6 +30,6 @@ class PipelineList extends PipelineCommand
             return;
         }
 
-        CLI::table($rows, ['Name', 'Status', 'Last seen (UTC)', 'Last IP', 'Frames', 'Queued']);
+        CLI::table($rows, ['Name', 'Status', 'Last seen (UTC)', 'Last IP', 'Version', 'Frames', 'Queued']);
     }
 }

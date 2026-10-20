@@ -45,8 +45,8 @@ class ApiKeyFilter implements FilterInterface
 
     /**
      * After a successful API request, update the calling pipeline's heartbeat so the UI can tell
-     * whether it is online — its own `pipelines` row, plus the legacy single
-     * `pipeline_last_seen_at` setting.
+     * whether it is online — its own `pipelines` row (with the version it reports in
+     * `X-Pipeline-Version`), plus the legacy single `pipeline_last_seen_at` setting.
      *
      * @param RequestInterface  $request
      * @param ResponseInterface $response
@@ -63,7 +63,9 @@ class ApiKeyFilter implements FilterInterface
         $pipelineId = PipelineIdentity::currentId();
 
         if ($pipelineId !== null) {
-            (new PipelineModel())->touch($pipelineId, $request->getIPAddress());
+            $version = trim($request->getHeaderLine('X-Pipeline-Version'));
+
+            (new PipelineModel())->touch($pipelineId, $request->getIPAddress(), $version !== '' ? $version : null);
         }
 
         db_connect()

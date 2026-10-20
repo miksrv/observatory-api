@@ -88,7 +88,12 @@ $registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 
                 <div class="pipe-head">
                     <span class="pipe-icon"><?= ui_icon('server', 18) ?><span class="led <?= $tone ?>"></span></span>
                     <div class="grow">
-                        <div class="pipe-name" title="<?= esc($p['name'], 'attr') ?>"><?= esc($p['name']) ?></div>
+                        <div class="pipe-title">
+                            <div class="pipe-name" title="<?= esc($p['name'], 'attr') ?>"><?= esc($p['name']) ?></div>
+                            <?php if (($p['version'] ?? null) !== null): ?>
+                                <span class="pipe-version" title="Версия pipeline">v<?= esc($p['version']) ?></span>
+                            <?php endif; ?>
+                        </div>
                         <div class="pipe-state"><?= ui_chip($label, $tone, $p['status'], true) ?><?= ui_when($p['last_seen_at'], 'никогда') ?></div>
                     </div>
                 </div>

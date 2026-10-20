@@ -1615,11 +1615,22 @@ tr:hover .row-actions,
     bottom: -2px;
     box-shadow: 0 0 0 2px var(--surface) !important;
 }
+.pipe-title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+}
 .pipe-name {
     font: 600 14px var(--mono);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+.pipe-version {
+    flex-shrink: 0;
+    font: 400 12px var(--mono);
+    color: var(--muted);
 }
 .pipe-state {
     display: flex;

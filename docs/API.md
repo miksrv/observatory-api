@@ -34,6 +34,10 @@ Content-Type: application/json
 Accept: application/json
 ```
 
+observatory-pipeline 1.4.0+ also sends `X-Pipeline-Version: <X.Y.Z>` (optional): its release,
+stored in `pipelines.version` with the heartbeat and shown on the web UI's overview. A request
+without it, or with a value that isn't a short version string, leaves the stored version as it was.
+
 Every pipeline has its **own** key. Keys live in the `pipelines` table as SHA-256 hashes (the key
 itself is never stored) and are managed on the API host with spark commands:
 
@@ -63,7 +67,8 @@ determine whether the pipeline service is online without a dedicated health-chec
 holding its own FITS files locally) share one API and database. The key identifies the caller,
 which drives:
 
-- **Heartbeat per pipeline** — every 2xx request updates that pipeline's `last_seen_at`/`last_ip`,
+- **Heartbeat per pipeline** — every 2xx request updates that pipeline's `last_seen_at`/`last_ip`
+  (and `version`, from `X-Pipeline-Version`),
   shown on the web UI's overview and sidebar (the legacy `pipeline_last_seen_at` setting is still
   written).
 - **Frame ownership** — `POST /frames` records the caller as `frames.pipeline_id` (see below).

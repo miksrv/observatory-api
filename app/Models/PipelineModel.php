@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Libraries\PipelineIdentity;
+use CodeIgniter\Database\Exceptions\DatabaseException;
 
 /**
  * Model for the `pipelines` table — one row per observatory-pipeline instance (API client).
@@ -19,7 +20,7 @@ class PipelineModel extends BaseModel
     // created_at is handled by the DB DEFAULT — no CI timestamp management needed.
     protected $useTimestamps = false;
 
-    protected $allowedFields = ['id', 'name', 'key_hash', 'last_seen_at', 'last_ip', 'revoked_at'];
+    protected $allowedFields = ['id', 'name', 'key_hash', 'last_seen_at', 'last_ip', 'version', 'revoked_at'];
 
     /**
      * Seen within this many seconds = online. The worker polls at least once a minute when idle
@@ -89,12 +90,30 @@ class PipelineModel extends BaseModel
         $this->update($id, ['revoked_at' => gmdate('Y-m-d H:i:s')]);
     }
 
-    /** Record a successful request from pipeline `$id`. */
-    public function touch(string $id, ?string $ip): void
+    /**
+     * Record a successful request from pipeline `$id`. `$version` is its `X-Pipeline-Version`
+     * header: kept only when it looks like a version string, and a request without one (an older
+     * pipeline, or a hand-made curl call with the key) leaves the stored version as it was.
+     *
+     * The hosting runs migrations by hand after the code is uploaded, so the `version` column may
+     * not exist yet: that write must not take the heartbeat — and, from ApiKeyFilter::after(),
+     * the pipeline's request — down with it. It falls back to the heartbeat alone.
+     */
+    public function touch(string $id, ?string $ip, ?string $version = null): void
     {
-        $this->db->table($this->table)
-            ->where('id', $id)
-            ->update(['last_seen_at' => gmdate('Y-m-d H:i:s'), 'last_ip' => $ip]);
+        $fields = ['last_seen_at' => gmdate('Y-m-d H:i:s'), 'last_ip' => $ip];
+
+        if ($version !== null && preg_match('/^[0-9A-Za-z][0-9A-Za-z.+-]{0,31}$/', $version) === 1) {
+            try {
+                $this->db->table($this->table)->where('id', $id)->update($fields + ['version' => $version]);
+
+                return;
+            } catch (DatabaseException $e) {
+                log_message('warning', 'Pipeline version not recorded (migration not run?): {message}', ['message' => $e->getMessage()]);
+            }
+        }
+
+        $this->db->table($this->table)->where('id', $id)->update($fields);
     }
 
     /** @return array<string, string> id => name of every active (not revoked) pipeline, by name. */

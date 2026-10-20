@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.0
+
+### Minor Changes
+
+- Pipelines: the version a pipeline reports in the `X-Pipeline-Version` header is stored with its heartbeat (`pipelines.version`, migration) and shown beside the pipeline's name on the dashboard and in `php spark pipeline:list` (sent by observatory-pipeline 1.4.0)
+
 ## 1.2.0
 
 ### Minor Changes
