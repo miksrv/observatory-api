@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Libraries\PipelineIdentity;
+use CodeIgniter\Database\Exceptions\DatabaseException;
 
 /**
  * Model for the `pipelines` table — one row per observatory-pipeline instance (API client).
@@ -93,13 +94,23 @@ class PipelineModel extends BaseModel
      * Record a successful request from pipeline `$id`. `$version` is its `X-Pipeline-Version`
      * header: kept only when it looks like a version string, and a request without one (an older
      * pipeline, or a hand-made curl call with the key) leaves the stored version as it was.
+     *
+     * The hosting runs migrations by hand after the code is uploaded, so the `version` column may
+     * not exist yet: that write must not take the heartbeat — and, from ApiKeyFilter::after(),
+     * the pipeline's request — down with it. It falls back to the heartbeat alone.
      */
     public function touch(string $id, ?string $ip, ?string $version = null): void
     {
         $fields = ['last_seen_at' => gmdate('Y-m-d H:i:s'), 'last_ip' => $ip];
 
         if ($version !== null && preg_match('/^[0-9A-Za-z][0-9A-Za-z.+-]{0,31}$/', $version) === 1) {
-            $fields['version'] = $version;
+            try {
+                $this->db->table($this->table)->where('id', $id)->update($fields + ['version' => $version]);
+
+                return;
+            } catch (DatabaseException $e) {
+                log_message('warning', 'Pipeline version not recorded (migration not run?): {message}', ['message' => $e->getMessage()]);
+            }
         }
 
         $this->db->table($this->table)->where('id', $id)->update($fields);
