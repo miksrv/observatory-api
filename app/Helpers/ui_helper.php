@@ -172,12 +172,15 @@ if (! function_exists('ui_chip')) {
 }
 
 if (! function_exists('ui_task_status')) {
-    /** A task / task item status (TaskModel::STATUSES, plus items' DONE) as a chip. */
-    function ui_task_status(string $status): string
+    /**
+     * A task / task item status (TaskModel::STATUSES, or TaskItemModel::STATUSES with $item) as a
+     * chip. A RUNNING item is the one the pipeline is processing right now.
+     */
+    function ui_task_status(string $status, bool $item = false): string
     {
         [$label, $tone] = match ($status) {
             'PENDING'   => ['в очереди', 'amber'],
-            'RUNNING'   => ['выполняется', 'blue'],
+            'RUNNING'   => [$item ? 'обрабатывается' : 'выполняется', 'blue'],
             'COMPLETED', 'DONE' => ['готово', 'green'],
             'FAILED'    => ['ошибка', 'red'],
             'CANCELLED' => ['отменена', 'gray'],

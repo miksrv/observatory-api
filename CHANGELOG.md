@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0
+
+### Minor Changes
+
+- Tasks: a task item can be reported `RUNNING` via `POST /tasks/{id}/items/progress` while the pipeline works on it; it never counts as done and a late `RUNNING` never reopens a `DONE`/`FAILED` item; migration adds the status (needed by observatory-pipeline 1.3.0)
+- Web UI: the task page marks the item being processed as «обрабатывается»
+
 ## 1.1.0
 
 ### Minor Changes

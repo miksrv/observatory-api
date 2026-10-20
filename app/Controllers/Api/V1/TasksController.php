@@ -346,7 +346,9 @@ class TasksController extends BaseApiController
      * pipeline side. Updates each item row and the parent task's aggregate counters, and
      * auto-completes the task once every item has resolved (TaskModel::bumpProgress()).
      *
-     * Body: {"items": [{"item_id": "...", "status": "DONE"|"FAILED", "frame_id": "...", "error": "...", "payload": {...}}]}
+     * Body: {"items": [{"item_id": "...", "status": "RUNNING"|"DONE"|"FAILED", "frame_id": "...", "error": "...", "payload": {...}}]}
+     * RUNNING only marks a PENDING item as started (for the web UI) — it carries no result, never
+     * counts toward the task's totals and never moves an item that is already DONE/FAILED back.
      * `frame_id` is only meaningful for an ANALYZE task's item, once POST /frames has resolved
      * one for it — DETECT_ANOMALIES/GENERATE_CHARTS items already carry their frame_id/source_id
      * from task creation and don't need to report one back. `payload` here overwrites the item's
@@ -378,7 +380,7 @@ class TasksController extends BaseApiController
             $itemId = is_array($entry) ? ($entry['item_id'] ?? null) : null;
             $status = is_array($entry) ? ($entry['status'] ?? null) : null;
 
-            if (! is_string($itemId) || ! in_array($status, ['DONE', 'FAILED'], true)) {
+            if (! is_string($itemId) || ! in_array($status, ['RUNNING', 'DONE', 'FAILED'], true)) {
                 $results[] = ['item_id' => $itemId, 'status' => 'error', 'error' => 'Invalid item_id or status'];
                 continue;
             }
@@ -389,6 +391,23 @@ class TasksController extends BaseApiController
 
             if ($item === null) {
                 $results[] = ['item_id' => $itemId, 'status' => 'error', 'error' => 'Item not found on this task'];
+                continue;
+            }
+
+            $db = \Config\Database::connect();
+
+            // RUNNING: PENDING -> RUNNING only. A RUNNING report that arrives after the item's
+            // DONE/FAILED (late or duplicate delivery) matches no row and leaves it terminal.
+            if ($status === 'RUNNING') {
+                $db->table('task_items')
+                    ->where('id', $itemId)
+                    ->where('task_id', $id)
+                    ->where('status', 'PENDING')
+                    ->update(['status' => 'RUNNING']);
+
+                $results[] = $db->affectedRows() === 1 || $item['status'] === 'RUNNING'
+                    ? ['item_id' => $itemId, 'status' => 'ok']
+                    : ['item_id' => $itemId, 'status' => 'ok', 'note' => 'Already resolved, status unchanged'];
                 continue;
             }
 
@@ -410,7 +429,7 @@ class TasksController extends BaseApiController
                 $update['payload'] = json_encode($entry['payload']);
             }
 
-            // Resolve the item atomically: only the report that flips it from PENDING counts
+            // Resolve the item atomically: only the report that flips it from PENDING/RUNNING counts
             // toward the parent task's totals (and, for DELETE_FRAME, runs the cascade). The
             // guard used to be a read-then-write — two concurrent reports for the same item
             // (a retry racing the original, or the two workers finding C2 allowed) could both
@@ -418,11 +437,10 @@ class TasksController extends BaseApiController
             // for good (API audit 2026-08-20, finding H1). A previously-resolved item being
             // re-reported (retry, duplicate delivery) therefore affects no row and stays
             // uncounted, which is the same "ok, counters unchanged" answer as before.
-            $db = \Config\Database::connect();
             $db->table('task_items')
                 ->where('id', $itemId)
                 ->where('task_id', $id)
-                ->where('status', 'PENDING')
+                ->whereIn('status', ['PENDING', 'RUNNING'])
                 ->update($update);
 
             if ($db->affectedRows() !== 1) {
