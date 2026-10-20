@@ -94,6 +94,7 @@ $registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 
                 </div>
                 <div class="pipe-body">
                     <dl class="kv">
+                        <dt>Версия</dt><dd class="mono small"><?= esc($p['version'] ?? '—') ?></dd>
                         <dt>IP</dt><dd class="mono small"><?= esc($p['last_ip'] ?? '—') ?></dd>
                         <dt>Зарегистрирован</dt><dd class="small"><?= ui_time($p['created_at'], 'Y-m-d') ?></dd>
                     </dl>

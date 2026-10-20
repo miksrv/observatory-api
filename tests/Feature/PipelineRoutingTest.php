@@ -78,6 +78,11 @@ final class PipelineRoutingTest extends DatabaseTestCase
         return $this->withHeaders(['X-API-Key' => $this->pipelines[$who]['key']]);
     }
 
+    private function withVersion(string $who, string $version): self
+    {
+        return $this->withHeaders(['X-API-Key' => $this->pipelines[$who]['key'], 'X-Pipeline-Version' => $version]);
+    }
+
     private function postFrame(string $filename, string $who): TestResponse
     {
         return $this->as($who)
@@ -153,6 +158,19 @@ final class PipelineRoutingTest extends DatabaseTestCase
 
         $this->assertNotNull($this->row('pipelines', $this->id('a'))['last_seen_at']);
         $this->assertNull($this->row('pipelines', $this->id('b'))['last_seen_at']);
+    }
+
+    public function testTheHeartbeatRecordsTheReportedVersion(): void
+    {
+        $this->withVersion('a', '1.4.0')->get('/api/v1/tasks')->assertStatus(200);
+        $this->assertSame('1.4.0', $this->row('pipelines', $this->id('a'))['version']);
+
+        // No header (an older pipeline, a hand-made call) or garbage: the stored version stays.
+        $this->as('a')->get('/api/v1/tasks')->assertStatus(200);
+        $this->withVersion('a', '<script>')->get('/api/v1/tasks')->assertStatus(200);
+        $this->assertSame('1.4.0', $this->row('pipelines', $this->id('a'))['version']);
+
+        $this->assertNull($this->row('pipelines', $this->id('b'))['version']);
     }
 
     public function testAnUnknownKeyIsRejected(): void
@@ -404,6 +422,7 @@ final class PipelineRoutingTest extends DatabaseTestCase
         $dashboard->assertStatus(200);
         $dashboard->assertSee('observatory-a');
         $dashboard->assertSee('на связи');
+        $dashboard->assertSee('Версия');
 
         $this->get('/ui/frames?pipeline=observatory-a')->assertSee('observatory-a');
         $this->get('/ui/tasks?pipeline=observatory-a')->assertSee($taskId);
