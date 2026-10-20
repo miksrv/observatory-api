@@ -126,7 +126,7 @@ $pending = (int) $task['total_items'] - (int) $task['completed_items'] - (int) $
                         <?php else: ?><span class="dim">—</span><?php endif; ?>
                         <?php if ($item['error']): ?><div class="err-text"><?= esc($item['error']) ?></div><?php endif; ?>
                     </td>
-                    <td><?= ui_task_status($item['status']) ?></td>
+                    <td><?= ui_task_status($item['status'], true) ?></td>
                     <td class="small nowrap"><?= ui_when($item['processed_at']) ?></td>
                 </tr>
             <?php endforeach; ?>

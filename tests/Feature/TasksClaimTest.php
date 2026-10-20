@@ -161,4 +161,48 @@ final class TasksClaimTest extends DatabaseTestCase
         $item = \Config\Database::connect()->table('task_items')->where('id', $theirs['item_id'])->get()->getRowArray();
         $this->assertSame('PENDING', $item['status']);
     }
+
+    // -------------------------------------------------------------------------
+    // Item RUNNING
+    // -------------------------------------------------------------------------
+
+    public function testARunningItemIsNotCountedAndCanStillResolve(): void
+    {
+        $task = $this->createTask('RUNNING', 1);
+
+        $running = $this->postProgress($task['task_id'], $task['item_id'], 'RUNNING');
+        $running->assertStatus(200);
+        $json = json_decode($running->getJSON(), true);
+        $this->assertSame('ok', $json['results'][0]['status']);
+        $this->assertArrayNotHasKey('note', $json['results'][0]);
+        $this->assertSame(0, $json['task']['completed_items']);
+        $this->assertSame(0, $json['task']['failed_items']);
+        $this->assertSame('RUNNING', $json['task']['status']);
+
+        $item = \Config\Database::connect()->table('task_items')->where('id', $task['item_id'])->get()->getRowArray();
+        $this->assertSame('RUNNING', $item['status']);
+        $this->assertNull($item['processed_at']);
+
+        $done = $this->postProgress($task['task_id'], $task['item_id'], 'DONE');
+        $json = json_decode($done->getJSON(), true);
+        $this->assertSame(1, $json['task']['completed_items']);
+        $this->assertSame('COMPLETED', $json['task']['status']);
+    }
+
+    public function testALateRunningReportDoesNotReopenAResolvedItem(): void
+    {
+        $task = $this->createTask('RUNNING', 2);
+
+        $this->postProgress($task['task_id'], $task['item_id'], 'FAILED')->assertStatus(200);
+
+        $late = $this->postProgress($task['task_id'], $task['item_id'], 'RUNNING');
+        $late->assertStatus(200);
+        $json = json_decode($late->getJSON(), true);
+        $this->assertSame('ok', $json['results'][0]['status']);
+        $this->assertStringContainsString('Already resolved', $json['results'][0]['note']);
+        $this->assertSame(1, $json['task']['failed_items']);
+
+        $item = \Config\Database::connect()->table('task_items')->where('id', $task['item_id'])->get()->getRowArray();
+        $this->assertSame('FAILED', $item['status']);
+    }
 }

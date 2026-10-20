@@ -18,7 +18,7 @@ class TaskItemModel extends BaseModel
     // created_at is handled by the DB DEFAULT — no CI timestamp management needed.
     protected $useTimestamps = false;
 
-    public const STATUSES = ['PENDING', 'DONE', 'FAILED'];
+    public const STATUSES = ['PENDING', 'RUNNING', 'DONE', 'FAILED'];
 
     protected $allowedFields = [
         'id',

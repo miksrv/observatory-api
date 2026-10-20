@@ -267,7 +267,7 @@ Status reaches `COMPLETED` automatically once `completed_items + failed_items >=
 | `frame_id` | CHAR(24) NULL FK→frames.id, `ON DELETE SET NULL` | Populated for `DETECT_ANOMALIES` and `DELETE_FRAME` items, or once an `ANALYZE` item resolves a frame |
 | `source_id` | CHAR(24) NULL FK→sources.id, `ON DELETE SET NULL` | Populated for `GENERATE_CHARTS` items |
 | `payload` | TEXT NULL (JSON) | Bidirectional: `GENERATE_CHARTS` reads it as *input* at creation time (`{"anomaly_type", "designation"}`); `PREVIEW_CATALOG_MATCH` writes it as a *result* at completion time (`{"output_path", "matched", "total", "quality_flag"}`) via `POST /tasks/{id}/items/progress`. Opaque to the API either way — stored and echoed back, never inspected |
-| `status` | ENUM('PENDING', 'DONE', 'FAILED') DEFAULT 'PENDING' | |
+| `status` | ENUM('PENDING', 'RUNNING', 'DONE', 'FAILED') DEFAULT 'PENDING' | `RUNNING` = the pipeline has started on the item; only `DONE`/`FAILED` resolve it and count toward the task's totals |
 | `error` | TEXT NULL | |
 | `processed_at` | DATETIME NULL | |
 | `created_at` | DATETIME | |

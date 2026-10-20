@@ -803,10 +803,19 @@ item has resolved.
   "items": [
     { "item_id": "6612fa...", "status": "DONE", "frame_id": "42" },
     { "item_id": "6612fb...", "status": "FAILED", "error": "Astrometry solve raised an exception" },
-    { "item_id": "6612fc...", "status": "DONE", "payload": { "matched": 82, "total": 98, "quality_flag": "OK", "chart_uploaded": true } }
+    { "item_id": "6612fc...", "status": "DONE", "payload": { "matched": 82, "total": 98, "quality_flag": "OK", "chart_uploaded": true } },
+    { "item_id": "6612fd...", "status": "RUNNING" }
   ]
 }
 ```
+An item's `status` is one of `PENDING` → `RUNNING` → `DONE`/`FAILED`; a report may send
+`RUNNING`, `DONE` or `FAILED`. `RUNNING` only marks a `PENDING` item as started, so the web UI can
+show which item is being processed — it never counts toward `completed_items`/`failed_items`,
+never completes the task, and ignores `frame_id`/`error`/`payload`. Only `DONE`/`FAILED` resolve an
+item, from either `PENDING` or `RUNNING`. A `RUNNING` report for an item that is already
+`DONE`/`FAILED` (a late or duplicate delivery) leaves it as it is and answers `status: "ok"` with
+`note: "Already resolved, status unchanged"`.
+
 `frame_id` is only meaningful when reporting an `ANALYZE` item, once `POST /frames` has resolved
 one for it — `DETECT_ANOMALIES`/`GENERATE_CHARTS` items already carry their `frame_id`/`source_id`
 from task creation. `payload` here is a RESULT overwriting the item's stored payload (e.g. a
@@ -834,7 +843,7 @@ task type since the item already carries its `frame_id` from task creation.
 ```
 An item already resolved (retry, duplicate delivery) reports back `status: "ok"` without
 double-counting the task's counters — the resolution is a single conditional
-`UPDATE ... WHERE status = 'PENDING'`, so of two concurrent reports for the same item exactly one
+`UPDATE ... WHERE status IN ('PENDING', 'RUNNING')`, so of two concurrent reports for the same item exactly one
 counts (and, for `DELETE_FRAME`, exactly one runs the cascade). An unknown `item_id`, or one
 belonging to a different task, fails only that entry (`status: "error"`) — it never blocks the
 rest of the batch.
