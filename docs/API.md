@@ -389,6 +389,14 @@ untouched — only this frame's own link is removed. An empty
 `sources: []` is a valid "found nothing this time" statement and retracts everything previously
 linked to this `frame_id`, mirroring `POST /frames/{id}/anomalies`'s replace semantics below.
 
+**Concurrent calls for the same frame** (a client retrying a call that timed out on its side while
+the first one is still running) are serialized by a per-frame named lock (`GET_LOCK`, waits up to
+120 s): the second call runs after the first and behaves as an ordinary repeat. The observation,
+the frame↔source link and a new catalogued source are each written in one atomic statement
+(`INSERT … ON DUPLICATE KEY UPDATE`), so even without the lock a concurrent call never fails on a
+unique key — the last writer's photometry wins, and `observation_count` is bumped only by the call
+that actually inserted the pairing. Sources are written in transactions of 50.
+
 <details>
 <summary>Request example</summary>
 

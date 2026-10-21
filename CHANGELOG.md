@@ -5,6 +5,7 @@
 ### Patch Changes
 
 - Sources: `POST /sources/near/batch` streams the matching observations instead of loading the whole search box into memory, so heavily observed fields (M51, ~300 frames) no longer exhaust PHP's 256 MB `memory_limit`; the response is unchanged
+- Sources: a retried `POST /frames/{id}/sources` running alongside the first call for the same frame (the pipeline retries after its 30 s timeout) no longer fails with 500 "Duplicate entry … uk_srcobs_frame_source / uk_frame_source": calls for one frame are serialized, the observation and link writes are atomic upserts and `observation_count` is still bumped once; sources are written in transactions of 50, so the call is much faster
 
 ## 1.3.0
 

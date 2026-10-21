@@ -74,6 +74,48 @@ class SourceObservationModel extends BaseModel
     }
 
     /**
+     * Insert or update the observation of one source on one frame, keyed by
+     * uk_srcobs_frame_source (frame_id, source_id), in one atomic statement.
+     *
+     * POST /frames/{id}/sources used to look the row up and then insert it;
+     * a second call for the same frame running at the same time (the
+     * pipeline retrying a request that timed out client-side while the first
+     * was still running) inserted the same pairing in between and the insert
+     * failed on the unique key with a 500. Here the last writer's photometry
+     * wins and the row keeps its original id.
+     *
+     * @param array<string, mixed> $data Every column but `id` (source_id and frame_id included)
+     *
+     * @return bool True if the row was inserted — this pairing's first
+     *              appearance — false if an existing row was updated.
+     */
+    public function upsertForFrameSource(array $data): bool
+    {
+        unset($data['id']);
+        $columns = array_keys($data);
+        $escaped = array_map(fn (string $c): string => $this->db->escapeIdentifiers($c), $columns);
+        $updates = [];
+
+        foreach ($escaped as $i => $column) {
+            if (! in_array($columns[$i], ['frame_id', 'source_id'], true)) {
+                $updates[] = "{$column} = VALUES({$column})";
+            }
+        }
+
+        $this->db->query(
+            'INSERT INTO ' . $this->db->protectIdentifiers($this->table, true)
+            . ' (id, ' . implode(', ', $escaped) . ') VALUES (?' . str_repeat(', ?', count($columns)) . ')'
+            . ' ON DUPLICATE KEY UPDATE ' . implode(', ', $updates),
+            array_merge([$this->generateId()], array_values($data)),
+        );
+
+        // MySQL/MariaDB report 1 for an inserted row, 2 for an updated one and
+        // 0 for a duplicate whose values didn't change (the MySQLi driver's
+        // foundRows option is off).
+        return $this->db->affectedRows() === 1;
+    }
+
+    /**
      * Get all observations for a frame.
      *
      * @param string $frameId Frame ID
