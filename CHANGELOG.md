@@ -6,6 +6,7 @@
 
 - Sources: `POST /sources/near/batch` streams the matching observations instead of loading the whole search box into memory, so heavily observed fields (M51, ~300 frames) no longer exhaust PHP's 256 MB `memory_limit`; the response is unchanged
 - Sources: a retried `POST /frames/{id}/sources` running alongside the first call for the same frame (the pipeline retries after its 30 s timeout) no longer fails with 500 "Duplicate entry … uk_srcobs_frame_source / uk_frame_source": calls for one frame are serialized, the observation and link writes are atomic upserts and `observation_count` is still bumped once; sources are written in transactions of 50, so the call is much faster
+- Settings: `STAR_FWHM_MIN_ARCSEC` becomes `STAR_FWHM_MIN_PX` (1.2 px) and `NARROWBAND_FILTERS` gains the multi-band OSC filters (`LeNhance,LeXtreme,LuLtimate,NBZ,QuadBand,TriBand,DuoBand`), matching observatory-pipeline; an operator-edited filter list or an existing `STAR_FWHM_MIN_PX` row is left alone — run `php spark migrate` on the hosting by hand after deploying
 
 ## 1.3.0
 

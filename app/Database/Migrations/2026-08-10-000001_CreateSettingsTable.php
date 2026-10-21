@@ -97,10 +97,10 @@ class CreateSettingsTable extends Migration
             ['param' => 'QC_STARS_MIN_NARROWBAND', 'value' => '5', 'description' => 'Star-count floor for narrowband frames'],
 
             // Narrowband filters
-            ['param' => 'NARROWBAND_FILTERS', 'value' => 'Ha,OIII,SII,NII', 'description' => 'Emission-line filters whose bandpass is too narrow to carry a representative sample of field stars'],
+            ['param' => 'NARROWBAND_FILTERS', 'value' => 'Ha,OIII,SII,NII,LeNhance,LeXtreme,LuLtimate,NBZ,QuadBand,TriBand,DuoBand', 'description' => 'Emission-line filters whose bandpass is too narrow to carry a representative sample of field stars'],
 
             // Star detection filtering
-            ['param' => 'STAR_FWHM_MIN_ARCSEC', 'value' => '2.5', 'description' => 'Minimum acceptable star FWHM in arcseconds'],
+            ['param' => 'STAR_FWHM_MIN_PX', 'value' => '1.2', 'description' => 'Minimum star FWHM in pixels — sharper sources are hot pixels or cosmic rays'],
             ['param' => 'STAR_FWHM_MAX_ARCSEC', 'value' => '8.0', 'description' => 'Maximum acceptable star FWHM in arcseconds'],
             ['param' => 'STAR_ELONGATION_MAX', 'value' => '1.5', 'description' => 'Maximum acceptable star elongation'],
             ['param' => 'STAR_SNR_MIN', 'value' => '50.0', 'description' => 'Minimum acceptable star SNR'],
