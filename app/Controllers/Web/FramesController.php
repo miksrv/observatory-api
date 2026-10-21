@@ -47,12 +47,18 @@ class FramesController extends BaseWebController
         'DELETE_FRAME'          => ['item_key' => 'frame_id', 'frame_column' => 'id'],
     ];
 
+    /** `qc` filter value selecting every frame whose quality_flag is set and isn't OK. */
+    private const QC_NOT_OK = 'not_ok';
+
+    /**
+     * Most frames one "select every frame matching the filter" task may carry — a forgotten
+     * filter must not queue the whole archive by accident.
+     */
+    private const ALL_MATCHING_MAX = 5000;
+
     public function index(): ResponseInterface
     {
-        $object   = trim((string) ($this->request->getGet('object') ?? ''));
-        $dateFrom = trim((string) ($this->request->getGet('date_from') ?? ''));
-        $dateTo   = trim((string) ($this->request->getGet('date_to') ?? ''));
-        $pipeline = trim((string) ($this->request->getGet('pipeline') ?? ''));
+        $filters = $this->readFilters(fn (string $name): mixed => $this->request->getGet($name));
 
         $list = new UiListQuery(
             [
@@ -73,34 +79,8 @@ class FramesController extends BaseWebController
             ['obs_time', 'exptime', 'stars', 'snr'],
         );
 
-        $model = new FrameModel();
-
-        if ($object !== '') {
-            $model = $model->where('object', $object);
-        }
-
-        // `pipeline` is a pipeline NAME (readable, linkable from the dashboard).
         $pipelineNames = (new PipelineModel())->getAllNames();
-
-        if ($pipeline === self::PIPELINE_NONE) {
-            $model = $model->where('pipeline_id', null);
-        } elseif ($pipeline !== '') {
-            $model = $model->where('pipeline_id', array_search($pipeline, $pipelineNames, true) ?: '');
-        }
-
-        if ($dateFrom !== '') {
-            $timestamp = strtotime($dateFrom);
-            if ($timestamp !== false) {
-                $model = $model->where('obs_time >=', date('Y-m-d H:i:s', $timestamp));
-            }
-        }
-
-        if ($dateTo !== '') {
-            $timestamp = strtotime($dateTo);
-            if ($timestamp !== false) {
-                $model = $model->where('obs_time <', date('Y-m-d H:i:s', $timestamp));
-            }
-        }
+        $model         = $this->applyFilters(new FrameModel(), $filters, $pipelineNames);
 
         $list->paginate($model->countAllResults(false));
         $frames = $model->orderBy($list->orderBy(), '', false)->findAll($list->perPage, $list->offset());
@@ -123,15 +103,26 @@ class FramesController extends BaseWebController
             ->orderBy('object', 'ASC')
             ->findAll();
 
+        $qcFlags = (new FrameModel())
+            ->distinct()
+            ->select('quality_flag')
+            ->where('quality_flag IS NOT NULL')
+            ->where('quality_flag <>', 'OK')
+            ->orderBy('quality_flag', 'ASC')
+            ->findAll();
+
         return $this->response->setBody(view('web/frames_index', [
             'frames'         => $frames,
             'objects'        => array_column($objects, 'object'),
             'pipelines'      => $pipelineNames,
             'pipelineNone'   => self::PIPELINE_NONE,
-            'filterPipeline' => $pipeline,
-            'filterObject'   => $object,
-            'filterDateFrom' => $dateFrom,
-            'filterDateTo'   => $dateTo,
+            'qcFlags'        => array_column($qcFlags, 'quality_flag'),
+            'qcNotOk'        => self::QC_NOT_OK,
+            'filterPipeline' => $filters['pipeline'],
+            'filterObject'   => $filters['object'],
+            'filterDateFrom' => $filters['date_from'],
+            'filterDateTo'   => $filters['date_to'],
+            'filterQc'       => $filters['qc'],
             'list'           => $list,
             'taskTypes'      => array_keys(self::CREATABLE_TYPES),
         ]));
@@ -150,19 +141,41 @@ class FramesController extends BaseWebController
             return redirect()->back()->with('error', 'Неизвестный или отсутствующий тип задачи.');
         }
 
-        $frameIds = array_values(array_unique(array_filter(
-            $frameIds,
-            static fn ($v): bool => is_string($v) && $v !== ''
-        )));
+        if ($this->request->getPost('all_matching') === '1') {
+            // "Every frame matching the filter": the checked ids are only the visible page — the
+            // selection is the POSTed filter instead, re-run here over the whole table.
+            $filters = $this->readFilters(fn (string $name): mixed => $this->request->getPost($name));
+            $model   = $this->applyFilters(new FrameModel(), $filters, (new PipelineModel())->getAllNames());
+            $total   = $model->countAllResults(false);
 
-        if (count($frameIds) === 0) {
-            return redirect()->back()->with('error', 'Выберите хотя бы один кадр (чекбокс в таблице).');
-        }
+            if ($total === 0) {
+                return redirect()->back()->with('error', 'По фильтру не найдено ни одного кадра.');
+            }
 
-        $frames = (new FrameModel())->whereIn('id', $frameIds)->findAll();
+            if ($total > self::ALL_MATCHING_MAX) {
+                return redirect()->back()->with('error', sprintf(
+                    'По фильтру %d кадров — больше %d за одну задачу. Сузьте фильтр.',
+                    $total,
+                    self::ALL_MATCHING_MAX,
+                ));
+            }
 
-        if (count($frames) === 0) {
-            return redirect()->back()->with('error', 'Выбранные кадры не найдены (устарели?).');
+            $frames = $model->select('id, filename, pipeline_id')->orderBy('obs_time', 'ASC')->findAll();
+        } else {
+            $frameIds = array_values(array_unique(array_filter(
+                $frameIds,
+                static fn ($v): bool => is_string($v) && $v !== ''
+            )));
+
+            if (count($frameIds) === 0) {
+                return redirect()->back()->with('error', 'Выберите хотя бы один кадр (чекбокс в таблице).');
+            }
+
+            $frames = (new FrameModel())->whereIn('id', $frameIds)->findAll();
+
+            if (count($frames) === 0) {
+                return redirect()->back()->with('error', 'Выбранные кадры не найдены (устарели?).');
+            }
         }
 
         $itemKey     = self::CREATABLE_TYPES[$type]['item_key'];
@@ -181,5 +194,62 @@ class FramesController extends BaseWebController
         }
 
         return $this->redirectToCreatedTasks($created, $type);
+    }
+
+    /**
+     * The list filter (object, pipeline, date_from, date_to, qc) as trimmed strings, read through
+     * `$get` — the query string for index(), the POST body for createTask()'s all_matching mode.
+     *
+     * @param callable(string): mixed $get
+     *
+     * @return array{object: string, pipeline: string, date_from: string, date_to: string, qc: string}
+     */
+    private function readFilters(callable $get): array
+    {
+        $filters = [];
+        foreach (['object', 'pipeline', 'date_from', 'date_to', 'qc'] as $name) {
+            $value          = $get($name);
+            $filters[$name] = is_string($value) ? trim($value) : '';
+        }
+
+        return $filters;
+    }
+
+    /**
+     * Narrow `$model` to the frames matching `$filters` — the one place the frames filter becomes
+     * a query, so the list and "select every frame matching the filter" can never disagree.
+     *
+     * @param array{object: string, pipeline: string, date_from: string, date_to: string, qc: string} $filters
+     * @param array<string, string> $pipelineNames id => name; `pipeline` is a pipeline NAME
+     *                                             (readable, linkable from the dashboard)
+     */
+    private function applyFilters(FrameModel $model, array $filters, array $pipelineNames): FrameModel
+    {
+        if ($filters['object'] !== '') {
+            $model->where('object', $filters['object']);
+        }
+
+        if ($filters['pipeline'] === self::PIPELINE_NONE) {
+            $model->where('pipeline_id', null);
+        } elseif ($filters['pipeline'] !== '') {
+            $model->where('pipeline_id', array_search($filters['pipeline'], $pipelineNames, true) ?: '');
+        }
+
+        foreach (['date_from' => 'obs_time >=', 'date_to' => 'obs_time <'] as $name => $condition) {
+            $timestamp = $filters[$name] !== '' ? strtotime($filters[$name]) : false;
+            if ($timestamp !== false) {
+                $model->where($condition, date('Y-m-d H:i:s', $timestamp));
+            }
+        }
+
+        // «Не OK» is every flag but OK. frames.quality_flag is NOT NULL (POST /frames requires it),
+        // so there is no "not assessed" state to place.
+        if ($filters['qc'] === self::QC_NOT_OK) {
+            $model->where('quality_flag <>', 'OK');
+        } elseif ($filters['qc'] !== '') {
+            $model->where('quality_flag', $filters['qc']);
+        }
+
+        return $model;
     }
 }

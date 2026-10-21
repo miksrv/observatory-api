@@ -389,6 +389,17 @@ untouched — only this frame's own link is removed. An empty
 `sources: []` is a valid "found nothing this time" statement and retracts everything previously
 linked to this `frame_id`, mirroring `POST /frames/{id}/anomalies`'s replace semantics below.
 
+**Concurrent calls for the same frame** (a client retrying a call that timed out on its side while
+the first one is still running) are serialized by a per-frame named lock (`GET_LOCK`, waits up to
+30 s, then goes ahead anyway): the second call runs after the first and behaves as an ordinary
+repeat. The observation,
+the frame↔source link and a new catalogued source are each written in one atomic statement
+(`INSERT … ON DUPLICATE KEY UPDATE`), so even without the lock a concurrent call never fails on a
+unique key — the last writer's photometry wins, and `observation_count` is bumped only by the call
+that actually inserted the pairing. Sources are written in transactions of 50; a transaction
+that loses a deadlock or lock wait timeout to another call (two pipelines saving overlapping
+fields) is retried up to 3 times before the call fails with `500`.
+
 <details>
 <summary>Request example</summary>
 
@@ -948,8 +959,11 @@ observations of sources whose `catalog_name` is `NULL` or `'MPC'`).
 position is never evidence of motion, and on a field observed many times an unfiltered wide cone is
 almost entirely stars — the 228-frame NGC 7331 run (2026-09-23) returned 870k rows for 62k stored
 observations and OOM-killed the pipeline's worker. Within one position, results are ordered by
-declination: the controller sorts the candidates by dec and binary-searches each position's
-±radius slice before the haversine, instead of testing every candidate against every position.
+declination: the controller streams the candidate rows in dec order (unbuffered, never the whole
+bounding box in memory) and tests each row only against the positions whose ±radius dec window
+contains it, with an RA-window check before the haversine. Peak memory is the size of the response,
+so a caller with very many positions on a heavily observed field should still split them into
+dec-sorted chunks.
 
 <details>
 <summary>Request example</summary>

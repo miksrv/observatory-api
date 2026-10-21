@@ -65,6 +65,45 @@ class SourceModel extends BaseModel
     }
 
     /**
+     * Create a catalogued source, or return the one a concurrent call created
+     * first — one atomic statement against uniq_sources_catalog_identity
+     * instead of a lookup followed by a plain insert that fails on the unique
+     * key when another request inserted the same identity in between.
+     *
+     * The fallback read is a locking read (LOCK IN SHARE MODE) on purpose:
+     * inside a REPEATABLE READ transaction a plain SELECT reads the
+     * transaction's snapshot, which can predate the other request's
+     * committed row (saveSources() itself runs READ COMMITTED).
+     *
+     * @param array<string, mixed> $data New source's columns; catalog_name and catalog_id must be set
+     *
+     * @return array{0: array<string, mixed>|null, 1: bool} [the source row, whether this call created it]
+     */
+    public function createOrFindByCatalogIdentity(array $data): array
+    {
+        $row     = ['id' => $this->generateId()] + $data;
+        $columns = array_map(fn (string $c): string => $this->db->escapeIdentifiers($c), array_keys($row));
+        $table   = $this->db->protectIdentifiers($this->table, true);
+
+        $this->db->query(
+            "INSERT INTO {$table} (" . implode(', ', $columns) . ') VALUES (?' . str_repeat(', ?', count($row) - 1) . ')'
+            . ' ON DUPLICATE KEY UPDATE id = id',
+            array_values($row),
+        );
+
+        if ($this->db->affectedRows() === 1) {
+            return [$row, true];
+        }
+
+        $existing = $this->db->query(
+            "SELECT * FROM {$table} WHERE catalog_name = ? AND catalog_id = ? LOCK IN SHARE MODE",
+            [$data['catalog_name'], $data['catalog_id']],
+        )->getRowArray();
+
+        return [$existing, false];
+    }
+
+    /**
      * Positional dedup fallback for sources with no catalog identity at
      * all (catalog_name/catalog_id both null) — position is the only
      * signal available for those. Delegates to SourceObservationModel

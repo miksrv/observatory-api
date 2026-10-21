@@ -8,6 +8,9 @@
  * @var string                $filterObject
  * @var string                $filterDateFrom
  * @var string                $filterDateTo
+ * @var string                $filterQc
+ * @var list<string>          $qcFlags  distinct non-OK quality flags present
+ * @var string                $qcNotOk  `qc` value for «Не OK»
  * @var \App\Libraries\UiListQuery $list
  * @var list<string>          $taskTypes
  */
@@ -16,7 +19,9 @@ $this->setVar('title', 'Кадры');
 $this->setVar('active', 'frames');
 $this->setVar('fill', true);
 
-$filtered = $filterObject !== '' || $filterPipeline !== '' || $filterDateFrom !== '' || $filterDateTo !== '';
+$filtered = $filterObject !== '' || $filterPipeline !== '' || $filterDateFrom !== '' || $filterDateTo !== '' || $filterQc !== '';
+// The filter as the task form re-sends it in «all frames matching the filter» mode.
+$matchFilter = ['object' => $filterObject, 'pipeline' => $filterPipeline, 'date_from' => $filterDateFrom, 'date_to' => $filterDateTo, 'qc' => $filterQc];
 ?>
 <?= $this->section('content') ?>
 
@@ -27,7 +32,7 @@ $filtered = $filterObject !== '' || $filterPipeline !== '' || $filterDateFrom !=
     </div>
 </div>
 
-<div class="panel" data-select-scope>
+<div class="panel" data-select-scope data-match-total="<?= (int) $list->total ?>">
     <form class="filters" method="get" action="/ui/frames">
         <label class="field">
             <span class="label">Объект</span>
@@ -48,6 +53,17 @@ $filtered = $filterObject !== '' || $filterPipeline !== '' || $filterDateFrom !=
                 <option value="<?= esc($pipelineNone, 'attr') ?>" <?= $filterPipeline === $pipelineNone ? 'selected' : '' ?>>(не указан)</option>
             </select>
         </label>
+        <label class="field">
+            <span class="label">QC</span>
+            <select class="input" name="qc" data-autosubmit>
+                <option value="">Все</option>
+                <option value="OK" <?= $filterQc === 'OK' ? 'selected' : '' ?>>OK</option>
+                <option value="<?= esc($qcNotOk, 'attr') ?>" <?= $filterQc === $qcNotOk ? 'selected' : '' ?>>Не OK</option>
+                <?php foreach ($qcFlags as $flag): ?>
+                    <option value="<?= esc($flag, 'attr') ?>" <?= $flag === $filterQc ? 'selected' : '' ?>><?= esc($flag) ?></option>
+                <?php endforeach; ?>
+            </select>
+        </label>
         <label class="field wide">
             <span class="label">С (UTC)</span>
             <input class="input" type="datetime-local" name="date_from" value="<?= esc($filterDateFrom, 'attr') ?>">
@@ -56,7 +72,7 @@ $filtered = $filterObject !== '' || $filterPipeline !== '' || $filterDateFrom !=
             <span class="label">До (UTC)</span>
             <input class="input" type="datetime-local" name="date_to" value="<?= esc($filterDateTo, 'attr') ?>">
         </label>
-        <?php foreach ($list->keptParams('object', 'pipeline', 'date_from', 'date_to', 'page', 'limit') as $name => $value): ?>
+        <?php foreach ($list->keptParams('object', 'pipeline', 'date_from', 'date_to', 'qc', 'page', 'limit') as $name => $value): ?>
             <input type="hidden" name="<?= esc($name, 'attr') ?>" value="<?= esc($value, 'attr') ?>">
         <?php endforeach; ?>
         <div class="actions">
@@ -115,9 +131,18 @@ $filtered = $filterObject !== '' || $filterPipeline !== '' || $filterDateFrom !=
         </div>
 
         <input type="hidden" name="scope_object" value="<?= esc($filterObject, 'attr') ?>">
+        <?php // Enabled by app.js only while «all frames matching the filter» is chosen. ?>
+        <fieldset class="match-fields" data-match-fields disabled hidden>
+            <input type="hidden" name="all_matching" value="1">
+            <?php foreach ($matchFilter as $name => $value): ?>
+                <input type="hidden" name="<?= esc($name, 'attr') ?>" value="<?= esc($value, 'attr') ?>">
+            <?php endforeach; ?>
+        </fieldset>
 
         <div class="selbar" data-empty>
             <span class="count"><b data-sel-count>0</b>выбрано</span>
+            <button class="btn" type="button" data-pick-matching hidden>Выбрать все <?= ui_num($list->total) ?> <?= ui_plural($list->total, 'кадр', 'кадра', 'кадров') ?> по фильтру</button>
+            <button class="btn" type="button" data-pick-page hidden>Только эта страница</button>
             <span class="sep"></span>
             <select class="input" name="type" data-type-hint="#type-hint" aria-label="Тип задачи">
                 <?php foreach ($taskTypes as $type): ?>

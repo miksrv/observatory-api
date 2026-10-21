@@ -147,9 +147,18 @@
         bar.addEventListener('transitionend', syncSelbarRoom);
     });
 
+    // «Select everything matching the filter» (opt-in per scope): a scope with
+    // data-match-total="N" (every row the filter matches, across pages) offers [data-pick-matching]
+    // once its whole page is checked and N is larger; choosing it enables [data-match-fields]
+    // (a disabled fieldset with all_matching=1 and the filter as hidden inputs), shows N as the
+    // count and [data-pick-page] to go back. Unchecking any row returns to the page selection.
+    function matchingTotal(scope) {
+        return scope.dataset.allMatching === '1' ? parseInt(scope.dataset.matchTotal, 10) || 0 : 0;
+    }
     function selectedIn(form) {
         var scope = form.closest('[data-select-scope]') || $('[data-select-scope]');
-        return scope ? $$('.js-pick:checked', scope).length : 0;
+        if (!scope) return 0;
+        return matchingTotal(scope) || $$('.js-pick:checked', scope).length;
     }
     $$('[data-select-scope]').forEach(function (scope) {
         var all = $('[data-pick-all]', scope);
@@ -158,12 +167,25 @@
             var checked = picks.filter(function (c) {
                 return c.checked;
             });
+            var total = parseInt(scope.dataset.matchTotal, 10) || 0;
+            var wholePage = picks.length > 0 && checked.length === picks.length;
+            if (!wholePage) delete scope.dataset.allMatching;
+            var matching = matchingTotal(scope) > 0;
+            $$('[data-pick-matching]', scope).forEach(function (b) {
+                b.hidden = !(wholePage && total > picks.length) || matching;
+            });
+            $$('[data-pick-page]', scope).forEach(function (b) {
+                b.hidden = !matching;
+            });
+            $$('[data-match-fields]', scope).forEach(function (f) {
+                f.disabled = !matching;
+            });
             picks.forEach(function (c) {
                 var row = c.closest('tr, .shot');
                 if (row) row.classList.toggle('selected', c.checked);
             });
             $$('[data-sel-count]', scope).forEach(function (el) {
-                el.textContent = String(checked.length);
+                el.textContent = String(matching ? total : checked.length);
             });
             $$('.selbar', scope).forEach(function (bar) {
                 if (checked.length === 0) bar.setAttribute('data-empty', '');
@@ -198,6 +220,14 @@
                 $$('.js-pick', scope).forEach(function (c) {
                     c.checked = false;
                 });
+                update();
+            }
+            if (e.target.closest('[data-pick-matching]')) {
+                scope.dataset.allMatching = '1';
+                update();
+            }
+            if (e.target.closest('[data-pick-page]')) {
+                delete scope.dataset.allMatching;
                 update();
             }
             if (e.target.closest('[data-pick-every]')) {

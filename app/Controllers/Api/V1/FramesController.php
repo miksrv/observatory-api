@@ -3,6 +3,7 @@
 namespace App\Controllers\Api\V1;
 
 use App\Controllers\BaseApiController;
+use App\Libraries\DbRetry;
 use App\Libraries\PipelineIdentity;
 use App\Libraries\SkyMath;
 use App\Models\AnomalyModel;
@@ -16,6 +17,21 @@ use CodeIgniter\HTTP\ResponseInterface;
 
 class FramesController extends BaseApiController
 {
+    /**
+     * Sources per transaction in saveSourcesForFrame(). Under autocommit every
+     * statement was its own commit, several per source — a 212-source call
+     * took over 30 s on the hosting. Chunked rather than one
+     * transaction so a concurrent writer of the same rows never waits on a
+     * whole call's locks.
+     */
+    private const SOURCES_PER_TRANSACTION = 50;
+
+    /** How long saveSources() waits for another call on the same frame to finish. */
+    private const SAVE_SOURCES_LOCK_WAIT_SEC = 30;
+
+    /** Attempts per chunk in saveSourcesForFrame() when it loses a deadlock / lock wait timeout. */
+    private const CHUNK_ATTEMPTS = 3;
+
     /**
      * POST /api/v1/frames
      *
@@ -327,8 +343,47 @@ class FramesController extends BaseApiController
             return $this->respondError(404, 'Frame not found', ['frame_id' => $id]);
         }
 
+        // ----------------------------------------------------------------
+        // One call per frame at a time. The pipeline gives up on a slow call
+        // after 30 s and retries it while the first one is still running
+        // here; two interleaved runs over the same frame each read "nothing
+        // saved yet" and both create the same rows (a 500 on the unique keys
+        // before the upserts below, duplicate uncatalogued sources and a
+        // reconciliation working from a stale snapshot even with them). A
+        // named lock makes the retry wait for the first run and then behave
+        // as an ordinary idempotent re-run. If it can't be had in time the
+        // call goes ahead anyway — the upserts still keep it from failing.
+        // ----------------------------------------------------------------
+        $db       = \Config\Database::connect();
+        $lockName = 'observatory_frame_sources_' . $id;
+        $locked   = (int) ($db->query('SELECT GET_LOCK(?, ?) AS l', [$lockName, self::SAVE_SOURCES_LOCK_WAIT_SEC])->getRow()->l ?? 0) === 1;
+
+        if (! $locked) {
+            log_message('warning', 'FramesController::saveSources — frame_id=' . $id
+                . ': another call for this frame is still running after '
+                . self::SAVE_SOURCES_LOCK_WAIT_SEC . ' s; going ahead without waiting');
+        }
+
+        try {
+            return $this->saveSourcesForFrame($id, $frame, $body['sources']);
+        } finally {
+            if ($locked) {
+                $db->query('SELECT RELEASE_LOCK(?)', [$lockName]);
+            }
+        }
+    }
+
+    /**
+     * The body of saveSources() — see its docblock — run while holding the
+     * frame's lock.
+     *
+     * @param array<string, mixed> $frame   The frame row
+     * @param array<int, mixed>    $sources The request's `sources`
+     */
+    private function saveSourcesForFrame(string $id, array $frame, array $sources): ResponseInterface
+    {
         $obsTime = $frame['obs_time'];
-        $sources = $body['sources'];
+        $db      = \Config\Database::connect();
 
         // ----------------------------------------------------------------
         // Process each source
@@ -359,165 +414,223 @@ class FramesController extends BaseApiController
         // reconfirmed and must be retracted.
         $confirmedSourceIds = [];
 
-        foreach ($sources as $source) {
-            // Validate required fields
-            if (
-                ! isset($source['ra'], $source['dec'])
-                || ! is_numeric($source['ra'])
-                || ! is_numeric($source['dec'])
-            ) {
-                $sourceIds[] = null;
-                $skipped++;
-                continue;
+        // Every failing query throws inside these transactions (and rolls the
+        // chunk back) instead of quietly returning false and failing the
+        // chunk at commit time.
+        $db->transException(true)->resetTransStatus();
+
+        try {
+            foreach (array_chunk($sources, self::SOURCES_PER_TRANSACTION) as $chunk) {
+                // Run again from the chunk's start if it loses a lock conflict to another
+                // call (two pipelines saving overlapping fields in different orders can
+                // deadlock); the rolled-back attempt's bookkeeping is restored first.
+                $saved = [$sourceIds, $confirmedSourceIds, $newSources, $matchedSources, $skipped];
+
+                DbRetry::onLockConflict(
+                    function () use ($chunk, $db, $id, $obsTime, $sourceModel, $observationModel, $frameSourceModel, &$sourceIds, &$confirmedSourceIds, &$newSources, &$matchedSources, &$skipped): void {
+                        // READ COMMITTED, as autocommit effectively was: every lookup
+                        // sees what other calls have committed meanwhile, and MariaDB
+                        // 11.6+ (innodb_snapshot_isolation) doesn't fail an upsert of
+                        // a row committed after a REPEATABLE READ snapshot with
+                        // "Record has changed since last read". Applies to the next
+                        // transaction only.
+                        $db->query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+                        $db->transStart();
+
+                        foreach ($chunk as $source) {
+                            // Validate required fields
+                            if (
+                                ! isset($source['ra'], $source['dec'])
+                                || ! is_numeric($source['ra'])
+                                || ! is_numeric($source['dec'])
+                            ) {
+                                $sourceIds[] = null;
+                                $skipped++;
+                                continue;
+                            }
+
+                            $ra  = (float) $source['ra'];
+                            $dec = (float) $source['dec'];
+
+                            $catalogName = $source['catalog_name'] ?? null;
+                            $catalogId   = $source['catalog_id'] ?? null;
+                            $hasCatalogIdentity = $catalogName !== null && $catalogName !== ''
+                                && $catalogId !== null && $catalogId !== '';
+
+                            // Prefer matching by stable catalog identity when the source was
+                            // actually catalog-matched (Simbad/Gaia DR3/2MASS/Pan-STARRS/MPC).
+                            // This is essential for moving objects: an MPC-matched asteroid's
+                            // sky position shifts between frames well beyond any reasonable
+                            // position-matching radius (Vesta moves ~tens of arcsec/hour), so
+                            // position-only matching would mint a brand-new `sources` row for
+                            // it on every single frame instead of accumulating observations
+                            // against one.
+                            //
+                            // Fall back to position matching ONLY when there's no catalog
+                            // identity to match on at all. Using `??` unconditionally here
+                            // used to fall back to findByCoordinates() any time
+                            // findByCatalogIdentity() simply hadn't seen this identity
+                            // before yet (e.g. the very first observation of a given MPC
+                            // designation) — silently "adopting" an unrelated pre-existing
+                            // source's row (e.g. a Gaia DR3 star) whenever the two happened
+                            // to sit within 2" of each other at this epoch, permanently
+                            // mislabeling that row's catalog_name/catalog_id since they are
+                            // only ever set on insert, never refreshed on a match (real
+                            // incident, 2026-08-06: asteroid 2014 RY1 passing close to a
+                            // field star repeatedly resolved to that star's `sources` row).
+                            // A catalog-identified source that doesn't match anything yet
+                            // must get its own new row instead of risking that.
+                            if ($hasCatalogIdentity) {
+                                $existingSource = $sourceModel->findByCatalogIdentity($catalogName, $catalogId);
+                            } else {
+                                $existingSource = $sourceModel->findByCoordinates($ra, $dec, 2.0);
+
+                                // A position match to a source this SAME batch has already
+                                // confirmed is not a re-observation — it is a second, distinct
+                                // detection the pipeline deliberately sent as its own entry
+                                // (its own dedup passes leave two ordinary uncatalogued
+                                // sources alone, since they may be two real faint objects: a
+                                // supernova candidate beside an unrelated faint star, a
+                                // deblended pair). The loop runs synchronously on one
+                                // connection — its transactions included, a transaction sees
+                                // its own writes — so the earlier entry's freshly inserted
+                                // observation is already visible to this lookup; merging onto
+                                // it made this entry's photometry overwrite the earlier one's
+                                // with no unique-key violation and no log line (API audit
+                                // 2026-08-20, finding M1). Give it its own row instead. On a
+                                // later frame each detection then matches its own row, since
+                                // findByCoordinates() returns the nearest one.
+                                if ($existingSource !== null && isset($confirmedSourceIds[$existingSource['id']])) {
+                                    log_message('info', sprintf(
+                                        'FramesController::saveSources — frame_id=%s: uncatalogued source at ra=%.5f dec=%.5f '
+                                        . 'lies within 2" of source_id=%s already confirmed earlier in this batch; '
+                                        . 'keeping it as a distinct source rather than merging',
+                                        $id, $ra, $dec, $existingSource['id'],
+                                    ));
+                                    $existingSource = null;
+                                }
+                            }
+
+                            // Whether this is the (frame_id, source_id) pairing's FIRST
+                            // appearance — the only time an existing source's
+                            // `observation_count`/`last_observed_at` are bumped, never again
+                            // on a later idempotent re-run of the same frame — is decided by
+                            // the observation upsert below, atomically, not by a lookup that
+                            // a concurrent call could invalidate before the insert.
+                            $isExistingSource = $existingSource !== null;
+
+                            if ($existingSource !== null) {
+                                $sourceId = $existingSource['id'];
+                                $matchedSources++;
+                            } else {
+                                // Create new source
+                                $newSourceData = [
+                                    'catalog_name'      => $catalogName,
+                                    'catalog_id'        => $catalogId,
+                                    'catalog_mag'       => isset($source['catalog_mag']) ? (float) $source['catalog_mag'] : null,
+                                    'object_type'       => $source['object_type'] ?? null,
+                                    'first_observed_at' => $obsTime,
+                                    'last_observed_at'  => $obsTime,
+                                    'observation_count' => 1,
+                                ];
+
+                                if ($hasCatalogIdentity) {
+                                    // Another call (e.g. another frame of the same field)
+                                    // may have created this identity since the lookup above.
+                                    [$createdOrFound, $created] = $sourceModel->createOrFindByCatalogIdentity($newSourceData);
+                                    $sourceId = $createdOrFound['id'] ?? false;
+                                    $isExistingSource = ! $created;
+                                } else {
+                                    $sourceId = $sourceModel->insert($newSourceData, true);
+                                }
+
+                                if ($sourceId === false) {
+                                    log_message('error', 'Failed to create source at RA=' . $ra . ', Dec=' . $dec);
+                                    $sourceIds[] = null;
+                                    $skipped++;
+                                    continue;
+                                }
+
+                                if ($isExistingSource) {
+                                    $matchedSources++;
+                                } else {
+                                    $newSources++;
+                                }
+                            }
+
+                            $sourceIds[]                     = $sourceId;
+                            $confirmedSourceIds[$sourceId]    = true;
+
+                            // Upsert the observation record (not a blind insert — see
+                            // uk_srcobs_frame_source and this method's own docblock: a
+                            // repeat call for the same frame_id must update, not violate
+                            // that unique key or silently fail to persist anything new).
+                            $mag = $source['mag'] ?? $source['mag_calibrated'] ?? null;
+
+                            $observationData = [
+                                'source_id'        => $sourceId,
+                                'frame_id'         => $id,
+                                'ra'               => $ra,
+                                'dec'              => $dec,
+                                'mag'              => $mag !== null ? (float) $mag : null,
+                                'mag_err'          => isset($source['mag_err']) ? (float) $source['mag_err'] : null,
+                                'flux'             => isset($source['flux']) ? (float) $source['flux'] : null,
+                                'flux_err'         => isset($source['flux_err']) ? (float) $source['flux_err'] : null,
+                                'fwhm'             => isset($source['fwhm']) ? (float) $source['fwhm'] : null,
+                                'snr'              => isset($source['snr']) ? (float) $source['snr'] : null,
+                                'elongation'       => isset($source['elongation']) ? (float) $source['elongation'] : null,
+                                // Persisted so a later, decoupled DETECT_ANOMALIES task can reconstruct
+                                // anomaly_detector.py's saturated-suppression and subtraction-coverage-bypass
+                                // rules purely from stored data (see the migration's docblock for the full
+                                // rationale). Both default to false when the pipeline omits them.
+                                'saturated'        => ! empty($source['saturated']) ? 1 : 0,
+                                'near_edge'        => ! empty($source['near_edge']) ? 1 : 0,
+                                'from_subtraction' => ! empty($source['from_subtraction']) ? 1 : 0,
+                                'obs_time'         => $obsTime,
+                            ];
+
+                            $firstAppearance = $observationModel->upsertForFrameSource($observationData);
+
+                            if ($firstAppearance && $isExistingSource) {
+                                $db->query(
+                                    'UPDATE sources SET observation_count = observation_count + 1, last_observed_at = ? WHERE id = ?',
+                                    [$obsTime, $sourceId],
+                                );
+                            }
+
+                            // Link source to frame
+                            $frameSourceModel->linkSourceToFrame($id, $sourceId);
+                        }
+
+                        if (! $db->transComplete()) {
+                            throw new \CodeIgniter\Database\Exceptions\DatabaseException('transaction rolled back');
+                        }
+                    },
+                    self::CHUNK_ATTEMPTS,
+                    function (int $attempt, \Throwable $e) use (&$saved, &$sourceIds, &$confirmedSourceIds, &$newSources, &$matchedSources, &$skipped, $db, $id): void {
+                        [$sourceIds, $confirmedSourceIds, $newSources, $matchedSources, $skipped] = $saved;
+                        // The failed query rolled the chunk back but leaves the connection's
+                        // transaction status failed (strict mode), which would roll back the retry too.
+                        $db->resetTransStatus();
+                        log_message('warning', sprintf(
+                            'FramesController::saveSources — frame_id=%s: chunk attempt %d lost a lock conflict (%s); retrying',
+                            $id, $attempt, $e->getMessage(),
+                        ));
+                    },
+                );
             }
+        } catch (\CodeIgniter\Database\Exceptions\DatabaseException $e) {
+            // The failing query already rolled its chunk back; chunks before
+            // it stay saved, and a retry of the same call is idempotent.
+            log_message('error', 'FramesController::saveSources — frame_id=' . $id . ': ' . $e->getMessage());
 
-            $ra  = (float) $source['ra'];
-            $dec = (float) $source['dec'];
+            return $this->respondError(500, 'Failed to save sources for this frame');
+        } catch (\Throwable $e) {
+            $db->transRollback();
 
-            $catalogName = $source['catalog_name'] ?? null;
-            $catalogId   = $source['catalog_id'] ?? null;
-            $hasCatalogIdentity = $catalogName !== null && $catalogName !== ''
-                && $catalogId !== null && $catalogId !== '';
-
-            // Prefer matching by stable catalog identity when the source was
-            // actually catalog-matched (Simbad/Gaia DR3/2MASS/Pan-STARRS/MPC).
-            // This is essential for moving objects: an MPC-matched asteroid's
-            // sky position shifts between frames well beyond any reasonable
-            // position-matching radius (Vesta moves ~tens of arcsec/hour), so
-            // position-only matching would mint a brand-new `sources` row for
-            // it on every single frame instead of accumulating observations
-            // against one.
-            //
-            // Fall back to position matching ONLY when there's no catalog
-            // identity to match on at all. Using `??` unconditionally here
-            // used to fall back to findByCoordinates() any time
-            // findByCatalogIdentity() simply hadn't seen this identity
-            // before yet (e.g. the very first observation of a given MPC
-            // designation) — silently "adopting" an unrelated pre-existing
-            // source's row (e.g. a Gaia DR3 star) whenever the two happened
-            // to sit within 2" of each other at this epoch, permanently
-            // mislabeling that row's catalog_name/catalog_id since they are
-            // only ever set on insert, never refreshed on a match (real
-            // incident, 2026-08-06: asteroid 2014 RY1 passing close to a
-            // field star repeatedly resolved to that star's `sources` row).
-            // A catalog-identified source that doesn't match anything yet
-            // must get its own new row instead of risking that.
-            if ($hasCatalogIdentity) {
-                $existingSource = $sourceModel->findByCatalogIdentity($catalogName, $catalogId);
-            } else {
-                $existingSource = $sourceModel->findByCoordinates($ra, $dec, 2.0);
-
-                // A position match to a source this SAME batch has already
-                // confirmed is not a re-observation — it is a second, distinct
-                // detection the pipeline deliberately sent as its own entry
-                // (its own dedup passes leave two ordinary uncatalogued
-                // sources alone, since they may be two real faint objects: a
-                // supernova candidate beside an unrelated faint star, a
-                // deblended pair). The loop runs synchronously with no
-                // transaction, so the earlier entry's freshly inserted
-                // observation is already visible to this lookup; merging onto
-                // it made this entry's photometry overwrite the earlier one's
-                // with no unique-key violation and no log line (API audit
-                // 2026-08-20, finding M1). Give it its own row instead. On a
-                // later frame each detection then matches its own row, since
-                // findByCoordinates() returns the nearest one.
-                if ($existingSource !== null && isset($confirmedSourceIds[$existingSource['id']])) {
-                    log_message('info', sprintf(
-                        'FramesController::saveSources — frame_id=%s: uncatalogued source at ra=%.5f dec=%.5f '
-                        . 'lies within 2" of source_id=%s already confirmed earlier in this batch; '
-                        . 'keeping it as a distinct source rather than merging',
-                        $id, $ra, $dec, $existingSource['id'],
-                    ));
-                    $existingSource = null;
-                }
-            }
-
-            // Does a source_observations row already exist for this exact
-            // (frame_id, source_id) pairing? Decides both whether to bump
-            // `sources.observation_count` (only on this pairing's FIRST
-            // appearance — never again on a later idempotent re-run of the
-            // same frame) and whether to insert or update the observation
-            // row itself below.
-            $existingObsRow = null;
-
-            if ($existingSource !== null) {
-                $sourceId = $existingSource['id'];
-                $matchedSources++;
-
-                $existingObsRow = $observationModel
-                    ->where('frame_id', $id)
-                    ->where('source_id', $sourceId)
-                    ->first();
-
-                if ($existingObsRow === null) {
-                    $sourceModel->update($sourceId, [
-                        'last_observed_at'  => $obsTime,
-                        'observation_count' => $existingSource['observation_count'] + 1,
-                    ]);
-                }
-            } else {
-                // Create new source
-                $newSourceData = [
-                    'catalog_name'      => $catalogName,
-                    'catalog_id'        => $catalogId,
-                    'catalog_mag'       => isset($source['catalog_mag']) ? (float) $source['catalog_mag'] : null,
-                    'object_type'       => $source['object_type'] ?? null,
-                    'first_observed_at' => $obsTime,
-                    'last_observed_at'  => $obsTime,
-                    'observation_count' => 1,
-                ];
-
-                $sourceId = $sourceModel->insert($newSourceData, true);
-
-                if ($sourceId === false) {
-                    log_message('error', 'Failed to create source at RA=' . $ra . ', Dec=' . $dec);
-                    $sourceIds[] = null;
-                    $skipped++;
-                    continue;
-                }
-
-                $newSources++;
-            }
-
-            $sourceIds[]                     = $sourceId;
-            $confirmedSourceIds[$sourceId]    = true;
-
-            // Upsert the observation record (not a blind insert — see
-            // uk_srcobs_frame_source and this method's own docblock: a
-            // repeat call for the same frame_id must update, not violate
-            // that unique key or silently fail to persist anything new).
-            $mag = $source['mag'] ?? $source['mag_calibrated'] ?? null;
-
-            $observationData = [
-                'source_id'        => $sourceId,
-                'frame_id'         => $id,
-                'ra'               => $ra,
-                'dec'              => $dec,
-                'mag'              => $mag !== null ? (float) $mag : null,
-                'mag_err'          => isset($source['mag_err']) ? (float) $source['mag_err'] : null,
-                'flux'             => isset($source['flux']) ? (float) $source['flux'] : null,
-                'flux_err'         => isset($source['flux_err']) ? (float) $source['flux_err'] : null,
-                'fwhm'             => isset($source['fwhm']) ? (float) $source['fwhm'] : null,
-                'snr'              => isset($source['snr']) ? (float) $source['snr'] : null,
-                'elongation'       => isset($source['elongation']) ? (float) $source['elongation'] : null,
-                // Persisted so a later, decoupled DETECT_ANOMALIES task can reconstruct
-                // anomaly_detector.py's saturated-suppression and subtraction-coverage-bypass
-                // rules purely from stored data (see the migration's docblock for the full
-                // rationale). Both default to false when the pipeline omits them.
-                'saturated'        => ! empty($source['saturated']) ? 1 : 0,
-                'near_edge'        => ! empty($source['near_edge']) ? 1 : 0,
-                'from_subtraction' => ! empty($source['from_subtraction']) ? 1 : 0,
-                'obs_time'         => $obsTime,
-            ];
-
-            if ($existingObsRow !== null) {
-                $observationModel->update($existingObsRow['id'], $observationData);
-            } else {
-                $observationModel->insert($observationData);
-            }
-
-            // Link source to frame
-            $frameSourceModel->linkSourceToFrame($id, $sourceId);
+            throw $e;
+        } finally {
+            $db->transException(false);
         }
 
         // All sources were invalid (only meaningful for a non-empty batch —
@@ -536,7 +649,6 @@ class FramesController extends BaseApiController
         $purgedCount      = 0;
 
         if ($vacatedSourceIds !== []) {
-            $db = \Config\Database::connect();
             $db->transStart();
 
             foreach ($vacatedSourceIds as $vacatedId) {

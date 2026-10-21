@@ -419,6 +419,123 @@ final class BatchTest extends DatabaseTestCase
         $this->assertEmpty($json['results']['1']);
     }
 
+    /**
+     * nearBatch() streams the candidate rows in declination order and sweeps
+     * them against the positions sorted by dec, instead of loading the whole
+     * bounding box into memory (it ran out of PHP's 256 MB on the hosting).
+     * The answer must be exactly what a brute-force cone search over every
+     * stored observation gives: same matches, same fields, ordered by dec
+     * within each position — for many overlapping positions (unsorted, one
+     * repeated), across filters and the RA=0/360 seam, with and without
+     * before_time and uncatalogued_only.
+     */
+    public function testSourcesNearBatchMatchesBruteForceConeSearch(): void
+    {
+        mt_srand(20261021);
+        $db = \Config\Database::connect();
+
+        $frames = [
+            $this->createFrame(['obs_time' => '2024-01-01 00:00:00', 'filter' => 'L']),
+            $this->createFrame(['obs_time' => '2024-02-01 00:00:00', 'filter' => 'R']),
+            $this->createFrame(['obs_time' => '2024-03-01 00:00:00', 'filter' => null]),
+            $this->createFrame(['obs_time' => '2024-04-01 00:00:00', 'filter' => 'Ha']),
+        ];
+        $catalogs = ['Gaia DR3', null, 'MPC', 'Simbad'];
+
+        $fields = [[202.47, 47.19], [0.0, 10.0]]; // M51-like field and the RA seam
+        foreach ($fields as [$ra0, $dec0]) {
+            for ($k = 0; $k < 150; $k++) {
+                $catalog  = $catalogs[$k % 4];
+                $sourceId = $this->createSource(
+                    $catalog === null ? ['catalog_name' => null, 'catalog_id' => null] : ['catalog_name' => $catalog]
+                );
+                $frameIdx = mt_rand(0, 3);
+                $ra       = fmod($ra0 + (mt_rand(-10000, 10000) / 10000) * 0.01 / cos(deg2rad($dec0)) + 360.0, 360.0);
+                $db->table('source_observations')->insert([
+                    'id'        => uniqid('', true),
+                    'source_id' => $sourceId,
+                    'frame_id'  => $frames[$frameIdx],
+                    'ra'        => round($ra, 7),
+                    'dec'       => round($dec0 + (mt_rand(-10000, 10000) / 10000) * 0.01, 7),
+                    'mag'       => $k % 7 === 0 ? null : 12.0 + mt_rand(0, 8000) / 1000,
+                    'flux'      => $k % 9 === 0 ? null : (float) mt_rand(100, 90000),
+                    'obs_time'  => ['2024-01-01 00:00:00', '2024-02-01 00:00:00', '2024-03-01 00:00:00', '2024-04-01 00:00:00'][$frameIdx],
+                ]);
+            }
+        }
+
+        $positions = [];
+        for ($k = 0; $k < 30; $k++) {
+            [$ra0, $dec0] = $fields[$k % 2];
+            $positions[]  = [
+                'ra'  => fmod($ra0 + (mt_rand(-10000, 10000) / 10000) * 0.01 / cos(deg2rad($dec0)) + 360.0, 360.0),
+                'dec' => $dec0 + (mt_rand(-10000, 10000) / 10000) * 0.01,
+            ];
+        }
+        $positions[] = $positions[3];                  // the same position twice
+        $positions[] = ['ra' => 0.0003, 'dec' => 10.0];  // just east of the seam
+        $positions[] = ['ra' => 359.9997, 'dec' => 10.0];
+        $positions[] = ['ra' => 100.0, 'dec' => -30.0];  // nothing there
+
+        $all = $db->query(
+            'SELECT so.id, so.frame_id, so.ra, so.dec, so.mag, so.flux, so.obs_time, f.filter, s.catalog_name
+             FROM source_observations so
+             LEFT JOIN frames f ON f.id = so.frame_id
+             JOIN sources s ON s.id = so.source_id'
+        )->getResultArray();
+
+        $radius = 40.0;
+        $cases  = [
+            [],
+            ['before_time' => '2024-03-01T00:00:00Z'],
+            ['uncatalogued_only' => true],
+            ['before_time' => '2024-03-15T00:00:00Z', 'uncatalogued_only' => true],
+        ];
+
+        $totalMatches = 0;
+        foreach ($cases as $options) {
+            $expected = [];
+            foreach ($positions as $i => $pos) {
+                $matches = [];
+                foreach ($all as $obs) {
+                    if (isset($options['before_time']) && strtotime($obs['obs_time'] . ' UTC') >= strtotime($options['before_time'])) {
+                        continue;
+                    }
+                    if (! empty($options['uncatalogued_only']) && ! in_array($obs['catalog_name'], [null, 'MPC'], true)) {
+                        continue;
+                    }
+                    if (\App\Libraries\SkyMath::haversineArcsec((float) $pos['ra'], (float) $pos['dec'], (float) $obs['ra'], (float) $obs['dec']) > $radius) {
+                        continue;
+                    }
+                    $matches[] = $obs;
+                }
+                usort($matches, static fn (array $a, array $b): int => [(float) $a['dec'], $a['id']] <=> [(float) $b['dec'], $b['id']]);
+                $expected[(string) $i] = array_map(static fn (array $obs): array => [
+                    'ra'       => (float) $obs['ra'],
+                    'dec'      => (float) $obs['dec'],
+                    'mag'      => $obs['mag'] !== null ? (float) $obs['mag'] : null,
+                    'flux'     => $obs['flux'] !== null ? (float) $obs['flux'] : null,
+                    'frame_id' => $obs['frame_id'],
+                    'obs_time' => gmdate('Y-m-d\TH:i:s\Z', strtotime($obs['obs_time'])),
+                    'filter'   => $obs['filter'],
+                ], $matches);
+                $totalMatches += count($matches);
+            }
+
+            $result = $this->withHeaders($this->authHeaders())->withBodyFormat('json')
+                ->post('/api/v1/sources/near/batch', ['positions' => $positions, 'radius_arcsec' => $radius] + $options);
+
+            $result->assertStatus(200);
+            $body = $result->getJSON();
+            $this->assertInstanceOf(\stdClass::class, json_decode($body)->results, 'results must stay a JSON object keyed by index');
+            // Through JSON on both sides: an integral float (flux 75006.0) decodes as an int.
+            $this->assertSame(json_decode(json_encode($expected), true), json_decode($body, true)['results'], 'Options: ' . json_encode($options));
+        }
+
+        // The fixture must actually exercise the sweep: many matches, overlapping positions.
+        $this->assertGreaterThan(200, $totalMatches);
+    }
+
     // =========================================================================
     // POST /api/v1/frames/covering/batch
     // =========================================================================
