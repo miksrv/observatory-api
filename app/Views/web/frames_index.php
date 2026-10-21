@@ -20,6 +20,8 @@ $this->setVar('active', 'frames');
 $this->setVar('fill', true);
 
 $filtered = $filterObject !== '' || $filterPipeline !== '' || $filterDateFrom !== '' || $filterDateTo !== '' || $filterQc !== '';
+// The filter as the task form re-sends it in «all frames matching the filter» mode.
+$matchFilter = ['object' => $filterObject, 'pipeline' => $filterPipeline, 'date_from' => $filterDateFrom, 'date_to' => $filterDateTo, 'qc' => $filterQc];
 ?>
 <?= $this->section('content') ?>
 
@@ -30,7 +32,7 @@ $filtered = $filterObject !== '' || $filterPipeline !== '' || $filterDateFrom !=
     </div>
 </div>
 
-<div class="panel" data-select-scope>
+<div class="panel" data-select-scope data-match-total="<?= (int) $list->total ?>">
     <form class="filters" method="get" action="/ui/frames">
         <label class="field">
             <span class="label">Объект</span>
@@ -129,9 +131,18 @@ $filtered = $filterObject !== '' || $filterPipeline !== '' || $filterDateFrom !=
         </div>
 
         <input type="hidden" name="scope_object" value="<?= esc($filterObject, 'attr') ?>">
+        <?php // Enabled by app.js only while «all frames matching the filter» is chosen. ?>
+        <fieldset class="match-fields" data-match-fields disabled hidden>
+            <input type="hidden" name="all_matching" value="1">
+            <?php foreach ($matchFilter as $name => $value): ?>
+                <input type="hidden" name="<?= esc($name, 'attr') ?>" value="<?= esc($value, 'attr') ?>">
+            <?php endforeach; ?>
+        </fieldset>
 
         <div class="selbar" data-empty>
             <span class="count"><b data-sel-count>0</b>выбрано</span>
+            <button class="btn" type="button" data-pick-matching hidden>Выбрать все <?= ui_num($list->total) ?> <?= ui_plural($list->total, 'кадр', 'кадра', 'кадров') ?> по фильтру</button>
+            <button class="btn" type="button" data-pick-page hidden>Только эта страница</button>
             <span class="sep"></span>
             <select class="input" name="type" data-type-hint="#type-hint" aria-label="Тип задачи">
                 <?php foreach ($taskTypes as $type): ?>

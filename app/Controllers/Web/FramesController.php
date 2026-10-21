@@ -50,6 +50,12 @@ class FramesController extends BaseWebController
     /** `qc` filter value selecting every frame whose quality_flag is set and isn't OK. */
     private const QC_NOT_OK = 'not_ok';
 
+    /**
+     * Most frames one "select every frame matching the filter" task may carry — a forgotten
+     * filter must not queue the whole archive by accident.
+     */
+    private const ALL_MATCHING_MAX = 5000;
+
     public function index(): ResponseInterface
     {
         $filters = $this->readFilters(fn (string $name): mixed => $this->request->getGet($name));
@@ -135,19 +141,41 @@ class FramesController extends BaseWebController
             return redirect()->back()->with('error', 'Неизвестный или отсутствующий тип задачи.');
         }
 
-        $frameIds = array_values(array_unique(array_filter(
-            $frameIds,
-            static fn ($v): bool => is_string($v) && $v !== ''
-        )));
+        if ($this->request->getPost('all_matching') === '1') {
+            // "Every frame matching the filter": the checked ids are only the visible page — the
+            // selection is the POSTed filter instead, re-run here over the whole table.
+            $filters = $this->readFilters(fn (string $name): mixed => $this->request->getPost($name));
+            $model   = $this->applyFilters(new FrameModel(), $filters, (new PipelineModel())->getAllNames());
+            $total   = $model->countAllResults(false);
 
-        if (count($frameIds) === 0) {
-            return redirect()->back()->with('error', 'Выберите хотя бы один кадр (чекбокс в таблице).');
-        }
+            if ($total === 0) {
+                return redirect()->back()->with('error', 'По фильтру не найдено ни одного кадра.');
+            }
 
-        $frames = (new FrameModel())->whereIn('id', $frameIds)->findAll();
+            if ($total > self::ALL_MATCHING_MAX) {
+                return redirect()->back()->with('error', sprintf(
+                    'По фильтру %d кадров — больше %d за одну задачу. Сузьте фильтр.',
+                    $total,
+                    self::ALL_MATCHING_MAX,
+                ));
+            }
 
-        if (count($frames) === 0) {
-            return redirect()->back()->with('error', 'Выбранные кадры не найдены (устарели?).');
+            $frames = $model->select('id, filename, pipeline_id')->orderBy('obs_time', 'ASC')->findAll();
+        } else {
+            $frameIds = array_values(array_unique(array_filter(
+                $frameIds,
+                static fn ($v): bool => is_string($v) && $v !== ''
+            )));
+
+            if (count($frameIds) === 0) {
+                return redirect()->back()->with('error', 'Выберите хотя бы один кадр (чекбокс в таблице).');
+            }
+
+            $frames = (new FrameModel())->whereIn('id', $frameIds)->findAll();
+
+            if (count($frames) === 0) {
+                return redirect()->back()->with('error', 'Выбранные кадры не найдены (устарели?).');
+            }
         }
 
         $itemKey     = self::CREATABLE_TYPES[$type]['item_key'];
@@ -170,7 +198,7 @@ class FramesController extends BaseWebController
 
     /**
      * The list filter (object, pipeline, date_from, date_to, qc) as trimmed strings, read through
-     * `$get` (the request's query string or POST body).
+     * `$get` — the query string for index(), the POST body for createTask()'s all_matching mode.
      *
      * @param callable(string): mixed $get
      *
