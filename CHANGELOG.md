@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.1
+
+### Patch Changes
+
+- Sources: `POST /sources/near/batch` streams the matching observations instead of loading the whole search box into memory, so heavily observed fields (M51, ~300 frames) no longer exhaust PHP's 256 MB `memory_limit`; the response is unchanged
+
 ## 1.3.0
 
 ### Minor Changes

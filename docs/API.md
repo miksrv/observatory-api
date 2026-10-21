@@ -948,8 +948,11 @@ observations of sources whose `catalog_name` is `NULL` or `'MPC'`).
 position is never evidence of motion, and on a field observed many times an unfiltered wide cone is
 almost entirely stars — the 228-frame NGC 7331 run (2026-09-23) returned 870k rows for 62k stored
 observations and OOM-killed the pipeline's worker. Within one position, results are ordered by
-declination: the controller sorts the candidates by dec and binary-searches each position's
-±radius slice before the haversine, instead of testing every candidate against every position.
+declination: the controller streams the candidate rows in dec order (unbuffered, never the whole
+bounding box in memory) and tests each row only against the positions whose ±radius dec window
+contains it, with an RA-window check before the haversine. Peak memory is the size of the response,
+so a caller with very many positions on a heavily observed field should still split them into
+dec-sorted chunks.
 
 <details>
 <summary>Request example</summary>

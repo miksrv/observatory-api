@@ -346,7 +346,10 @@ class SourcesController extends BaseApiController
             $params[]    = $max;
         }
 
-        $sql = 'SELECT so.id, so.source_id, so.frame_id, so.ra, so.dec, so.mag, so.flux, so.fwhm, so.obs_time, f.filter AS filter
+        // Only the columns the response carries; ordered by dec so the rows
+        // can be swept against the dec-sorted positions as they stream in.
+        // so.id breaks dec ties so the order within a position is stable.
+        $sql = 'SELECT so.frame_id, so.ra, so.dec, so.mag, so.flux, so.obs_time, f.filter AS filter
                 FROM source_observations so
                 LEFT JOIN frames f ON f.id = so.frame_id'
             . ($uncataloguedOnly ? ' JOIN sources s ON s.id = so.source_id' : '') . '
@@ -364,81 +367,131 @@ class SourcesController extends BaseApiController
             $params[] = $beforeMysql;
         }
 
-        $candidates = $db->query($sql, $params)->getResultArray();
-
+        $sql .= ' ORDER BY so.dec, so.id';
 
         // ----------------------------------------------------------------
-        // For each position, filter candidates using Haversine.
-        //
-        // The candidates come from ONE box around all positions, so testing
-        // every candidate against every position is positions × candidates
-        // haversines — ~18M per request for a 300-source frame over a
-        // 62k-observation field. Sorted by declination, each position only
-        // needs the slice within ±radius of its own dec (binary search), and
-        // a cheap RA-window check before the haversine.
+        // Positions sorted by declination, each with its ±radius dec window
+        // and the widest RA half-width any point within the radius can have
+        // (the one at the highest |dec| the cone reaches).
         // ----------------------------------------------------------------
-        usort($candidates, static fn (array $a, array $b): int => (float) $a['dec'] <=> (float) $b['dec']);
-        $candidateDecs = array_map(static fn (array $c): float => (float) $c['dec'], $candidates);
-        $nCandidates   = count($candidates);
-
-        $results = [];
-        $totalMatches = 0;
-
+        $sweep = [];
         foreach ($positions as $i => $pos) {
             $ra  = (float) $pos['ra'];
             $dec = (float) $pos['dec'];
-            $posResults = [];
 
-            // Widest RA half-width any point within the radius can have: the
-            // one at the highest |dec| the cone reaches.
-            $raWindow = SkyMath::raMargin(min(90.0, abs($dec) + $deg), $deg);
+            $sweep[] = [
+                'key'    => $i,
+                'ra'     => $ra,
+                'dec'    => $dec,
+                'lo'     => $dec - $deg,
+                'hi'     => $dec + $deg,
+                'window' => SkyMath::raMargin(min(90.0, abs($dec) + $deg), $deg),
+            ];
+        }
+        usort($sweep, static fn (array $a, array $b): int => $a['dec'] <=> $b['dec']);
+        $nPositions = count($sweep);
 
-            // First candidate with dec >= $dec - $deg.
-            $lo = 0;
-            $hi = $nCandidates;
-            while ($lo < $hi) {
-                $mid = intdiv($lo + $hi, 2);
-                if ($candidateDecs[$mid] < $dec - $deg) {
-                    $lo = $mid + 1;
-                } else {
-                    $hi = $mid;
-                }
+        // ----------------------------------------------------------------
+        // Stream the candidates and sweep them against the positions.
+        //
+        // A field observed hundreds of times holds hundreds of thousands of
+        // observations in one box around a frame's positions (M51: ~317
+        // frames × ~700). Loading them all (getResultArray), sorting them,
+        // building the result array and then JSON-encoding it ran out of the
+        // hosting's 256 MB memory_limit. Now the rows are read one at a time
+        // — unbuffered on MySQLi, so not even the driver holds the whole set —
+        // and each row is tested only against the positions whose dec window
+        // contains it: rows arrive in ascending dec, so positions whose
+        // window lies entirely below the current row are done for good. A
+        // match is stored straight away as its JSON text, per position; peak
+        // memory is the size of the response, not of the candidate set.
+        // ----------------------------------------------------------------
+        $jsonFlags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR;
+        $matchJson = array_fill(0, $nPositions, '');
+        $first     = 0;
+
+        $unbuffered = $db instanceof \CodeIgniter\Database\MySQLi\Connection;
+        if ($unbuffered) {
+            $previousMode   = $db->resultMode;
+            $db->resultMode = MYSQLI_USE_RESULT;
+        }
+
+        try {
+            $query = $db->query($sql, $params);
+        } finally {
+            if ($unbuffered) {
+                $db->resultMode = $previousMode;
             }
+        }
 
-            for ($k = $lo; $k < $nCandidates && $candidateDecs[$k] <= $dec + $deg; $k++) {
-                $obs = $candidates[$k];
+        try {
+            while (is_array($obs = $query->getUnbufferedRow('array'))) {
+                $obsRa  = (float) $obs['ra'];
+                $obsDec = (float) $obs['dec'];
 
-                $dRa = abs((float) $obs['ra'] - $ra);
-                if (min($dRa, 360.0 - $dRa) > $raWindow) {
-                    continue;
+                while ($first < $nPositions && $sweep[$first]['hi'] < $obsDec) {
+                    $first++;
                 }
 
-                $distance = SkyMath::haversineArcsec($ra, $dec, (float) $obs['ra'], (float) $obs['dec']);
+                $entry = null;
 
-                if ($distance <= $radiusArcsec) {
-                    $posResults[] = [
-                        'ra'       => (float) $obs['ra'],
-                        'dec'      => (float) $obs['dec'],
+                for ($k = $first; $k < $nPositions && $sweep[$k]['lo'] <= $obsDec; $k++) {
+                    $pos = $sweep[$k];
+
+                    $dRa = abs($obsRa - $pos['ra']);
+                    if (min($dRa, 360.0 - $dRa) > $pos['window']) {
+                        continue;
+                    }
+
+                    if (SkyMath::haversineArcsec($pos['ra'], $pos['dec'], $obsRa, $obsDec) > $radiusArcsec) {
+                        continue;
+                    }
+
+                    // Encoded once per row, however many positions it matches.
+                    $entry ??= json_encode([
+                        'ra'       => $obsRa,
+                        'dec'      => $obsDec,
                         'mag'      => $obs['mag'] !== null ? (float) $obs['mag'] : null,
                         'flux'     => $obs['flux'] !== null ? (float) $obs['flux'] : null,
                         'frame_id' => $obs['frame_id'],
                         'obs_time' => gmdate('Y-m-d\TH:i:s\Z', strtotime($obs['obs_time'])),
                         'filter'   => $obs['filter'],
-                    ];
+                    ], $jsonFlags);
+
+                    $matchJson[$k] .= ($matchJson[$k] === '' ? '' : ',') . $entry;
                 }
             }
-
-            $results[(string) $i] = $posResults;
-            $totalMatches += count($posResults);
+        } finally {
+            // An unbuffered result must be released before the connection
+            // runs anything else (ApiKeyFilter::after() writes the heartbeat).
+            $query->freeResult();
         }
 
-        // PHP re-canonicalizes numeric-string keys like "0", "1", ... back to
-        // int, so $results ends up with plain sequential int keys despite the
-        // (string) cast above — json_encode() then serializes it as a JSON
-        // array ([...]), not the {"0": ..., "1": ...} object documented in
-        // API.md and expected by the pipeline's api_client/client.py. Casting
-        // to object forces the intended object encoding regardless of key type.
-        return $this->respondOk(['results' => (object) $results]);
+        // ----------------------------------------------------------------
+        // Assemble {"results": {"0": [...], "1": [...]}} in request order
+        // from the per-position JSON fragments, freeing each one as it is
+        // appended. The keys are written as JSON strings, so `results` is
+        // always an object — the same contract the (object) cast keeps on
+        // the other batch endpoints (PHP turns "0", "1", ... back into int
+        // keys, and json_encode() would emit an array).
+        // ----------------------------------------------------------------
+        $byKey = [];
+        foreach ($sweep as $k => $pos) {
+            $byKey[$pos['key']] = $k;
+        }
+        unset($sweep);
+
+        $body = '{"results":{';
+        $sep  = '';
+        foreach ($positions as $i => $_) {
+            $k     = $byKey[$i];
+            $body .= $sep . json_encode((string) $i) . ':[' . $matchJson[$k] . ']';
+            $sep   = ',';
+            $matchJson[$k] = '';
+        }
+        $body .= '}}';
+
+        return $this->response->setStatusCode(200)->setJSON($body);
     }
 
     /**
