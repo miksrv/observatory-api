@@ -4,11 +4,12 @@
 
 ### Patch Changes
 
-- Sources: `POST /sources/near/batch` streams the matching observations instead of loading the whole search box into memory, so heavily observed fields (M51, ~300 frames) no longer exhaust PHP's 256 MB `memory_limit`; the response is unchanged
-- Sources: a retried `POST /frames/{id}/sources` running alongside the first call for the same frame (observatory-pipeline before 1.4.1 retried after a 30 s timeout) no longer fails with 500 "Duplicate entry … uk_srcobs_frame_source / uk_frame_source": calls for one frame are serialized, the observation and link writes are atomic upserts and `observation_count` is still bumped once; sources are written in transactions of 50 instead of one autocommit per statement
+- Sources: `POST /sources/near/batch` streams the matching observations instead of loading the whole search box into memory, so heavily observed fields (M51, ~300 frames) no longer exhaust PHP's 256 MB `memory_limit`; the response is unchanged (a read that fails midway is a 500, never a truncated 200)
+- Sources: a retried `POST /frames/{id}/sources` running alongside the first call for the same frame (observatory-pipeline before 1.4.1 retried after a 30 s timeout) no longer fails with 500 "Duplicate entry … uk_srcobs_frame_source / uk_frame_source": calls for one frame are serialized, the observation and link writes are atomic upserts and `observation_count` is still bumped once; sources are written in transactions of 50 instead of one autocommit per statement, retried on a deadlock / lock wait timeout with another pipeline
 - Settings: `STAR_FWHM_MIN_ARCSEC` becomes `STAR_FWHM_MIN_PX` (1.2 px) and `NARROWBAND_FILTERS` gains the multi-band OSC filters (`LeNhance,LeXtreme,LuLtimate,NBZ,QuadBand,TriBand,DuoBand`), matching observatory-pipeline; an operator-edited filter list or an existing `STAR_FWHM_MIN_PX` row is left alone — run `php spark migrate` on the hosting by hand after deploying
 - Web UI: the frames list filters by QC — «OK», «Не OK» or one flag
 - Web UI: with a whole page of frames checked, the selection bar offers «Выбрать все N кадров по фильтру» — the task then covers every frame matching the filter across pages (at most 5000), still split per owning pipeline; the delete confirmation states N
+- Tasks: a task and its items are created in one transaction, so a worker can never claim a task whose items are still being inserted
 
 ## 1.3.0
 

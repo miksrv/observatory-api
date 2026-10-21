@@ -243,4 +243,71 @@ final class SaveSourcesRaceTest extends DatabaseTestCase
             $this->assertSame(1, (int) $row['observation_count'], "new source at index {$k}");
         }
     }
+
+    /**
+     * A chunk that keeps losing a lock conflict (here: another connection holds the source's
+     * row for the whole call, so every attempt hits a lock wait timeout) is retried, then fails
+     * cleanly with a 500 — nothing of that chunk is left half-saved, and the connection is
+     * usable afterwards.
+     */
+    public function testAChunkThatKeepsLosingALockConflictFailsCleanly(): void
+    {
+        $frameId  = $this->createFrame();
+        $sourceId = $this->createSource('Gaia DR3 locked');
+        $db       = $this->db();
+        $other    = \Config\Database::connect(null, false);
+
+        $db->query('SET SESSION innodb_lock_wait_timeout = 1');
+        $other->transBegin();
+        $other->query('SELECT id FROM sources WHERE id = ? FOR UPDATE', [$sourceId]);
+
+        try {
+            $started = microtime(true);
+            $result  = $this->withHeaders(['X-API-Key' => self::API_KEY])->withBodyFormat('json')
+                ->post("/api/v1/frames/{$frameId}/sources", ['filename' => 'race.fits', 'sources' => [
+                    ['ra' => 202.461, 'dec' => 47.182, 'mag' => 14.0, 'catalog_name' => 'Gaia DR3', 'catalog_id' => 'Gaia DR3 locked'],
+                ]]);
+            $elapsed = microtime(true) - $started;
+        } finally {
+            $other->transRollback();
+            $other->close();
+            $db->query('SET SESSION innodb_lock_wait_timeout = DEFAULT');
+        }
+
+        $result->assertStatus(500);
+        $this->assertGreaterThanOrEqual(3.0, $elapsed, 'Three attempts, one lock wait timeout each.');
+        $this->assertSame(0, $db->table('source_observations')->where('frame_id', $frameId)->countAllResults());
+        $this->assertSame(1, (int) $db->table('sources')->where('id', $sourceId)->get()->getRowArray()['observation_count']);
+
+        // With the lock gone the same call goes through.
+        $this->withHeaders(['X-API-Key' => self::API_KEY])->withBodyFormat('json')
+            ->post("/api/v1/frames/{$frameId}/sources", ['filename' => 'race.fits', 'sources' => [
+                ['ra' => 202.461, 'dec' => 47.182, 'mag' => 14.0, 'catalog_name' => 'Gaia DR3', 'catalog_id' => 'Gaia DR3 locked'],
+            ]])->assertStatus(201);
+        $this->assertSame(2, (int) $db->table('sources')->where('id', $sourceId)->get()->getRowArray()['observation_count']);
+    }
+
+    /**
+     * A task and its items are one transaction: a worker must never see a PENDING task with only
+     * part of its items. An item that fails to insert (here: a frame_id with no frame, FK) leaves
+     * no task behind.
+     */
+    public function testATaskIsNeverLeftWithoutItsItems(): void
+    {
+        $this->db()->query('DELETE FROM task_items');
+        $this->db()->query('DELETE FROM tasks');
+        $frameId = $this->createFrame();
+        $model   = new \App\Models\TaskModel();
+
+        $items   = array_fill(0, 150, ['frame_id' => $frameId]);
+        $items[] = ['frame_id' => 'no_such_frame_000000001'];
+
+        $this->assertFalse($model->createWithItems('DETECT_ANOMALIES', $items));
+        $this->assertSame(0, $this->db()->table('tasks')->countAllResults());
+        $this->assertSame(0, $this->db()->table('task_items')->countAllResults());
+
+        $taskId = $model->createWithItems('DETECT_ANOMALIES', array_slice($items, 0, 150));
+        $this->assertIsString($taskId);
+        $this->assertSame(150, $this->db()->table('task_items')->where('task_id', $taskId)->countAllResults());
+    }
 }

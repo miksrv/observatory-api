@@ -116,7 +116,7 @@ class TasksController extends BaseApiController
 
         $taskModel = new TaskModel();
 
-        $taskId = $taskModel->insert([
+        $taskId = $taskModel->insertWithItems([
             'type'            => $type,
             'status'          => 'PENDING',
             'pipeline_id'     => $pipelineId,
@@ -125,16 +125,12 @@ class TasksController extends BaseApiController
             'scope_date_to'   => $scopeDateTo,
             'total_items'     => count($items),
             'parent_task_id'  => $parentTaskId,
-        ], true);
+        ], $items);
 
         if ($taskId === false) {
             log_message('error', 'TasksController::create — insert failed: ' . implode(', ', $taskModel->errors()));
 
             return $this->respondError(500, 'Failed to create task');
-        }
-
-        if (! empty($items)) {
-            (new TaskItemModel())->insertForTask($taskId, $items);
         }
 
         return $this->respondCreated([

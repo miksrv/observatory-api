@@ -98,4 +98,14 @@ final class SettingsMigrationTest extends DatabaseTestCase
 
         $this->assertSame('1.2', $this->settings()['STAR_FWHM_MIN_PX']['value']);
     }
+
+    public function testDownKeepsAnOperatorTunedPixelFloor(): void
+    {
+        $this->seed('STAR_FWHM_MIN_PX', '1.5');
+        $before = $this->settings();
+
+        $this->migration()->down();
+
+        $this->assertSame($before, $this->settings());
+    }
 }

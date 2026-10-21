@@ -461,6 +461,17 @@ class SourcesController extends BaseApiController
                     $matchJson[$k] .= ($matchJson[$k] === '' ? '' : ',') . $entry;
                 }
             }
+
+            // An unbuffered read that fails midway can end the loop like the last row did. A
+            // truncated history must not go out as a 200: the pipeline would read the missing
+            // observations as "never seen here" and raise false alerts. A 500 makes it treat the
+            // history as unavailable instead.
+            $error = $db->error();
+            if ((int) ($error['code'] ?? 0) !== 0) {
+                log_message('error', 'SourcesController::nearBatch — reading candidates failed: ' . ($error['message'] ?? ''));
+
+                return $this->respondError(500, 'Failed to read historical observations');
+            }
         } finally {
             // An unbuffered result must be released before the connection
             // runs anything else (ApiKeyFilter::after() writes the heartbeat).

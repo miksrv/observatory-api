@@ -62,19 +62,58 @@ class TaskModel extends BaseModel
      */
     public function createWithItems(string $type, array $items, ?string $pipelineId = null, ?string $scopeObject = null)
     {
-        $taskId = $this->insert([
+        return $this->insertWithItems([
             'type'         => $type,
             'status'       => 'PENDING',
             'pipeline_id'  => $pipelineId,
             'scope_object' => $scopeObject,
             'total_items'  => count($items),
-        ], true);
+        ], $items);
+    }
 
-        if ($taskId !== false && $items !== []) {
-            (new TaskItemModel())->insertForTask($taskId, $items);
+    /**
+     * Insert a task row and its items in ONE transaction. The task is PENDING from its first
+     * row, so without it a worker could claim a large task (thousands of items, inserted in
+     * batches) while only part of its items existed yet. Any failure rolls everything back.
+     *
+     * @param array<string, mixed> $task  The `tasks` row
+     * @param list<array>          $items See TaskItemModel::insertForTask()
+     *
+     * @return string|false The new task id, or false if anything failed.
+     */
+    public function insertWithItems(array $task, array $items)
+    {
+        $db = $this->db;
+        $db->transException(true)->resetTransStatus();
+
+        try {
+            $db->transStart();
+
+            $taskId = $this->insert($task, true);
+
+            if ($taskId === false) {
+                $db->transRollback();
+
+                return false;
+            }
+
+            if ($items !== []) {
+                (new TaskItemModel())->insertForTask((string) $taskId, $items);
+            }
+
+            if (! $db->transComplete()) {
+                return false;
+            }
+
+            return (string) $taskId;
+        } catch (\CodeIgniter\Database\Exceptions\DatabaseException $e) {
+            // The failing query already rolled the transaction back.
+            log_message('error', 'TaskModel::insertWithItems — ' . $e->getMessage());
+
+            return false;
+        } finally {
+            $db->transException(false);
         }
-
-        return $taskId;
     }
 
     /**

@@ -47,7 +47,8 @@ class UpdateFwhmFloorAndNarrowbandSettings extends Migration
 
     public function down(): void
     {
-        $this->renameSetting(self::FWHM_NEW, self::FWHM_OLD, insertIfMissing: false);
+        // Only while it still holds the value up() gave it: an operator-tuned pixel floor stays.
+        $this->renameSetting(self::FWHM_NEW, self::FWHM_OLD, insertIfMissing: false, onlyIfValue: self::FWHM_NEW['value']);
 
         $this->db->query(
             "UPDATE `settings` SET `value` = ? WHERE `param` = 'NARROWBAND_FILTERS' AND `value` = ?",
@@ -57,12 +58,13 @@ class UpdateFwhmFloorAndNarrowbandSettings extends Migration
 
     /**
      * Turn the `$from` row into `$to` (name, value, description) unless a `$to` row already
-     * exists. With no `$from` row either, `$to` is inserted when `$insertIfMissing`.
+     * exists, and — with `$onlyIfValue` — only while `$from` still holds that value. With no
+     * `$from` row either, `$to` is inserted when `$insertIfMissing`.
      *
      * @param array{param: string, value: string, description: string} $from
      * @param array{param: string, value: string, description: string} $to
      */
-    private function renameSetting(array $from, array $to, bool $insertIfMissing): void
+    private function renameSetting(array $from, array $to, bool $insertIfMissing, ?string $onlyIfValue = null): void
     {
         if ($this->settingExists($to['param'])) {
             return;
@@ -70,8 +72,9 @@ class UpdateFwhmFloorAndNarrowbandSettings extends Migration
 
         if ($this->settingExists($from['param'])) {
             $this->db->query(
-                'UPDATE `settings` SET `param` = ?, `value` = ?, `description` = ? WHERE `param` = ?',
-                [$to['param'], $to['value'], $to['description'], $from['param']],
+                'UPDATE `settings` SET `param` = ?, `value` = ?, `description` = ? WHERE `param` = ?'
+                . ($onlyIfValue !== null ? ' AND `value` = ?' : ''),
+                array_merge([$to['param'], $to['value'], $to['description'], $from['param']], $onlyIfValue !== null ? [$onlyIfValue] : []),
             );
         } elseif ($insertIfMissing) {
             $this->db->query(
