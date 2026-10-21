@@ -47,12 +47,12 @@ class FramesController extends BaseWebController
         'DELETE_FRAME'          => ['item_key' => 'frame_id', 'frame_column' => 'id'],
     ];
 
+    /** `qc` filter value selecting every frame whose quality_flag is set and isn't OK. */
+    private const QC_NOT_OK = 'not_ok';
+
     public function index(): ResponseInterface
     {
-        $object   = trim((string) ($this->request->getGet('object') ?? ''));
-        $dateFrom = trim((string) ($this->request->getGet('date_from') ?? ''));
-        $dateTo   = trim((string) ($this->request->getGet('date_to') ?? ''));
-        $pipeline = trim((string) ($this->request->getGet('pipeline') ?? ''));
+        $filters = $this->readFilters(fn (string $name): mixed => $this->request->getGet($name));
 
         $list = new UiListQuery(
             [
@@ -73,34 +73,8 @@ class FramesController extends BaseWebController
             ['obs_time', 'exptime', 'stars', 'snr'],
         );
 
-        $model = new FrameModel();
-
-        if ($object !== '') {
-            $model = $model->where('object', $object);
-        }
-
-        // `pipeline` is a pipeline NAME (readable, linkable from the dashboard).
         $pipelineNames = (new PipelineModel())->getAllNames();
-
-        if ($pipeline === self::PIPELINE_NONE) {
-            $model = $model->where('pipeline_id', null);
-        } elseif ($pipeline !== '') {
-            $model = $model->where('pipeline_id', array_search($pipeline, $pipelineNames, true) ?: '');
-        }
-
-        if ($dateFrom !== '') {
-            $timestamp = strtotime($dateFrom);
-            if ($timestamp !== false) {
-                $model = $model->where('obs_time >=', date('Y-m-d H:i:s', $timestamp));
-            }
-        }
-
-        if ($dateTo !== '') {
-            $timestamp = strtotime($dateTo);
-            if ($timestamp !== false) {
-                $model = $model->where('obs_time <', date('Y-m-d H:i:s', $timestamp));
-            }
-        }
+        $model         = $this->applyFilters(new FrameModel(), $filters, $pipelineNames);
 
         $list->paginate($model->countAllResults(false));
         $frames = $model->orderBy($list->orderBy(), '', false)->findAll($list->perPage, $list->offset());
@@ -123,15 +97,26 @@ class FramesController extends BaseWebController
             ->orderBy('object', 'ASC')
             ->findAll();
 
+        $qcFlags = (new FrameModel())
+            ->distinct()
+            ->select('quality_flag')
+            ->where('quality_flag IS NOT NULL')
+            ->where('quality_flag <>', 'OK')
+            ->orderBy('quality_flag', 'ASC')
+            ->findAll();
+
         return $this->response->setBody(view('web/frames_index', [
             'frames'         => $frames,
             'objects'        => array_column($objects, 'object'),
             'pipelines'      => $pipelineNames,
             'pipelineNone'   => self::PIPELINE_NONE,
-            'filterPipeline' => $pipeline,
-            'filterObject'   => $object,
-            'filterDateFrom' => $dateFrom,
-            'filterDateTo'   => $dateTo,
+            'qcFlags'        => array_column($qcFlags, 'quality_flag'),
+            'qcNotOk'        => self::QC_NOT_OK,
+            'filterPipeline' => $filters['pipeline'],
+            'filterObject'   => $filters['object'],
+            'filterDateFrom' => $filters['date_from'],
+            'filterDateTo'   => $filters['date_to'],
+            'filterQc'       => $filters['qc'],
             'list'           => $list,
             'taskTypes'      => array_keys(self::CREATABLE_TYPES),
         ]));
@@ -181,5 +166,62 @@ class FramesController extends BaseWebController
         }
 
         return $this->redirectToCreatedTasks($created, $type);
+    }
+
+    /**
+     * The list filter (object, pipeline, date_from, date_to, qc) as trimmed strings, read through
+     * `$get` (the request's query string or POST body).
+     *
+     * @param callable(string): mixed $get
+     *
+     * @return array{object: string, pipeline: string, date_from: string, date_to: string, qc: string}
+     */
+    private function readFilters(callable $get): array
+    {
+        $filters = [];
+        foreach (['object', 'pipeline', 'date_from', 'date_to', 'qc'] as $name) {
+            $value          = $get($name);
+            $filters[$name] = is_string($value) ? trim($value) : '';
+        }
+
+        return $filters;
+    }
+
+    /**
+     * Narrow `$model` to the frames matching `$filters` — the one place the frames filter becomes
+     * a query, so the list and "select every frame matching the filter" can never disagree.
+     *
+     * @param array{object: string, pipeline: string, date_from: string, date_to: string, qc: string} $filters
+     * @param array<string, string> $pipelineNames id => name; `pipeline` is a pipeline NAME
+     *                                             (readable, linkable from the dashboard)
+     */
+    private function applyFilters(FrameModel $model, array $filters, array $pipelineNames): FrameModel
+    {
+        if ($filters['object'] !== '') {
+            $model->where('object', $filters['object']);
+        }
+
+        if ($filters['pipeline'] === self::PIPELINE_NONE) {
+            $model->where('pipeline_id', null);
+        } elseif ($filters['pipeline'] !== '') {
+            $model->where('pipeline_id', array_search($filters['pipeline'], $pipelineNames, true) ?: '');
+        }
+
+        foreach (['date_from' => 'obs_time >=', 'date_to' => 'obs_time <'] as $name => $condition) {
+            $timestamp = $filters[$name] !== '' ? strtotime($filters[$name]) : false;
+            if ($timestamp !== false) {
+                $model->where($condition, date('Y-m-d H:i:s', $timestamp));
+            }
+        }
+
+        // «Не OK» is every flag but OK. frames.quality_flag is NOT NULL (POST /frames requires it),
+        // so there is no "not assessed" state to place.
+        if ($filters['qc'] === self::QC_NOT_OK) {
+            $model->where('quality_flag <>', 'OK');
+        } elseif ($filters['qc'] !== '') {
+            $model->where('quality_flag', $filters['qc']);
+        }
+
+        return $model;
     }
 }
