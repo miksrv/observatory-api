@@ -52,7 +52,8 @@ class AnomalyReviewModel extends BaseModel
     }
 
     /**
-     * Mark these anomalies reviewed with `note`, replacing the note of any already marked.
+     * Mark these anomalies reviewed with `note`. An anomaly already marked takes the new note,
+     * or keeps its own when none is given.
      * Anomalies without a source are skipped — there is nothing stable to key their review on.
      *
      * @param list<array{frame_id: string, source_id: ?string, anomaly_type: string}> $anomalies
@@ -82,7 +83,7 @@ class AnomalyReviewModel extends BaseModel
             $this->db->query(
                 'INSERT INTO anomaly_reviews (id, frame_id, source_id, anomaly_type, note, created_at) VALUES '
                 . $placeholders
-                . ' ON DUPLICATE KEY UPDATE note = VALUES(note), created_at = VALUES(created_at)',
+                . ' ON DUPLICATE KEY UPDATE note = COALESCE(VALUES(note), note), created_at = VALUES(created_at)',
                 array_merge(...$chunk)
             );
         }

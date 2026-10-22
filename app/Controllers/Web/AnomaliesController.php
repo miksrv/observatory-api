@@ -80,8 +80,11 @@ class AnomaliesController extends BaseWebController
 
         $keys = array_column($page, 'group_key');
 
-        // The page's anomalies themselves, newest first, under the same filter.
-        $anomalies = $keys === [] ? [] : $this->filtered((new AnomalyModel())->builder(), $filters)
+        // The page's anomalies themselves, newest first, under the same filter — but whatever
+        // their review state: the review tab picks which groups show, while a group's actions
+        // (charts, delete, review) act on all of its anomalies. Each row says whether it is the
+        // tab's own (`shown` below), which is what the group's count reports.
+        $anomalies = $keys === [] ? [] : $this->filtered((new AnomalyModel())->builder(), ['review' => 'all'] + $filters)
             ->select(
                 'anomalies.*, frames.object AS object, frames.filename AS filename, '
                 . 'frames.obs_time AS obs_time, sources.catalog_name AS catalog_name, '
@@ -118,6 +121,7 @@ class AnomaliesController extends BaseWebController
                     'last_obs'     => $a['obs_time'],
                     'mpc_designation' => null,
                     'reviewed'     => 0,
+                    'shown'        => 0,
                     'review_notes' => [],
                     // The newest anomaly's position (rows come newest first).
                     'ra'           => $a['ra'],
@@ -130,7 +134,11 @@ class AnomaliesController extends BaseWebController
             $g['types'][]       = $a['anomaly_type'];
             $g['ids_by_type'][$a['anomaly_type']][] = $a['id'];
             $g['has_alert']     = $g['has_alert'] || (bool) $a['is_alert'];
-            if ($a['review_id'] !== null) {
+            $isReviewed = $a['review_id'] !== null;
+            if ($filters['review'] === 'all' || ($filters['review'] === 'done') === $isReviewed) {
+                $g['shown']++;
+            }
+            if ($isReviewed) {
                 $g['reviewed']++;
                 if ($a['review_note'] !== null && $a['review_note'] !== '') {
                     $g['review_notes'][] = $a['review_note'];

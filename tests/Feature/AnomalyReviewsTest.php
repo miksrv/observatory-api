@@ -164,6 +164,43 @@ final class AnomalyReviewsTest extends DatabaseTestCase
         $this->assertSame(0, $this->reviewCount());
     }
 
+    public function testGroupActionsOnTheDefaultTabCoverTheReviewedAnomaliesToo(): void
+    {
+        $source   = $this->createSource();
+        $reviewed = $this->createAnomaly($this->createFrame('2025-04-16 20:00:00'), $source);
+        $open     = $this->createAnomaly($this->createFrame('2025-04-16 20:05:00'), $source, 'MOVING_UNKNOWN');
+        $this->post('/ui/anomalies/review', $this->uiForm([
+            'group_data' => [$this->groupData($source, ['UNKNOWN' => [$reviewed]])],
+            'note'       => 'first look',
+        ]));
+
+        // The default tab lists the group with its one open anomaly, but the group's checkbox
+        // carries both, so charts are built for both types and «Удалить» removes both.
+        $body = html_entity_decode($this->get('/ui/anomalies')->getBody(), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $this->assertMatchesRegularExpression('/<td class="num">1<\/td>/', $body);
+        $this->assertStringContainsString($reviewed, $body);
+        $this->assertStringContainsString($open, $body);
+
+        // Marking again with no note keeps the earlier one.
+        $this->post('/ui/anomalies/review', $this->uiForm([
+            'group_data' => [$this->groupData($source, ['UNKNOWN' => [$reviewed], 'MOVING_UNKNOWN' => [$open]])],
+        ]));
+        $notes = array_column(\Config\Database::connect()->table('anomaly_reviews')->orderBy('anomaly_type')->get()->getResultArray(), 'note', 'anomaly_type');
+        $this->assertSame(['MOVING_UNKNOWN' => null, 'UNKNOWN' => 'first look'], $notes);
+    }
+
+    public function testTheEmptyDefaultTabSaysEverythingIsReviewed(): void
+    {
+        $source = $this->createSource();
+        $id     = $this->createAnomaly($this->createFrame(), $source);
+        $this->post('/ui/anomalies/review', $this->uiForm([
+            'group_data' => [$this->groupData($source, ['UNKNOWN' => [$id]])],
+        ]));
+
+        $body = html_entity_decode($this->get('/ui/anomalies')->getBody(), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $this->assertStringContainsString('Всё просмотрено', $body);
+    }
+
     // -------------------------------------------------------------------------
     // Surviving DETECT_ANOMALIES re-runs
     // -------------------------------------------------------------------------

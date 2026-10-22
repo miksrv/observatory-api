@@ -5,6 +5,7 @@
 ### Minor Changes
 
 - Web UI: anomalies can be marked «Проверено» with a note — from the charts gallery (checked charts: every current anomaly of those sources) or the anomalies list. A reviewed anomaly leaves the default anomalies list («Не проверенные»; «Проверенные» and «Все» tabs show the rest, «Снять отметку» undoes it) and the dashboard's anomaly and alert counts. The mark is kept in a new `anomaly_reviews` table keyed by frame, source and anomaly type, so it survives `DETECT_ANOMALIES` and `ANALYZE` re-runs; a later anomaly of the same source (another frame or type) comes in unreviewed — run `php spark migrate` on the hosting by hand after deploying
+- Web UI: on the anomalies list a group's count is the selected tab's, while its actions (charts, delete, review) cover all of its anomalies; Enter in the review note presses «Проверено»; a page restored with the back button no longer sends the next action to the previous button's address
 - Web UI: the charts gallery deletes the checked sources' charts in one go («Удалить графики»; their anomalies and review marks stay), shows on each source chart whether its anomalies are reviewed, and filters by that
 
 ## 1.3.1

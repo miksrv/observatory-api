@@ -153,8 +153,8 @@ $styleTone = static fn (string $style): string => match ($style) {
             <span class="count"><b data-sel-count>0</b>выбрано</span>
             <button class="btn" type="button" data-pick-every>Выбрать все</button>
             <span class="sep"></span>
-            <input class="input" type="text" name="note" form="merge-form" maxlength="1000" placeholder="Заметка: что это на кадре" aria-label="Заметка к проверке">
-            <button class="btn primary" type="submit" form="merge-form" formaction="/ui/charts/review" data-min-select="1"
+            <input class="input" type="text" name="note" form="merge-form" maxlength="1000" placeholder="Заметка: что это на кадре" aria-label="Заметка к проверке" data-enter="review">
+            <button class="btn primary" type="submit" form="merge-form" formaction="/ui/charts/review" data-min-select="1" data-enter-target="review"
                     title="Посмотрел, ничего интересного: все текущие аномалии источников уйдут из непроверенных и из счётчиков">
                 <?= ui_icon('check', 14) ?>Проверено
             </button>
