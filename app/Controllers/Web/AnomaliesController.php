@@ -4,6 +4,7 @@ namespace App\Controllers\Web;
 
 use App\Libraries\UiListQuery;
 use App\Models\AnomalyModel;
+use App\Models\AnomalyReviewModel;
 use App\Models\SourceChartModel;
 use App\Models\SourceObservationModel;
 use App\Models\TaskModel;
@@ -15,6 +16,10 @@ use CodeIgniter\HTTP\ResponseInterface;
  * (object/filename/obs_time) and source (catalog identity) for context. Each row in the list
  * represents one source with all its anomalies aggregated together; the groups are counted,
  * sorted and paged in SQL.
+ *
+ * The list shows unreviewed anomalies by default (`review=new`): once the operator has looked at
+ * one and marked it "nothing interesting" (review(), AnomalyReviewModel) it moves to the
+ * `review=done` tab, with the note.
  */
 class AnomaliesController extends BaseWebController
 {
@@ -28,7 +33,11 @@ class AnomaliesController extends BaseWebController
             'object'       => trim((string) ($this->request->getGet('object') ?? '')),
             'frame_id'     => trim((string) ($this->request->getGet('frame_id') ?? '')),
             'source_id'    => trim((string) ($this->request->getGet('source_id') ?? '')),
+            'review'       => trim((string) ($this->request->getGet('review') ?? '')),
         ];
+        if (! in_array($filters['review'], ['new', 'done', 'all'], true)) {
+            $filters['review'] = 'new';
+        }
 
         // One row per source; an anomaly without a source is a group of its own (keyed by its id).
         // Grouping, counting and sorting happen in SQL so the pages cover every anomaly.
@@ -76,7 +85,8 @@ class AnomaliesController extends BaseWebController
             ->select(
                 'anomalies.*, frames.object AS object, frames.filename AS filename, '
                 . 'frames.obs_time AS obs_time, sources.catalog_name AS catalog_name, '
-                . 'sources.catalog_id AS catalog_id, ' . $groupKey . ' AS group_key',
+                . 'sources.catalog_id AS catalog_id, anomaly_reviews.id AS review_id, '
+                . 'anomaly_reviews.note AS review_note, ' . $groupKey . ' AS group_key',
                 false
             )
             // The key is an expression, which whereIn() can't quote as a column; the values are
@@ -107,6 +117,8 @@ class AnomaliesController extends BaseWebController
                     'first_obs'    => $a['obs_time'],
                     'last_obs'     => $a['obs_time'],
                     'mpc_designation' => null,
+                    'reviewed'     => 0,
+                    'review_notes' => [],
                     // The newest anomaly's position (rows come newest first).
                     'ra'           => $a['ra'],
                     'dec'          => $a['dec'],
@@ -118,6 +130,12 @@ class AnomaliesController extends BaseWebController
             $g['types'][]       = $a['anomaly_type'];
             $g['ids_by_type'][$a['anomaly_type']][] = $a['id'];
             $g['has_alert']     = $g['has_alert'] || (bool) $a['is_alert'];
+            if ($a['review_id'] !== null) {
+                $g['reviewed']++;
+                if ($a['review_note'] !== null && $a['review_note'] !== '') {
+                    $g['review_notes'][] = $a['review_note'];
+                }
+            }
 
             if ($a['obs_time'] && ($g['first_obs'] === null || $a['obs_time'] < $g['first_obs'])) {
                 $g['first_obs'] = $a['obs_time'];
@@ -144,7 +162,8 @@ class AnomaliesController extends BaseWebController
         // already visible right here via the sources join.
         $groups = array_values(array_filter($groups));
         foreach ($groups as &$g) {
-            $g['types']       = array_values(array_unique($g['types']));
+            $g['types']        = array_values(array_unique($g['types']));
+            $g['review_notes'] = array_values(array_unique($g['review_notes']));
             $g['designation'] = $g['mpc_designation'] ?: $g['catalog_id'];
         }
         unset($g);
@@ -167,6 +186,14 @@ class AnomaliesController extends BaseWebController
     {
         $builder->join('frames', 'frames.id = anomalies.frame_id', 'left')
             ->join('sources', 'sources.id = anomalies.source_id', 'left');
+        AnomalyReviewModel::joinReviews(
+            $builder,
+            match ($filters['review'] ?? 'all') {
+                'new'   => false,
+                'done'  => true,
+                default => null,
+            }
+        );
 
         if ($filters['anomaly_type'] !== '') {
             $builder->where('anomalies.anomaly_type', $filters['anomaly_type']);
@@ -331,6 +358,60 @@ class AnomaliesController extends BaseWebController
         }
 
         return redirect()->back()->with('success', $msg . '.');
+    }
+
+    /**
+     * POST /ui/anomalies/review — mark the selected groups' anomalies "looked at, nothing
+     * interesting", with an optional note. They leave the default (unreviewed) list and the
+     * dashboard's counts, and the mark survives DETECT_ANOMALIES re-runs (AnomalyReviewModel).
+     */
+    public function review(): ResponseInterface
+    {
+        $anomalies = $this->selectedAnomalies();
+        if ($anomalies === []) {
+            return redirect()->back()->with('error', 'Выберите хотя бы одну группу аномалий.');
+        }
+
+        $note   = (string) ($this->request->getPost('note') ?? '');
+        $marked = (new AnomalyReviewModel())->markReviewed($anomalies, $note);
+        $msg    = 'Отмечено проверенными: ' . $marked;
+        $skipped = count($anomalies) - $marked;
+        if ($skipped > 0) {
+            $msg .= ' (без источника отметить нельзя: ' . $skipped . ')';
+        }
+
+        return redirect()->back()->with('success', $msg . '.');
+    }
+
+    /**
+     * POST /ui/anomalies/unreview — take the review mark off the selected groups' anomalies.
+     */
+    public function unreview(): ResponseInterface
+    {
+        $anomalies = $this->selectedAnomalies();
+        if ($anomalies === []) {
+            return redirect()->back()->with('error', 'Выберите хотя бы одну группу аномалий.');
+        }
+
+        $removed = (new AnomalyReviewModel())->unmarkReviewed($anomalies);
+
+        return redirect()->back()->with('success', 'Снята отметка «проверено»: ' . $removed . '.');
+    }
+
+    /**
+     * The `anomalies` rows behind the selected groups.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function selectedAnomalies(): array
+    {
+        $ids = [];
+        foreach ($this->collectSelectedGroups() as $g) {
+            $ids = array_merge($ids, $g['anomaly_ids']);
+        }
+        $ids = array_values(array_unique(array_filter($ids, 'is_string')));
+
+        return $ids === [] ? [] : (new AnomalyModel())->whereIn('id', $ids)->findAll();
     }
 
     /**
