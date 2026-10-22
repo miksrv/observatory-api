@@ -3,6 +3,8 @@
 namespace App\Controllers\Web;
 
 use App\Libraries\UiListQuery;
+use App\Models\AnomalyModel;
+use App\Models\AnomalyReviewModel;
 use App\Models\SourceChartModel;
 use CodeIgniter\HTTP\ResponseInterface;
 
@@ -18,6 +20,11 @@ use CodeIgniter\HTTP\ResponseInterface;
  * serves both kinds of chart. No X-API-Key here since this route lives outside the `api/v1` group
  * entirely, behind the UI's own sign-in (see Config/Routes.php), so it's fine for it to duplicate
  * that one file-read instead of calling into the API controllers.
+ *
+ * Reviewing: the operator looks through the charts, checks the uninteresting ones and marks them
+ * reviewed with a note (review() — every current anomaly of those sources), then deletes the
+ * charts (deleteSelected()). A source chart shows how many of its source's anomalies are still
+ * unreviewed; `review=new|done` filters by that.
  */
 class ChartsController extends BaseWebController
 {
@@ -25,6 +32,16 @@ class ChartsController extends BaseWebController
     {
         $sourceId = trim((string) ($this->request->getGet('source_id') ?? ''));
         $style    = trim((string) ($this->request->getGet('style') ?? ''));
+        $review   = trim((string) ($this->request->getGet('review') ?? ''));
+        if (! in_array($review, ['new', 'done'], true)) {
+            $review = '';
+        }
+
+        // Per source: its anomalies, and how many of them carry no review yet.
+        $anomalyCount = '(SELECT COUNT(*) FROM anomalies a WHERE a.source_id = source_charts.source_id)';
+        $openCount    = '(SELECT COUNT(*) FROM anomalies a LEFT JOIN anomaly_reviews r'
+            . ' ON r.frame_id = a.frame_id AND r.source_id = a.source_id AND r.anomaly_type = a.anomaly_type'
+            . ' WHERE a.source_id = source_charts.source_id AND r.id IS NULL)';
 
         $list = new UiListQuery(
             [
@@ -45,7 +62,9 @@ class ChartsController extends BaseWebController
             ->select(
                 'source_charts.*, sources.catalog_name, sources.catalog_id, sources.object_type, '
                 . 'task_items.task_id AS task_id, task_items.filename AS item_filename, '
-                . 'latest_obs.ra AS src_ra, latest_obs.dec AS src_dec'
+                . 'latest_obs.ra AS src_ra, latest_obs.dec AS src_dec, '
+                . $anomalyCount . ' AS anomaly_count, ' . $openCount . ' AS open_count',
+                false
             )
             ->join('sources', 'sources.id = source_charts.source_id', 'left')
             ->join('task_items', 'task_items.id = source_charts.task_item_id', 'left')
@@ -65,6 +84,14 @@ class ChartsController extends BaseWebController
             $model = $model->where('source_charts.style', $style);
         }
 
+        if ($review === 'new') {
+            $model = $model->where($openCount . ' > 0', null, false);
+        } elseif ($review === 'done') {
+            $model = $model->where('source_charts.source_id IS NOT NULL', null, false)
+                ->where($anomalyCount . ' > 0', null, false)
+                ->where($openCount . ' = 0', null, false);
+        }
+
         $list->paginate($model->countAllResults(false));
         $charts = $model->orderBy($list->orderBy(), '', false)->findAll($list->perPage, $list->offset());
 
@@ -73,6 +100,7 @@ class ChartsController extends BaseWebController
             'styles'         => SourceChartModel::ALLOWED_STYLES,
             'filterSourceId' => $sourceId,
             'filterStyle'    => $style,
+            'filterReview'   => $review,
             'list'           => $list,
         ]));
     }
@@ -162,6 +190,84 @@ class ChartsController extends BaseWebController
             return redirect()->to('/ui/charts')->with('error', 'График не найден.');
         }
 
+        $this->deleteChartFiles($chart);
+        $model->delete($id);
+
+        return redirect()->to('/ui/charts')->with('success', 'График удалён.');
+    }
+
+    /**
+     * POST /ui/charts/review — mark every current anomaly of the checked sources (source_ids[])
+     * reviewed, with the note. A later anomaly of the same source — a new frame, a new type —
+     * comes in unreviewed.
+     */
+    public function review(): ResponseInterface
+    {
+        $sourceIds = $this->selectedSourceIds();
+        if ($sourceIds === []) {
+            return redirect()->back()->with('error', 'Выберите хотя бы один график источника.');
+        }
+
+        $anomalies = (new AnomalyModel())->whereIn('source_id', $sourceIds)->findAll();
+        if ($anomalies === []) {
+            return redirect()->back()->with('error', 'У выбранных источников нет аномалий.');
+        }
+
+        $marked = (new AnomalyReviewModel())->markReviewed($anomalies, (string) ($this->request->getPost('note') ?? ''));
+
+        return redirect()->back()->with(
+            'success',
+            'Отмечено проверенными: ' . $marked . ' ' . ui_plural($marked, 'аномалия', 'аномалии', 'аномалий')
+            . ' у ' . count($sourceIds) . ' ' . ui_plural(count($sourceIds), 'источника', 'источников', 'источников') . '.'
+        );
+    }
+
+    /**
+     * POST /ui/charts/delete — delete every chart (all styles) of the checked sources
+     * (source_ids[]). Their anomalies and reviews stay.
+     */
+    public function deleteSelected(): ResponseInterface
+    {
+        $sourceIds = $this->selectedSourceIds();
+        if ($sourceIds === []) {
+            return redirect()->back()->with('error', 'Выберите хотя бы один график источника.');
+        }
+
+        $model  = new SourceChartModel();
+        $charts = $model->whereIn('source_id', $sourceIds)->findAll();
+        foreach ($charts as $chart) {
+            $this->deleteChartFiles($chart);
+        }
+        if ($charts !== []) {
+            $model->whereIn('id', array_column($charts, 'id'))->delete();
+        }
+
+        return redirect()->back()->with(
+            'success',
+            'Удалено графиков: ' . count($charts) . '.'
+        );
+    }
+
+    /**
+     * The checked source ids, as the gallery's checkboxes post them.
+     *
+     * @return list<string>
+     */
+    private function selectedSourceIds(): array
+    {
+        $ids = array_filter(
+            (array) ($this->request->getPost('source_ids') ?? []),
+            static fn ($id): bool => is_string($id) && preg_match('/^[a-zA-Z0-9.]{1,64}$/', $id) === 1
+        );
+
+        return array_values(array_unique($ids));
+    }
+
+    /**
+     * Remove a chart's image file(s) from disk.
+     */
+    private function deleteChartFiles(array $chart): void
+    {
         // Determine the filesystem key (source_id or task_item_id). A source-keyed chart's file
         // carries a style suffix (see SourceChartModel's class docblock); a task_item-keyed one
         // doesn't and never has.
@@ -186,10 +292,5 @@ class ChartsController extends BaseWebController
                 unlink($legacyPath);
             }
         }
-
-        // Delete the DB row
-        $model->delete($id);
-
-        return redirect()->to('/ui/charts')->with('success', 'График удалён.');
     }
 }

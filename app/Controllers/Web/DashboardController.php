@@ -3,6 +3,7 @@
 namespace App\Controllers\Web;
 
 use App\Models\AnomalyModel;
+use App\Models\AnomalyReviewModel;
 use App\Models\FrameModel;
 use App\Models\PipelineModel;
 use App\Models\SourceChartModel;
@@ -31,11 +32,17 @@ class DashboardController extends BaseWebController
             $tasksByStatus[$status] = $taskModel->where('status', $status)->countAllResults();
         }
 
+        // Anomalies and alerts count what is still to be looked at: a reviewed one (marked
+        // "nothing interesting" — AnomalyReviewModel) is counted apart.
+        $unreviewed = static fn (): \CodeIgniter\Database\BaseBuilder =>
+            AnomalyReviewModel::joinReviews((new AnomalyModel())->builder(), false);
+
         $stats = [
             'frames'    => (new FrameModel())->countAllResults(),
             'sources'   => (new SourceModel())->countAllResults(),
-            'anomalies' => (new AnomalyModel())->countAllResults(),
-            'alerts'    => (new AnomalyModel())->where('is_alert', 1)->countAllResults(),
+            'anomalies' => $unreviewed()->countAllResults(),
+            'alerts'    => $unreviewed()->where('anomalies.is_alert', 1)->countAllResults(),
+            'reviewed'  => AnomalyReviewModel::joinReviews((new AnomalyModel())->builder(), true)->countAllResults(),
             'charts'    => (new SourceChartModel())->countAllResults(),
         ];
 
@@ -44,7 +51,7 @@ class DashboardController extends BaseWebController
             ->orderBy('created_at', 'DESC')
             ->findAll(6);
 
-        $recentAlerts = (new AnomalyModel())
+        $recentAlerts = AnomalyReviewModel::joinReviews((new AnomalyModel())->builder(), false)
             ->select(
                 'anomalies.id, anomalies.anomaly_type, anomalies.source_id, anomalies.mpc_designation, '
                 . 'anomalies.ra, anomalies.dec, frames.object, frames.obs_time, sources.catalog_id'
@@ -53,7 +60,8 @@ class DashboardController extends BaseWebController
             ->join('sources', 'sources.id = anomalies.source_id', 'left')
             ->where('anomalies.is_alert', 1)
             ->orderBy('frames.obs_time', 'DESC')
-            ->findAll(6);
+            ->limit(6)
+            ->get()->getResultArray();
 
         return $this->response->setBody(view('web/dashboard', [
             'stats'         => $stats,

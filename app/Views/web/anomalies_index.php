@@ -24,11 +24,17 @@ $typeTone = static fn (string $type): string => match ($type) {
 <div class="page-head">
     <div>
         <h1>Аномалии</h1>
-        <p class="sub">Сгруппированы по источнику: одна строка — все аномалии объекта за время наблюдений. Красная метка слева — есть алерт.</p>
+        <p class="sub">Сгруппированы по источнику: одна строка — все аномалии объекта за время наблюдений (число — по выбранной вкладке; действия касаются всей группы). Красная метка слева — есть алерт.
+            Просмотренные и неинтересные отметьте «Проверено» — они уйдут из списка и счётчиков; отметка переживает повторный поиск аномалий.</p>
     </div>
 </div>
 
 <div class="panel" data-select-scope>
+    <nav class="tabs" aria-label="Проверка">
+        <a href="<?= esc(ui_query(['review' => null, 'page' => null]), 'attr') ?>" class="<?= $filters['review'] === 'new' ? 'active' : '' ?>">Не проверенные</a>
+        <a href="<?= esc(ui_query(['review' => 'done', 'page' => null]), 'attr') ?>" class="<?= $filters['review'] === 'done' ? 'active' : '' ?>">Проверенные</a>
+        <a href="<?= esc(ui_query(['review' => 'all', 'page' => null]), 'attr') ?>" class="<?= $filters['review'] === 'all' ? 'active' : '' ?>">Все</a>
+    </nav>
     <nav class="tabs" aria-label="Алерты">
         <a href="<?= esc(ui_query(['is_alert' => null, 'page' => null]), 'attr') ?>" class="<?= $filters['is_alert'] === '' ? 'active' : '' ?>">Все</a>
         <a href="<?= esc(ui_query(['is_alert' => '1', 'page' => null]), 'attr') ?>" class="<?= $filters['is_alert'] === '1' ? 'active' : '' ?>">Только алерты</a>
@@ -84,7 +90,11 @@ $typeTone = static fn (string $type): string => match ($type) {
                 </thead>
                 <tbody>
                 <?php if (empty($groups)): ?>
-                    <tr><td colspan="8" class="empty-cell"><div class="empty"><?= ui_icon('anomalies') ?><strong>Аномалий не найдено</strong><span><?= $filtered || $filters['is_alert'] !== '' ? 'Измените или сбросьте фильтр.' : 'Pipeline ещё ничего не нашёл.' ?></span></div></td></tr>
+                    <tr><td colspan="8" class="empty-cell"><div class="empty"><?= ui_icon('anomalies') ?><strong>Аномалий не найдено</strong><span><?= $filtered || $filters['is_alert'] !== '' ? 'Измените или сбросьте фильтр.' : match ($filters['review']) {
+                        'new'   => 'Всё просмотрено — непроверенных аномалий нет.',
+                        'done'  => 'Проверенных аномалий пока нет.',
+                        default => 'Pipeline ещё ничего не нашёл.',
+                    } ?></span></div></td></tr>
                 <?php endif; ?>
                 <?php foreach ($groups as $g): ?>
                     <tr class="<?= $g['has_alert'] ? 'alert' : '' ?>">
@@ -108,14 +118,20 @@ $typeTone = static fn (string $type): string => match ($type) {
                             <span class="chips">
                                 <?php if ($g['has_alert']): ?><?= ui_chip('alert', 'red', 'Есть алерт', true) ?><?php endif; ?>
                                 <?php foreach ($g['types'] as $type): ?><?= ui_chip($type, $typeTone($type)) ?><?php endforeach; ?>
+                                <?php if ($g['reviewed'] > 0): ?>
+                                    <?= ui_chip($g['reviewed'] === count($g['anomaly_ids']) ? 'проверено' : 'проверено ' . $g['reviewed'] . '/' . count($g['anomaly_ids']), 'green', $g['review_notes'] !== [] ? implode(' · ', $g['review_notes']) : 'Без заметки') ?>
+                                <?php endif; ?>
                             </span>
+                            <?php if ($g['review_notes'] !== []): ?>
+                                <span class="sub"><?= esc(implode(' · ', $g['review_notes'])) ?></span>
+                            <?php endif; ?>
                         </td>
                         <td>
                             <a class="coords" href="<?= esc(ui_aladin($g['ra'], $g['dec'], 0.1), 'attr') ?>" target="_blank" rel="noopener" title="Открыть в Aladin Lite">
                                 <?= ui_num($g['ra'], 5) ?> / <?= ui_num($g['dec'], 5) ?>
                             </a>
                         </td>
-                        <td class="num"><?= count($g['anomaly_ids']) ?></td>
+                        <td class="num"><?= $g['shown'] ?></td>
                         <td class="mono small nowrap">
                             <?php if ($g['first_obs']): ?>
                                 <?= ui_time($g['first_obs']) ?>
@@ -142,6 +158,17 @@ $typeTone = static fn (string $type): string => match ($type) {
             <button class="btn primary" type="submit" data-min-select="1" data-needs="hasSource" title="По одному графику на каждый тип аномалии источника">
                 <?= ui_icon('charts', 14) ?>Построить графики
             </button>
+            <span class="sep"></span>
+            <input class="input" type="text" name="note" maxlength="1000" placeholder="Заметка: что это на кадре" aria-label="Заметка к проверке" data-enter="review">
+            <button class="btn" type="submit" formaction="/ui/anomalies/review" data-min-select="1" data-enter-target="review" data-needs="hasSource"
+                    title="Отметить: посмотрел, ничего интересного. Уйдут из непроверенных и из счётчиков">
+                <?= ui_icon('check', 14) ?>Проверено
+            </button>
+            <?php if ($filters['review'] !== 'new'): ?>
+                <button class="btn" type="submit" formaction="/ui/anomalies/unreview" data-min-select="1" data-needs="hasSource" title="Вернуть в непроверенные">
+                    <?= ui_icon('x', 14) ?>Снять отметку
+                </button>
+            <?php endif; ?>
             <button class="btn danger solid" type="submit" formaction="/ui/anomalies/delete"
                     data-confirm="Будут удалены аномалии выбранных групп ({n}) и все графики их источников. Это необратимо."
                     data-confirm-title="Удалить аномалии?" data-confirm-ok="Удалить" data-danger>

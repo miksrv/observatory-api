@@ -50,7 +50,7 @@ $registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 
     <a class="panel metric" href="/ui/anomalies">
         <div class="metric-top"><span class="eyebrow">Аномалии</span><span class="metric-icon red"><?= ui_icon('anomalies') ?></span></div>
         <div class="metric-value"><?= ui_num($stats['anomalies']) ?></div>
-        <div class="metric-foot"><?= $stats['alerts'] > 0 ? '<span style="color: var(--red)">' . ui_num($stats['alerts']) . ' ' . ui_plural($stats['alerts'], 'алерт', 'алерта', 'алертов') . '</span>' : 'алертов нет' ?></div>
+        <div class="metric-foot"><?= $stats['alerts'] > 0 ? '<span style="color: var(--red)">' . ui_num($stats['alerts']) . ' ' . ui_plural($stats['alerts'], 'алерт', 'алерта', 'алертов') . '</span>' : 'алертов нет' ?><?= $stats['reviewed'] > 0 ? ' · ' . ui_num($stats['reviewed']) . ' проверено' : '' ?></div>
     </a>
     <a class="panel metric" href="/ui/charts">
         <div class="metric-top"><span class="eyebrow">Графики</span><span class="metric-icon violet"><?= ui_icon('charts') ?></span></div>

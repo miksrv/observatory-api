@@ -115,13 +115,37 @@
                 form.dataset.confirmed = '1';
                 // form.submit() ignores the button: carry over its formaction (the button's own
                 // name/value is never relied on by the UI's forms).
-                if (submitter && submitter.hasAttribute('formaction')) form.action = submitter.formAction;
+                if (submitter && submitter.hasAttribute('formaction')) {
+                    if (form.dataset.baseAction === undefined) form.dataset.baseAction = form.getAttribute('action') || '';
+                    form.action = submitter.formAction;
+                }
                 form.submit();
             });
             el.dataset.confirm = text;
         },
         true
     );
+    // A page restored from the back/forward cache still holds a confirmed form pointed at the
+    // last button's formaction: the next button would post there, unasked. Put both back.
+    window.addEventListener('pageshow', function () {
+        $$('form[data-confirmed]').forEach(function (form) {
+            delete form.dataset.confirmed;
+            if (form.dataset.baseAction !== undefined) {
+                form.setAttribute('action', form.dataset.baseAction);
+                delete form.dataset.baseAction;
+            }
+        });
+    });
+
+    // Enter in a field with data-enter="x" presses the button data-enter-target="x" of the same
+    // page — not the form's first button, which an action bar's note field would otherwise hit.
+    document.addEventListener('keydown', function (e) {
+        var field = e.target;
+        if (e.key !== 'Enter' || !field.dataset || !field.dataset.enter) return;
+        var button = $('[data-enter-target="' + field.dataset.enter + '"]');
+        e.preventDefault();
+        if (button && !button.disabled) button.click();
+    });
 
     /* ---------- selection: checkboxes + the floating action bar ---------- */
 

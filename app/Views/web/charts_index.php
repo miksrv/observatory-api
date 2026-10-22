@@ -4,6 +4,7 @@
  * @var list<string> $styles
  * @var string       $filterSourceId
  * @var string       $filterStyle
+ * @var string       $filterReview  '' (all), 'new' or 'done'
  * @var \App\Libraries\UiListQuery $list
  */
 $this->extend('web/layout');
@@ -11,6 +12,7 @@ $this->setVar('title', 'Графики');
 $this->setVar('active', 'charts');
 
 $filtered = $filterSourceId !== '' || $filterStyle !== '';
+$reviewTab = static fn (?string $value): string => ui_query(['review' => $value, 'page' => null]);
 $styleTone = static fn (string $style): string => match ($style) {
     'track', 'track_gif'             => 'blue',
     'stamp_strip', 'stamp_strip_gif' => 'violet',
@@ -23,8 +25,9 @@ $styleTone = static fn (string $style): string => match ($style) {
 <div class="page-head">
     <div>
         <h1>Графики</h1>
-        <p class="sub">Карты-трекеры, стрипы и диагностические превью. Отметьте две и больше карточки одного
-            объекта (например, кометы, которую SkyBot распознал как разные источники), чтобы объединить их.</p>
+        <p class="sub">Карты-трекеры, стрипы и диагностические превью. Посмотрели и ничего интересного — отметьте
+            карточки и нажмите «Проверено» с заметкой: аномалии источников уйдут из непроверенных, затем графики можно удалить.
+            Две и больше карточки одного объекта (например, кометы, которую SkyBot распознал как разные источники) можно объединить.</p>
     </div>
 </div>
 
@@ -35,6 +38,11 @@ $styleTone = static fn (string $style): string => match ($style) {
 </form>
 
 <div class="panel" data-select-scope>
+    <nav class="tabs" aria-label="Проверка">
+        <a href="<?= esc($reviewTab(null), 'attr') ?>" class="<?= $filterReview === '' ? 'active' : '' ?>">Все</a>
+        <a href="<?= esc($reviewTab('new'), 'attr') ?>" class="<?= $filterReview === 'new' ? 'active' : '' ?>">Не проверенные</a>
+        <a href="<?= esc($reviewTab('done'), 'attr') ?>" class="<?= $filterReview === 'done' ? 'active' : '' ?>">Проверенные</a>
+    </nav>
     <form class="filters" method="get" action="/ui/charts">
         <label class="field wide">
             <span class="label">source_id</span>
@@ -87,11 +95,16 @@ $styleTone = static fn (string $style): string => match ($style) {
                 ?>
                 <div class="panel shot">
                     <?php if ($chart['source_id']): ?>
-                        <label class="shot-pick" title="Выбрать для объединения">
-                            <input class="check js-pick" type="checkbox" form="merge-form" name="source_ids[]" value="<?= esc($chart['source_id'], 'attr') ?>" aria-label="Выбрать для объединения">
+                        <label class="shot-pick" title="Выбрать">
+                            <input class="check js-pick" type="checkbox" form="merge-form" name="source_ids[]" value="<?= esc($chart['source_id'], 'attr') ?>" aria-label="Выбрать">
                         </label>
                     <?php endif; ?>
                     <span class="shot-style"><?= ui_chip($chart['style'], $styleTone($chart['style'])) ?></span>
+                    <?php if ($chart['source_id'] && (int) $chart['anomaly_count'] > 0): ?>
+                        <span class="shot-review"><?= (int) $chart['open_count'] === 0
+                            ? ui_chip('проверено', 'green', 'Все аномалии источника отмечены проверенными')
+                            : ui_chip((int) $chart['open_count'] . ' не проверено', 'amber', 'Аномалий источника без отметки «проверено»') ?></span>
+                    <?php endif; ?>
                     <a class="shot-img" href="<?= esc($imageUrl, 'attr') ?>" data-lightbox data-caption="<?= esc($title . ' · ' . $chart['style'], 'attr') ?>">
                         <img src="<?= esc($imageUrl, 'attr') ?>" loading="lazy" alt="<?= esc($chart['style'], 'attr') ?>">
                     </a>
@@ -138,9 +151,20 @@ $styleTone = static fn (string $style): string => match ($style) {
 
         <div class="selbar" data-empty>
             <span class="count"><b data-sel-count>0</b>выбрано</span>
-            <span class="hint">Объединение создаёт новый источник; старые графики и аномалии удаляются.</span>
             <button class="btn" type="button" data-pick-every>Выбрать все</button>
-            <button class="btn primary" type="submit" form="merge-form" data-min-select="2"
+            <span class="sep"></span>
+            <input class="input" type="text" name="note" form="merge-form" maxlength="1000" placeholder="Заметка: что это на кадре" aria-label="Заметка к проверке" data-enter="review">
+            <button class="btn primary" type="submit" form="merge-form" formaction="/ui/charts/review" data-min-select="1" data-enter-target="review"
+                    title="Посмотрел, ничего интересного: все текущие аномалии источников уйдут из непроверенных и из счётчиков">
+                <?= ui_icon('check', 14) ?>Проверено
+            </button>
+            <button class="btn" type="submit" form="merge-form" formaction="/ui/charts/delete" data-min-select="1"
+                    data-confirm="Будут удалены все графики выбранных источников ({n}). Аномалии и отметки «проверено» останутся."
+                    data-confirm-title="Удалить графики?" data-confirm-ok="Удалить" data-danger>
+                <?= ui_icon('trash', 14) ?>Удалить графики
+            </button>
+            <span class="sep"></span>
+            <button class="btn" type="submit" form="merge-form" data-min-select="2"
                     data-confirm="{n} источник(ов) станут одним новым. Их графики и аномалии будут удалены — потом поставьте DETECT_ANOMALIES для затронутых кадров и GENERATE_CHARTS для нового источника."
                     data-confirm-title="Объединить источники?" data-confirm-ok="Объединить" data-danger>
                 <?= ui_icon('merge', 14) ?>Объединить

@@ -48,6 +48,11 @@ README.md's Architecture section for the full picture.
   validation passes, so a malformed request can't wipe existing data first). This exists so a
   standalone `DETECT_ANOMALIES` task re-run for an already-classified frame supersedes the
   previous run's anomalies instead of accumulating duplicates alongside them.
+- **Reviews live beside the anomalies, not on them.** Because of that replace, the operator's
+  "nothing interesting" mark is a row in `anomaly_reviews` keyed by `(frame_id, source_id,
+  anomaly_type)` — what a DETECT_ANOMALIES or ANALYZE re-run keeps — and joined back by
+  `AnomalyReviewModel::joinReviews()`. The anomalies list and the dashboard count only
+  unreviewed anomalies by default.
 - **`source_observations.saturated`/`from_subtraction` exist so anomaly detection can be decoupled
   from astrometry/photometry.** They mirror observatory-pipeline's own transient per-source flags
   — without persisting them, a standalone `DETECT_ANOMALIES` task re-run purely from stored data

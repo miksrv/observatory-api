@@ -76,6 +76,11 @@ CLI commands, see [`../README.md`](../README.md).
 - One **frame** can contain many sources and vice versa, via `frame_sources`.
 - **anomalies** link to a frame (cascade delete) and optionally to a source (`SET NULL` on
   delete — an anomaly's detection history outlives the source being removed from the catalog).
+- One **anomaly_reviews** row = the operator's "looked at it, nothing interesting" mark (with a
+  note) on the anomaly of one source on one frame of one type. Keyed by
+  `(frame_id, source_id, anomaly_type)`, not by `anomalies.id`, so it survives the
+  delete-and-insert of every `POST /frames/{id}/anomalies` re-run; cascade-deleted with its frame
+  or source.
 - One **source_charts** row = the current chart image for one (source, style) pair
   (cascade-deleted with its source) OR one task item (1:1, no cascade — see the table's own
   notes); the image bytes live on disk at
@@ -192,6 +197,26 @@ no catalog identity at all.
 | `created_at` | DATETIME | |
 
 **Indexes:** `frame_id`, `source_id`, `anomaly_type`, `is_alert`, `(ra, dec)`
+
+### `anomaly_reviews`
+
+The "reviewed, nothing interesting" mark set in the web UI (`/ui/charts`, `/ui/anomalies`). An
+anomaly is reviewed when a row with its `frame_id`, `source_id` and `anomaly_type` exists
+(`AnomalyReviewModel::joinReviews()`); a reviewed anomaly is left out of the default anomalies
+list and of the dashboard's counts. A later anomaly of the same source — another frame or
+another type — has no row and shows up unreviewed. An anomaly without a source cannot be
+reviewed.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | CHAR(24) PK | |
+| `frame_id` | CHAR(24) NOT NULL FK→frames.id, `ON DELETE CASCADE` | `frames.id` is kept across re-registration by filename |
+| `source_id` | CHAR(24) NOT NULL FK→sources.id, `ON DELETE CASCADE` | Resolved by catalog identity or position, so a re-ANALYZE keeps it |
+| `anomaly_type` | VARCHAR(32) NOT NULL | Equals `anomalies.anomaly_type`; not the ENUM, so a review outlives a renamed type |
+| `note` | TEXT NULL | What the operator saw |
+| `created_at` | DATETIME NULL | Last time the mark was set |
+
+**Indexes:** `(frame_id, source_id, anomaly_type)` (unique, `uq_anomaly_reviews_key`), `source_id`
 
 ### `object_stats` (Pre-aggregated Statistics)
 
