@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.1
+
+### Patch Changes
+
+- Pipelines: a pipeline reports whether each online catalog it uses (Simbad, Gaia, VizieR, SkyBot, JPL, …) answers with `POST /pipelines/catalogs`; the dashboard shows the list in the pipeline's card with response times, the error of an unreachable one on hover, and marks a check older than an hour as out of date — stored in `pipelines.catalog_status` (migration: run `php spark migrate` on the hosting by hand after deploying; until then the endpoint answers 503 and nothing else is affected) (sent by observatory-pipeline 1.6.3)
+
 ## 1.4.0
 
 ### Minor Changes

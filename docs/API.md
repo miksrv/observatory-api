@@ -143,6 +143,12 @@ All other errors use:
 | `POST` | `/sources/{id}/chart` | Upload/replace a source's finder-chart PNG |
 | `GET` | `/sources/{id}/chart.png` | Fetch a source's stored finder-chart PNG |
 
+### Pipelines
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/pipelines/catalogs` | Report the calling pipeline's online catalog reachability |
+
 ### Settings
 
 | Method | Path | Description |
@@ -1199,6 +1205,38 @@ fetch `track_gif`/`stamp_strip_gif` explicitly to get one.
 
 **Errors:** `400` malformed `{id}` · `404` no chart uploaded yet for this source (or for the
 requested `style`)
+
+---
+
+### POST /api/v1/pipelines/catalogs
+
+The calling pipeline's latest check of the online catalogs it uses (observatory-pipeline 1.6.3+
+probes them every `CATALOG_HEALTH_INTERVAL_SEC`). Replaces the previous report; stored in
+`pipelines.catalog_status` with the API's receive time as `catalog_checked_at`, and shown on the
+web UI dashboard (marked out of date after an hour without a report).
+
+**Request:**
+```json
+{
+  "catalogs": [
+    {"name": "Simbad",   "ok": false, "latency_ms": null, "error": "ConnectTimeout"},
+    {"name": "Gaia DR3", "ok": true,  "latency_ms": 412,  "error": null}
+  ]
+}
+```
+
+| Field | Rules |
+|-------|-------|
+| `catalogs` | Non-empty list, at most 20 entries |
+| `name` | 1–40 characters, `A-Z a-z 0-9 space . _ / ( ) -`, starting with a letter or digit |
+| `ok` | Boolean — the catalog answered |
+| `latency_ms` | Non-negative integer or `null` (optional) |
+| `error` | String or `null` (optional); trimmed, kept to 300 characters |
+
+**Response 200:** `{"data": {"stored": 2, "checked_at": "2026-10-31 20:00:00"}}`
+
+**Errors:** `400` malformed body · `503` the `AddPipelineCatalogStatus` migration has not been
+run yet (the pipeline only logs it)
 
 ---
 

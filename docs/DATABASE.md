@@ -319,6 +319,9 @@ settings save. The migration registers the pre-existing `.env` `app.apiKey` as `
 | `key_hash` | CHAR(64) NOT NULL UNIQUE | SHA-256 of the API key; the key itself is never stored |
 | `last_seen_at` | DATETIME NULL | UTC, last successful request |
 | `last_ip` | VARCHAR(45) NULL | Address of the last request |
+| `version` | VARCHAR(32) NULL | Release from the `X-Pipeline-Version` header |
+| `catalog_status` | TEXT NULL | JSON list `[{name, ok, latency_ms, error}]` — the pipeline's last online catalog check (`POST /pipelines/catalogs`) |
+| `catalog_checked_at` | DATETIME NULL | UTC, when that check was received |
 | `revoked_at` | DATETIME NULL | Set → key rejected (`pipeline:revoke`); cleared by `pipeline:rotate` |
 | `created_at` | DATETIME | |
 

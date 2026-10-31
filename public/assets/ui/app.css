@@ -1685,6 +1685,24 @@ a.pipe-task:hover .open {
 .pipe-task.idle .pipe-task-title {
     font-size: 13px;
 }
+/* online catalogs a pipeline reported (PipelineModel::catalogsOf()) */
+.pipe-catalogs {
+    margin-top: 14px;
+    display: grid;
+    gap: 8px;
+}
+.pipe-catalogs dt {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.pipe-catalogs .led::after {
+    display: none;
+}
+.amber-text {
+    color: var(--amber);
+}
+
 .pipe-foot {
     margin-top: auto;
     display: grid;

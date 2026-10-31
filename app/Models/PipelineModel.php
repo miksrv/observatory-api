@@ -20,7 +20,7 @@ class PipelineModel extends BaseModel
     // created_at is handled by the DB DEFAULT — no CI timestamp management needed.
     protected $useTimestamps = false;
 
-    protected $allowedFields = ['id', 'name', 'key_hash', 'last_seen_at', 'last_ip', 'version', 'revoked_at'];
+    protected $allowedFields = ['id', 'name', 'key_hash', 'last_seen_at', 'last_ip', 'version', 'catalog_status', 'catalog_checked_at', 'revoked_at'];
 
     /**
      * Seen within this many seconds = online. The worker polls at least once a minute when idle
@@ -31,6 +31,12 @@ class PipelineModel extends BaseModel
 
     /** Seen within this many seconds (but not ONLINE_WITHIN_SEC) = stale; older = offline. */
     public const STALE_WITHIN_SEC = 1800;
+
+    /**
+     * A catalog check older than this is shown as out of date: the pipeline re-checks every
+     * CATALOG_HEALTH_INTERVAL_SEC (600 s by default), so an hour means it stopped reporting.
+     */
+    public const CATALOG_STALE_SEC = 3600;
 
     /**
      * The active (not revoked) pipeline owning this API key, or null. The lookup is by the key's
@@ -114,6 +120,49 @@ class PipelineModel extends BaseModel
         }
 
         $this->db->table($this->table)->where('id', $id)->update($fields);
+    }
+
+    /**
+     * Replace pipeline `$id`'s catalog check with `$catalogs` (validated by the caller: a list of
+     * {name, ok, latency_ms, error}), checked at `$checkedAt` (UTC). False — or, with DBDebug on,
+     * a DatabaseException — when the columns do not exist yet (migration not run).
+     *
+     * @param list<array{name: string, ok: bool, latency_ms: ?int, error: ?string}> $catalogs
+     */
+    public function saveCatalogStatus(string $id, array $catalogs, string $checkedAt): bool
+    {
+        return (bool) $this->db->table($this->table)->where('id', $id)->update([
+            'catalog_status'     => json_encode($catalogs, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'catalog_checked_at' => $checkedAt,
+        ]);
+    }
+
+    /**
+     * The catalog list stored in a `pipelines` row, or [] when none was reported (or the column
+     * does not exist yet).
+     *
+     * @return list<array{name: string, ok: bool, latency_ms: ?int, error: ?string}>
+     */
+    public static function catalogsOf(array $pipeline): array
+    {
+        $raw = $pipeline['catalog_status'] ?? null;
+        if (! is_string($raw) || $raw === '') {
+            return [];
+        }
+
+        $decoded = json_decode($raw, true);
+
+        return is_array($decoded) && array_is_list($decoded) ? $decoded : [];
+    }
+
+    /** True when a catalog check exists but is older than CATALOG_STALE_SEC. */
+    public static function catalogCheckIsStale(?string $checkedAt): bool
+    {
+        if ($checkedAt === null || $checkedAt === '') {
+            return false;
+        }
+
+        return time() - strtotime($checkedAt . ' UTC') >= self::CATALOG_STALE_SEC;
     }
 
     /** @return array<string, string> id => name of every active (not revoked) pipeline, by name. */
@@ -201,6 +250,8 @@ class PipelineModel extends BaseModel
             $pipeline['running_task'] = $running[$id] ?? null;
             $pipeline['pending_own']  = $pending[$id] ?? 0;
             $pipeline['frame_count']  = $frames[$id] ?? 0;
+            $pipeline['catalogs']     = self::catalogsOf($pipeline);
+            $pipeline['catalogs_stale'] = self::catalogCheckIsStale($pipeline['catalog_checked_at'] ?? null);
         }
         unset($pipeline);
 
