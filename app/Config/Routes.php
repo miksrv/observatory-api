@@ -63,6 +63,9 @@ $routes->group('api/v1', ['filter' => 'api_key'], static function (RouteCollecti
     $routes->post('sources/(:segment)/chart', 'Api\V1\SourcesController::uploadChart/$1');
     $routes->get('sources/(:segment)/chart.png', 'Api\V1\SourcesController::chart/$1');
 
+    // Pipelines — what the calling pipeline reports about itself (online catalog reachability)
+    $routes->post('pipelines/catalogs', 'Api\V1\PipelinesController::catalogs');
+
     // Settings (read-only — pipeline pulls its configuration from the DB)
     $routes->get('settings', 'Api\V1\SettingsController::index');
 

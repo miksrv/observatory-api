@@ -102,6 +102,26 @@ $registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 
                         <dt>IP</dt><dd class="mono small"><?= esc($p['last_ip'] ?? '—') ?></dd>
                         <dt>Зарегистрирован</dt><dd class="small"><?= ui_time($p['created_at'], 'Y-m-d') ?></dd>
                     </dl>
+                    <?php if ($p['catalogs'] !== []): ?>
+                        <?php $catalogsDown = count(array_filter($p['catalogs'], static fn ($c) => ! ($c['ok'] ?? false))); ?>
+                        <div class="pipe-catalogs">
+                            <div class="row between">
+                                <span class="eyebrow">Онлайн-каталоги<?= $catalogsDown > 0 ? ' · недоступно ' . $catalogsDown : '' ?></span>
+                                <span class="small<?= $p['catalogs_stale'] ? ' amber-text' : ' dim' ?>" title="<?= $p['catalogs_stale'] ? 'Pipeline давно не присылал проверку — данные устарели' : 'Время последней проверки' ?>">
+                                    <?= $p['catalogs_stale'] ? 'устарело · ' : '' ?><?= ui_when($p['catalog_checked_at'] ?? null) ?>
+                                </span>
+                            </div>
+                            <dl class="kv">
+                                <?php foreach ($p['catalogs'] as $c): ?>
+                                    <?php $up = (bool) ($c['ok'] ?? false); ?>
+                                    <dt><span class="led <?= $p['catalogs_stale'] ? 'gray' : ($up ? 'green' : 'red') ?>"></span> <?= esc($c['name'] ?? '?') ?></dt>
+                                    <dd class="small<?= $up ? ' dim' : '' ?>"<?= ! $up && ($c['error'] ?? null) !== null ? ' title="' . esc($c['error'], 'attr') . '"' : '' ?>>
+                                        <?= $up ? (isset($c['latency_ms']) ? (int) $c['latency_ms'] . ' мс' : 'доступен') : 'недоступен' ?>
+                                    </dd>
+                                <?php endforeach; ?>
+                            </dl>
+                        </div>
+                    <?php endif; ?>
                 </div>
                 <?php if ($running !== null): ?>
                     <a class="pipe-task" href="/ui/tasks/<?= esc($running['id'], 'url') ?>">
