@@ -50,10 +50,13 @@ class AnomaliesController extends BaseWebController
                 'count'       => 'anomaly_count',
                 'alert'       => 'has_alert',
                 'last_obs'    => 'last_obs',
+                // When the newest of the group's anomalies reached the database: sorting on it
+                // puts sources with fresh detections first, even ones first seen long ago.
+                'added'       => 'last_added',
             ],
             'last_obs',
             'desc',
-            ['count', 'alert', 'last_obs'],
+            ['count', 'alert', 'last_obs', 'added'],
             'group_key',
         );
 
@@ -72,6 +75,7 @@ class AnomaliesController extends BaseWebController
             ->select($groupKey . ' AS group_key', false)
             ->select('COUNT(*) AS anomaly_count, MAX(anomalies.is_alert) AS has_alert', false)
             ->select('MAX(frames.obs_time) AS last_obs, MAX(frames.object) AS object', false)
+            ->select('MAX(anomalies.created_at) AS last_added', false)
             ->select('COALESCE(MAX(anomalies.mpc_designation), MAX(sources.catalog_id)) AS designation', false)
             ->groupBy('group_key')
             ->orderBy($list->orderBy(), '', false)
@@ -119,6 +123,11 @@ class AnomaliesController extends BaseWebController
                     'has_alert'    => false,
                     'first_obs'    => $a['obs_time'],
                     'last_obs'     => $a['obs_time'],
+                    // When the group's anomalies reached the database (anomalies.created_at). A
+                    // re-run of anomaly detection for a frame replaces its rows, so their date
+                    // becomes the re-run's.
+                    'first_added'  => $a['created_at'],
+                    'last_added'   => $a['created_at'],
                     'mpc_designation' => null,
                     'reviewed'     => 0,
                     'shown'        => 0,
@@ -150,6 +159,12 @@ class AnomaliesController extends BaseWebController
             }
             if ($a['obs_time'] && ($g['last_obs'] === null || $a['obs_time'] > $g['last_obs'])) {
                 $g['last_obs'] = $a['obs_time'];
+            }
+            if ($a['created_at'] && ($g['first_added'] === null || $a['created_at'] < $g['first_added'])) {
+                $g['first_added'] = $a['created_at'];
+            }
+            if ($a['created_at'] && ($g['last_added'] === null || $a['created_at'] > $g['last_added'])) {
+                $g['last_added'] = $a['created_at'];
             }
             // The newest MPC designation wins.
             if ($g['mpc_designation'] === null && ! empty($a['mpc_designation'])) {

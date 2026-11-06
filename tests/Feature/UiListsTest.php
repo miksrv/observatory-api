@@ -62,7 +62,7 @@ final class UiListsTest extends DatabaseTestCase
         return $id;
     }
 
-    private function anomaly(string $frameId, ?string $sourceId, string $type = 'UNKNOWN'): string
+    private function anomaly(string $frameId, ?string $sourceId, string $type = 'UNKNOWN', ?string $createdAt = null): string
     {
         $id = uniqid('', true);
         $this->db()->table('anomalies')->insert([
@@ -73,7 +73,7 @@ final class UiListsTest extends DatabaseTestCase
             'ra'           => 10.0,
             'dec'          => 20.0,
             'is_alert'     => 0,
-        ]);
+        ] + ($createdAt === null ? [] : ['created_at' => $createdAt]));
 
         return $id;
     }
@@ -232,6 +232,27 @@ final class UiListsTest extends DatabaseTestCase
         $body = $this->get('/ui/anomalies?sort=count&dir=desc')->response()->getBody();
 
         $this->assertLessThan(strpos($body, '>ONE<'), strpos($body, '>THREE<'));
+    }
+
+    public function testAnomalyGroupsSortByWhenTheyReachedTheDatabase(): void
+    {
+        // OLD was observed later but its anomalies are older; FRESH got a new one yesterday.
+        $early = $this->frame('early.fits', '2026-09-01 20:00:00');
+        $late  = $this->frame('late.fits', '2026-10-01 20:00:00');
+        $old   = $this->source('OLD');
+        $fresh = $this->source('FRESH');
+        $this->anomaly($late, $old, 'UNKNOWN', '2026-10-02 08:00:00');
+        $this->anomaly($early, $fresh, 'UNKNOWN', '2026-09-02 08:00:00');
+        $this->anomaly($early, $fresh, 'MOVING_UNKNOWN', '2026-11-04 08:00:00');
+
+        $body = $this->get('/ui/anomalies?sort=added')->response()->getBody();
+
+        $this->assertLessThan(strpos($body, '>OLD<'), strpos($body, '>FRESH<'));
+        $this->assertStringContainsString('2026-09-02 08:00', $body);
+        $this->assertStringContainsString('2026-11-04 08:00', $body);
+
+        $body = $this->get('/ui/anomalies?sort=added&dir=asc')->response()->getBody();
+        $this->assertLessThan(strpos($body, '>FRESH<'), strpos($body, '>OLD<'));
     }
 
     // -------------------------------------------------------------------------
