@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.5.0
+
+### Minor Changes
+
+- Web UI: the dashboard calls pipelines «Серверы обработки»
+- Web UI: a pipeline card shows its online catalogs as compact chips (response time inside, a slow one ≥ 5 s in amber, the error of an unreachable one on hover) instead of one row per catalog; a lone pipeline's wide card puts them in a strip under its top row, so neither the card nor its current-task block stretches
+- Web UI: the dashboard's all-time task bar is gone; the recent tasks panel shows live counters instead (in queue, running, failed)
+- Web UI: the anomalies list shows when each group's anomalies reached the database (first and latest) and can be sorted by the latest, so sources with fresh detections come first
+
 ## 1.4.1
 
 ### Patch Changes
