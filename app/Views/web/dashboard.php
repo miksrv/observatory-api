@@ -1,7 +1,7 @@
 <?php
 /**
  * @var array<string, int>    $stats
- * @var array<string, int>    $tasksByStatus
+ * @var array<string, int>    $tasksByStatus PENDING / RUNNING / FAILED only
  * @var list<array>           $pipelines     PipelineModel::getOverview()
  * @var array<string, string> $pipelineNames
  * @var int                   $pendingShared
@@ -12,8 +12,7 @@ $this->extend('web/layout');
 $this->setVar('title', 'Обзор');
 $this->setVar('active', 'overview');
 
-$taskTotal  = array_sum($tasksByStatus);
-$statusTone = ['PENDING' => 'amber', 'RUNNING' => 'blue', 'COMPLETED' => 'green', 'FAILED' => 'red', 'CANCELLED' => 'gray'];
+$statusTone = ['PENDING' => 'amber', 'RUNNING' => 'blue', 'FAILED' => 'red'];
 $online     = count(array_filter($pipelines, static fn ($p) => $p['status'] === 'online'));
 $registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 'revoked'));
 ?>
@@ -24,9 +23,9 @@ $registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 
         <h1>Обзор</h1>
         <p class="sub">
             <?php if ($registered > 0): ?>
-                На связи <?= $online ?> из <?= $registered ?> pipeline<?= $tasksByStatus['RUNNING'] > 0 ? ', выполняется задач: ' . $tasksByStatus['RUNNING'] : '' ?>.
+                На связи <?= $online ?> из <?= $registered ?> <?= ui_plural($registered, 'сервера', 'серверов', 'серверов') ?> обработки<?= $tasksByStatus['RUNNING'] > 0 ? ', выполняется задач: ' . $tasksByStatus['RUNNING'] : '' ?>.
             <?php else: ?>
-                Ни один pipeline ещё не зарегистрирован.
+                Ни один сервер обработки ещё не зарегистрирован.
             <?php endif; ?>
         </p>
     </div>
@@ -60,9 +59,9 @@ $registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 
 </div>
 
 <div class="section-title">
-    <h2>Pipeline</h2>
+    <h2>Серверы обработки</h2>
     <?php if ($pendingShared > 0): ?>
-        <a class="small" href="/ui/tasks?status=PENDING">Общих задач в очереди (для любого pipeline): <?= $pendingShared ?></a>
+        <a class="small" href="/ui/tasks?status=PENDING">Общих задач в очереди (для любого сервера): <?= $pendingShared ?></a>
     <?php else: ?>
         <span class="small dim">Общих задач в очереди нет</span>
     <?php endif; ?>
@@ -72,7 +71,7 @@ $registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 
     <div class="panel">
         <div class="empty">
             <?= ui_icon('server') ?>
-            <strong>Pipeline не зарегистрированы</strong>
+            <strong>Серверы обработки не зарегистрированы</strong>
             <span>На сервере API выполните <code>php spark pipeline:create &lt;имя&gt;</code> — команда выдаст ключ для <code>API_KEY</code> в <code>.env</code> pipeline.</span>
         </div>
     </div>
@@ -107,19 +106,31 @@ $registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 
                         <div class="pipe-catalogs">
                             <div class="row between">
                                 <span class="eyebrow">Онлайн-каталоги<?= $catalogsDown > 0 ? ' · недоступно ' . $catalogsDown : '' ?></span>
-                                <span class="small<?= $p['catalogs_stale'] ? ' amber-text' : ' dim' ?>" title="<?= $p['catalogs_stale'] ? 'Pipeline давно не присылал проверку — данные устарели' : 'Время последней проверки' ?>">
-                                    <?= $p['catalogs_stale'] ? 'устарело · ' : '' ?><?= ui_when($p['catalog_checked_at'] ?? null) ?>
+                                <span class="small<?= $p['catalogs_stale'] ? ' amber-text' : ' dim' ?>" title="<?= $p['catalogs_stale'] ? 'Сервер давно не присылал проверку — данные устарели' : 'Время последней проверки' ?>">
+                                    <?= $p['catalogs_stale'] ? 'устарело · ' : '' ?>проверено <?= ui_when($p['catalog_checked_at'] ?? null) ?>
                                 </span>
                             </div>
-                            <dl class="kv">
+                            <?php // Compact chips that wrap, not one row per catalog: the card stays short however many catalogs there are. ?>
+                            <div class="cat-chips">
                                 <?php foreach ($p['catalogs'] as $c): ?>
-                                    <?php $up = (bool) ($c['ok'] ?? false); ?>
-                                    <dt><span class="led <?= $p['catalogs_stale'] ? 'gray' : ($up ? 'green' : 'red') ?>"></span> <?= esc($c['name'] ?? '?') ?></dt>
-                                    <dd class="small<?= $up ? ' dim' : '' ?>"<?= ! $up && ($c['error'] ?? null) !== null ? ' title="' . esc($c['error'], 'attr') . '"' : '' ?>>
-                                        <?= $up ? (isset($c['latency_ms']) ? (int) $c['latency_ms'] . ' мс' : 'доступен') : 'недоступен' ?>
-                                    </dd>
+                                    <?php
+                                    $up      = (bool) ($c['ok'] ?? false);
+                                    $latency = isset($c['latency_ms']) ? (int) $c['latency_ms'] : null;
+                                    $slow    = $up && $latency !== null && $latency >= 5000;
+                                    $catTone = $p['catalogs_stale'] ? 'gray' : (! $up ? 'red' : ($slow ? 'amber' : 'green'));
+                                    $catName = (string) ($c['name'] ?? '?');
+                                    $hint    = $up
+                                        ? $catName . ($latency !== null ? ': отвечает за ' . $latency . ' мс' . ($slow ? ' — медленно' : '') : ': доступен')
+                                        : $catName . ': недоступен' . (($c['error'] ?? null) !== null ? ' — ' . $c['error'] : '');
+                                    ?>
+                                    <span class="cat-chip <?= $catTone ?>" title="<?= esc($hint, 'attr') ?>">
+                                        <span class="led <?= $catTone ?>"></span><?= esc($catName) ?>
+                                        <?php if ($up && $latency !== null): ?>
+                                            <span class="cat-ms"><?= $latency >= 1000 ? number_format($latency / 1000, 1, ',', '') . ' с' : $latency . ' мс' ?></span>
+                                        <?php endif; ?>
+                                    </span>
                                 <?php endforeach; ?>
-                            </dl>
+                            </div>
                         </div>
                     <?php endif; ?>
                 </div>
@@ -157,35 +168,19 @@ $registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 
     </div>
 <?php endif; ?>
 
-<div class="section-title"><h2>Задачи</h2><a class="small" href="/ui/tasks">Все задачи</a></div>
-
-<div class="panel">
-    <div class="panel-body">
-        <div class="row between" style="margin-bottom: 12px">
-            <span class="eyebrow">Всего <?= ui_num($taskTotal) ?></span>
-        </div>
-        <div class="spectrum" role="img" aria-label="Задачи по статусам">
-            <?php foreach ($tasksByStatus as $status => $count): ?>
-                <?php if ($count > 0): ?>
-                    <span class="bg-<?= $statusTone[$status] ?>" style="flex: <?= (int) $count ?>" title="<?= esc(ui_task_status_label($status) . ': ' . $count, 'attr') ?>"></span>
-                <?php endif; ?>
-            <?php endforeach; ?>
-        </div>
-        <div class="legend">
-            <?php foreach ($tasksByStatus as $status => $count): ?>
-                <a href="/ui/tasks?status=<?= $status ?>" title="<?= $status ?>">
-                    <span class="sw bg-<?= $statusTone[$status] ?>"></span><?= esc(ui_task_status_label($status)) ?> <b><?= (int) $count ?></b>
-                </a>
-            <?php endforeach; ?>
-        </div>
-    </div>
-</div>
-
-<div class="grid-2" style="margin-top: 20px">
+<div class="grid-2" style="margin-top: 24px">
     <div class="panel">
         <div class="panel-head">
             <div class="title"><?= ui_icon('tasks') ?><h3>Последние задачи</h3></div>
-            <a class="small" href="/ui/tasks">Все</a>
+            <a class="small" href="/ui/tasks">Все задачи</a>
+        </div>
+        <?php // Only what needs attention now, as counters — a chart of all-time totals would only grow. ?>
+        <div class="task-counts">
+            <?php foreach ($tasksByStatus as $status => $count): ?>
+                <a href="/ui/tasks?status=<?= $status ?>"<?= $count === 0 ? ' class="zero"' : '' ?>>
+                    <span class="sw bg-<?= $statusTone[$status] ?>"></span><?= esc(ui_task_status_label($status)) ?> <b><?= (int) $count ?></b>
+                </a>
+            <?php endforeach; ?>
         </div>
         <?php if ($recentTasks === []): ?>
             <div class="empty"><?= ui_icon('tasks') ?><span>Задач пока не было.</span></div>

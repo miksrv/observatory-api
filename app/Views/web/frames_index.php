@@ -9,6 +9,7 @@
  * @var string                $filterDateFrom
  * @var string                $filterDateTo
  * @var string                $filterQc
+ * @var string                $filterSourceId frames carrying this source's anomalies
  * @var list<string>          $qcFlags  distinct non-OK quality flags present
  * @var string                $qcNotOk  `qc` value for «Не OK»
  * @var \App\Libraries\UiListQuery $list
@@ -19,9 +20,9 @@ $this->setVar('title', 'Кадры');
 $this->setVar('active', 'frames');
 $this->setVar('fill', true);
 
-$filtered = $filterObject !== '' || $filterPipeline !== '' || $filterDateFrom !== '' || $filterDateTo !== '' || $filterQc !== '';
+$filtered = $filterObject !== '' || $filterPipeline !== '' || $filterDateFrom !== '' || $filterDateTo !== '' || $filterQc !== '' || $filterSourceId !== '';
 // The filter as the task form re-sends it in «all frames matching the filter» mode.
-$matchFilter = ['object' => $filterObject, 'pipeline' => $filterPipeline, 'date_from' => $filterDateFrom, 'date_to' => $filterDateTo, 'qc' => $filterQc];
+$matchFilter = ['object' => $filterObject, 'pipeline' => $filterPipeline, 'date_from' => $filterDateFrom, 'date_to' => $filterDateTo, 'qc' => $filterQc, 'source_id' => $filterSourceId];
 ?>
 <?= $this->section('content') ?>
 
@@ -72,7 +73,11 @@ $matchFilter = ['object' => $filterObject, 'pipeline' => $filterPipeline, 'date_
             <span class="label">До (UTC)</span>
             <input class="input" type="datetime-local" name="date_to" value="<?= esc($filterDateTo, 'attr') ?>">
         </label>
-        <?php foreach ($list->keptParams('object', 'pipeline', 'date_from', 'date_to', 'qc', 'page', 'limit') as $name => $value): ?>
+        <label class="field">
+            <span class="label" title="Только кадры, на которых у этого источника найдены аномалии">source_id (аномалии)</span>
+            <input class="input mono" type="text" name="source_id" value="<?= esc($filterSourceId, 'attr') ?>">
+        </label>
+        <?php foreach ($list->keptParams('object', 'pipeline', 'date_from', 'date_to', 'qc', 'source_id', 'page', 'limit') as $name => $value): ?>
             <input type="hidden" name="<?= esc($name, 'attr') ?>" value="<?= esc($value, 'attr') ?>">
         <?php endforeach; ?>
         <div class="actions">

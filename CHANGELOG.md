@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.5.0
+
+### Minor Changes
+
+- Web UI: the dashboard calls pipelines "processing servers"
+- Web UI: a pipeline card shows its online catalogs as compact chips (response time inside, ≥ 5 s in amber, errors on hover)
+- Web UI: the dashboard's all-time task bar is gone; the recent tasks panel shows live counters instead (in queue, running, failed)
+- Web UI: the anomalies list shows when each group's anomalies reached the database (first and latest) and can be sorted by the latest, so sources with fresh detections come first
+- Web UI: an anomaly group links to the frames its anomalies were found on (new `source_id` filter on the frames list), so they can be re-run or deleted from there
+
 ## 1.4.1
 
 ### Patch Changes

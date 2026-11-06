@@ -425,6 +425,10 @@ final class PipelineRoutingTest extends DatabaseTestCase
         $dashboard->assertStatus(200);
         $dashboard->assertSee('observatory-a');
         $dashboard->assertSee('на связи');
+        $dashboard->assertSee('Серверы обработки');
+        // Live counters instead of the all-time stacked bar: the claimed task is running.
+        $dashboard->assertSee('Выполняются <b>1</b>', null);
+        $dashboard->assertDontSee('Готовы');
 
         $this->get('/ui/frames?pipeline=observatory-a')->assertSee('observatory-a');
         $this->get('/ui/tasks?pipeline=observatory-a')->assertSee($taskId);

@@ -1448,41 +1448,34 @@ tr:hover .row-actions,
     height: 10px;
 }
 
-/* stacked status bar (dashboard) */
-.spectrum {
-    display: flex;
-    height: 12px;
-    border-radius: 999px;
-    overflow: hidden;
-    background: var(--surface-3);
-    gap: 2px;
-}
-.spectrum span {
-    min-width: 4px;
-}
-.legend {
+/* live task counters (dashboard's recent tasks panel) */
+.task-counts {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px 18px;
-    margin-top: 14px;
+    gap: 6px 18px;
+    padding: 10px 18px;
+    border-bottom: 1px solid var(--line);
 }
-.legend a {
+.task-counts a {
     display: inline-flex;
     align-items: center;
     gap: 8px;
     color: var(--text-2);
     font-size: 13px;
 }
-.legend a:hover {
+.task-counts a:hover {
     color: var(--text);
     text-decoration: none;
 }
-.legend .sw {
+.task-counts a.zero {
+    opacity: 0.55;
+}
+.task-counts .sw {
     width: 10px;
     height: 10px;
     border-radius: 3px;
 }
-.legend b {
+.task-counts b {
     font: 600 13px var(--mono);
     color: var(--text);
 }
@@ -1543,31 +1536,52 @@ tr:hover .row-actions,
     gap: 14px;
 }
 
-/* A single pipeline: one wide card, sideways — who it is | what it's doing | its counters. */
+/* A single pipeline: one wide card, sideways. The top row — who it is | what it's doing | its
+   counters — is only as tall as its head; the details (address, online catalogs) run underneath
+   across the whole width, so a long catalog list never stretches the task block. */
 .pipes.single {
     grid-template-columns: minmax(0, 1fr);
 }
 .pipes.single .pipe {
     display: grid;
-    grid-template-columns: minmax(260px, 1fr) minmax(0, 1.7fr) 190px;
+    grid-template-columns: minmax(260px, 1fr) minmax(0, 1.7fr) 260px;
     grid-template-areas:
         'head task foot'
-        'body task foot';
-    grid-template-rows: auto 1fr;
+        'body body body';
 }
 .pipes.single .pipe-head {
     grid-area: head;
+    padding-bottom: 16px;
 }
 .pipes.single .pipe-body {
     grid-area: body;
-    padding-bottom: 18px;
+    display: grid;
+    grid-template-columns: subgrid;
+    align-items: start;
+    padding: 14px 0 16px;
+    border-top: 1px solid var(--line);
+}
+.pipes.single .pipe-body > .kv {
+    padding: 0 18px;
+}
+.pipes.single .pipe-catalogs {
+    grid-column: 2 / -1;
+    margin-top: 0;
+    padding-right: 18px;
 }
 .pipes.single .pipe-task {
     grid-area: task;
+    align-self: center;
     justify-content: center;
-    margin: 16px 0;
-    padding: 16px 18px;
     gap: 10px;
+    margin: 12px 0;
+    padding: 10px 14px;
+}
+.pipes.single .pipe-task.idle {
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 16px;
 }
 .pipes.single .pipe-task-title {
     font-size: 15px;
@@ -1585,6 +1599,19 @@ tr:hover .row-actions,
 .pipes.single .pipe-foot a + a {
     border-left: 0;
     border-top: 1px solid var(--line);
+}
+@media (max-width: 960px) {
+    /* Too narrow for three columns: the details stack under the head again. The card itself,
+       its task block and counters go back to stacking in the main 960px block further down. */
+    .pipes.single .pipe-body {
+        display: block;
+        padding: 0 0 14px;
+        border-top: 0;
+    }
+    .pipes.single .pipe-catalogs {
+        margin-top: 14px;
+        padding: 0 18px;
+    }
 }
 .pipe {
     display: flex;
@@ -1691,10 +1718,41 @@ a.pipe-task:hover .open {
     display: grid;
     gap: 8px;
 }
-.pipe-catalogs dt {
+.cat-chips {
     display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.cat-chip {
+    display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: var(--r-xs);
+    background: var(--surface-2);
+    box-shadow: inset 0 0 0 1px var(--line);
+    color: var(--text-2);
+    font-size: 12px;
+    white-space: nowrap;
+    cursor: default;
+}
+.cat-chip.red {
+    background: var(--red-bg);
+    box-shadow: none;
+    color: var(--red);
+}
+.cat-chip .led {
+    width: 6px;
+    height: 6px;
+    box-shadow: none;
+}
+.cat-ms {
+    font: 11px var(--mono);
+    color: var(--muted);
+}
+.cat-chip.amber .cat-ms {
+    color: var(--amber);
 }
 .pipe-catalogs .led::after {
     display: none;

@@ -12,8 +12,8 @@ use App\Models\TaskModel;
 use CodeIgniter\HTTP\ResponseInterface;
 
 /**
- * Web UI — overview: the pipelines, the catalogue's totals, the task queue, recent tasks and
- * alerts.
+ * Web UI — overview: the pipelines (processing servers), the catalogue's totals, the live task
+ * counters, recent tasks and alerts.
  *
  * The whole `Web` namespace is the operator console for driving the pipeline (browse frames,
  * create tasks, look at charts/anomalies). It reads through the same models Api\V1\* uses and,
@@ -27,8 +27,10 @@ class DashboardController extends BaseWebController
     {
         $taskModel = new TaskModel();
 
+        // Only the statuses worth acting on now: the all-time COMPLETED / CANCELLED totals only
+        // grow and live on the tasks page.
         $tasksByStatus = [];
-        foreach (TaskModel::STATUSES as $status) {
+        foreach (['PENDING', 'RUNNING', 'FAILED'] as $status) {
             $tasksByStatus[$status] = $taskModel->where('status', $status)->countAllResults();
         }
 

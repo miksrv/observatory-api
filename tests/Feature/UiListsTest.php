@@ -62,7 +62,7 @@ final class UiListsTest extends DatabaseTestCase
         return $id;
     }
 
-    private function anomaly(string $frameId, ?string $sourceId, string $type = 'UNKNOWN'): string
+    private function anomaly(string $frameId, ?string $sourceId, string $type = 'UNKNOWN', ?string $createdAt = null): string
     {
         $id = uniqid('', true);
         $this->db()->table('anomalies')->insert([
@@ -73,7 +73,7 @@ final class UiListsTest extends DatabaseTestCase
             'ra'           => 10.0,
             'dec'          => 20.0,
             'is_alert'     => 0,
-        ]);
+        ] + ($createdAt === null ? [] : ['created_at' => $createdAt]));
 
         return $id;
     }
@@ -232,6 +232,85 @@ final class UiListsTest extends DatabaseTestCase
         $body = $this->get('/ui/anomalies?sort=count&dir=desc')->response()->getBody();
 
         $this->assertLessThan(strpos($body, '>ONE<'), strpos($body, '>THREE<'));
+    }
+
+    public function testAnomalyGroupsSortByWhenTheyReachedTheDatabase(): void
+    {
+        // OLD was observed later but its anomalies are older; FRESH got a new one yesterday.
+        $early = $this->frame('early.fits', '2026-09-01 20:00:00');
+        $late  = $this->frame('late.fits', '2026-10-01 20:00:00');
+        $old   = $this->source('OLD');
+        $fresh = $this->source('FRESH');
+        $this->anomaly($late, $old, 'UNKNOWN', '2026-10-02 08:00:00');
+        $this->anomaly($early, $fresh, 'UNKNOWN', '2026-09-02 08:00:00');
+        $this->anomaly($early, $fresh, 'MOVING_UNKNOWN', '2026-11-04 08:00:00');
+
+        $body = $this->get('/ui/anomalies?sort=added')->response()->getBody();
+
+        $this->assertLessThan(strpos($body, '>OLD<'), strpos($body, '>FRESH<'));
+        $this->assertStringContainsString('2026-09-02 08:00', $body);
+        $this->assertStringContainsString('2026-11-04 08:00', $body);
+
+        $body = $this->get('/ui/anomalies?sort=added&dir=asc')->response()->getBody();
+        $this->assertLessThan(strpos($body, '>FRESH<'), strpos($body, '>OLD<'));
+    }
+
+    public function testAnomalyAddedDatesFollowTheReviewTab(): void
+    {
+        // REVIEWED's newest anomaly is already reviewed: on the default "new" tab the group sorts
+        // by its unreviewed one, and must show that date — not the reviewed one's.
+        $frame    = $this->frame('a.fits', '2026-09-01 20:00:00');
+        $reviewed = $this->source('REVIEWED');
+        $other    = $this->source('OTHER');
+        $this->anomaly($frame, $reviewed, 'UNKNOWN', '2026-09-02 08:00:00');
+        $this->anomaly($frame, $reviewed, 'MOVING_UNKNOWN', '2026-11-04 08:00:00');
+        $this->anomaly($frame, $other, 'UNKNOWN', '2026-10-01 08:00:00');
+        $this->db()->table('anomaly_reviews')->insert([
+            'id'           => uniqid('', true),
+            'frame_id'     => $frame,
+            'source_id'    => $reviewed,
+            'anomaly_type' => 'MOVING_UNKNOWN',
+        ]);
+
+        $body = $this->get('/ui/anomalies?sort=added')->response()->getBody();
+
+        $this->assertLessThan(strpos($body, '>REVIEWED<'), strpos($body, '>OTHER<'));
+        $this->assertStringContainsString('2026-09-02 08:00', $body);
+        $this->assertStringNotContainsString('2026-11-04 08:00', $body);
+    }
+
+    public function testAnAnomalyGroupLinksToTheFramesItWasFoundOn(): void
+    {
+        $withA   = $this->frame('with-a.fits', '2026-09-01 20:00:00');
+        $withA2  = $this->frame('with-a-too.fits', '2026-09-02 20:00:00');
+        $other   = $this->frame('other.fits', '2026-09-03 20:00:00');
+        $sourceA = $this->source('A');
+        $sourceB = $this->source('B');
+        $this->anomaly($withA, $sourceA);
+        $this->anomaly($withA2, $sourceA, 'MOVING_UNKNOWN');
+        $this->anomaly($other, $sourceB);
+
+        $this->get('/ui/anomalies?source_id=' . urlencode($sourceA))
+            ->assertSee('/ui/frames?source_id=' . urlencode($sourceA), null);
+
+        $page = $this->get('/ui/frames?source_id=' . urlencode($sourceA));
+        $page->assertSee('with-a.fits');
+        $page->assertSee('with-a-too.fits');
+        $page->assertDontSee('other.fits');
+
+        // «All frames matching the filter» carries the source filter too: deleting them hits
+        // exactly the source's frames.
+        $this->post('/ui/tasks', $this->uiForm([
+            'type'         => 'DELETE_FRAME',
+            'all_matching' => '1',
+            'source_id'    => $sourceA,
+        ]))->assertRedirect();
+
+        $items = array_column($this->db()->table('task_items')->select('frame_id')->get()->getResultArray(), 'frame_id');
+        sort($items);
+        $expected = [$withA, $withA2];
+        sort($expected);
+        $this->assertSame($expected, $items);
     }
 
     // -------------------------------------------------------------------------

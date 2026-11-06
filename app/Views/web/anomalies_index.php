@@ -85,12 +85,13 @@ $typeTone = static fn (string $type): string => match ($type) {
                     <th>RA / Dec</th>
                     <?= ui_th($list, 'count', 'Аномалий', 'num') ?>
                     <?= ui_th($list, 'last_obs', 'Период наблюдений (UTC)', '', 'Сортировка — по последнему наблюдению') ?>
+                    <?= ui_th($list, 'added', 'Обнаружено (UTC)', '', 'Когда аномалии попали в базу. Сортировка — по последней добавленной') ?>
                     <th></th>
                 </tr>
                 </thead>
                 <tbody>
                 <?php if (empty($groups)): ?>
-                    <tr><td colspan="8" class="empty-cell"><div class="empty"><?= ui_icon('anomalies') ?><strong>Аномалий не найдено</strong><span><?= $filtered || $filters['is_alert'] !== '' ? 'Измените или сбросьте фильтр.' : match ($filters['review']) {
+                    <tr><td colspan="9" class="empty-cell"><div class="empty"><?= ui_icon('anomalies') ?><strong>Аномалий не найдено</strong><span><?= $filtered || $filters['is_alert'] !== '' ? 'Измените или сбросьте фильтр.' : match ($filters['review']) {
                         'new'   => 'Всё просмотрено — непроверенных аномалий нет.',
                         'done'  => 'Проверенных аномалий пока нет.',
                         default => 'Pipeline ещё ничего не нашёл.',
@@ -138,11 +139,18 @@ $typeTone = static fn (string $type): string => match ($type) {
                                 <?php if ($g['last_obs'] !== $g['first_obs']): ?><br><span class="dim"><?= ui_time($g['last_obs']) ?></span><?php endif; ?>
                             <?php else: ?>—<?php endif; ?>
                         </td>
+                        <td class="mono small nowrap">
+                            <?php if ($g['first_added']): ?>
+                                <span title="<?= esc(ui_ago($g['first_added']), 'attr') ?>"><?= ui_time($g['first_added']) ?></span>
+                                <?php if ($g['last_added'] !== $g['first_added']): ?><br><span class="dim" title="<?= esc(ui_ago($g['last_added']), 'attr') ?>"><?= ui_time($g['last_added']) ?></span><?php endif; ?>
+                            <?php else: ?>—<?php endif; ?>
+                        </td>
                         <td class="actions">
                             <?php if ($g['source_id']): ?>
                                 <span class="row-actions">
                                     <a class="btn icon sm" href="/ui/charts?source_id=<?= esc($g['source_id'], 'url') ?>" title="Графики источника"><?= ui_icon('charts') ?></a>
                                     <a class="btn icon sm" href="/ui/anomalies?source_id=<?= esc($g['source_id'], 'url') ?>" title="Только этот источник"><?= ui_icon('search') ?></a>
+                                    <a class="btn icon sm" href="/ui/frames?source_id=<?= esc($g['source_id'], 'url') ?>" title="Кадры с аномалиями источника — перезапустить или удалить"><?= ui_icon('frames') ?></a>
                                 </span>
                             <?php endif; ?>
                         </td>
