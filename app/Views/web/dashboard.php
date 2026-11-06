@@ -106,7 +106,7 @@ $registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 
                         <div class="pipe-catalogs">
                             <div class="row between">
                                 <span class="eyebrow">Онлайн-каталоги<?= $catalogsDown > 0 ? ' · недоступно ' . $catalogsDown : '' ?></span>
-                                <span class="small<?= $p['catalogs_stale'] ? ' amber-text' : ' dim' ?>" title="<?= $p['catalogs_stale'] ? 'Pipeline давно не присылал проверку — данные устарели' : 'Время последней проверки' ?>">
+                                <span class="small<?= $p['catalogs_stale'] ? ' amber-text' : ' dim' ?>" title="<?= $p['catalogs_stale'] ? 'Сервер давно не присылал проверку — данные устарели' : 'Время последней проверки' ?>">
                                     <?= $p['catalogs_stale'] ? 'устарело · ' : '' ?>проверено <?= ui_when($p['catalog_checked_at'] ?? null) ?>
                                 </span>
                             </div>
@@ -117,14 +117,14 @@ $registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 
                                     $up      = (bool) ($c['ok'] ?? false);
                                     $latency = isset($c['latency_ms']) ? (int) $c['latency_ms'] : null;
                                     $slow    = $up && $latency !== null && $latency >= 5000;
-                                    $tone    = $p['catalogs_stale'] ? 'gray' : (! $up ? 'red' : ($slow ? 'amber' : 'green'));
-                                    $name    = (string) ($c['name'] ?? '?');
+                                    $catTone = $p['catalogs_stale'] ? 'gray' : (! $up ? 'red' : ($slow ? 'amber' : 'green'));
+                                    $catName = (string) ($c['name'] ?? '?');
                                     $hint    = $up
-                                        ? $name . ($latency !== null ? ': отвечает за ' . $latency . ' мс' . ($slow ? ' — медленно' : '') : ': доступен')
-                                        : $name . ': недоступен' . (($c['error'] ?? null) !== null ? ' — ' . $c['error'] : '');
+                                        ? $catName . ($latency !== null ? ': отвечает за ' . $latency . ' мс' . ($slow ? ' — медленно' : '') : ': доступен')
+                                        : $catName . ': недоступен' . (($c['error'] ?? null) !== null ? ' — ' . $c['error'] : '');
                                     ?>
-                                    <span class="cat-chip <?= $tone ?>" title="<?= esc($hint, 'attr') ?>">
-                                        <span class="led <?= $tone ?>"></span><?= esc($name) ?>
+                                    <span class="cat-chip <?= $catTone ?>" title="<?= esc($hint, 'attr') ?>">
+                                        <span class="led <?= $catTone ?>"></span><?= esc($catName) ?>
                                         <?php if ($up && $latency !== null): ?>
                                             <span class="cat-ms"><?= $latency >= 1000 ? number_format($latency / 1000, 1, ',', '') . ' с' : $latency . ' мс' ?></span>
                                         <?php endif; ?>

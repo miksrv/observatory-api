@@ -1572,6 +1572,8 @@ tr:hover .row-actions,
 .pipes.single .pipe-task {
     grid-area: task;
     align-self: center;
+    justify-content: center;
+    gap: 10px;
     margin: 12px 0;
     padding: 10px 14px;
 }
@@ -1580,60 +1582,6 @@ tr:hover .row-actions,
     align-items: center;
     justify-content: flex-start;
     gap: 16px;
-}
-.pipes.single .pipe-foot {
-    grid-area: foot;
-    margin: 0 0 0 18px;
-    border-top: 0;
-    border-left: 1px solid var(--line);
-}
-.pipes.single .pipe-foot a {
-    justify-content: center;
-}
-@media (max-width: 960px) {
-    /* Too narrow for three columns: the single card stacks like any other. */
-    .pipes.single .pipe {
-        display: flex;
-    }
-    .pipes.single .pipe-body {
-        display: block;
-        padding: 0 0 14px;
-        border-top: 0;
-    }
-    .pipes.single .pipe-catalogs {
-        margin-top: 14px;
-        padding: 0 18px;
-    }
-    .pipes.single .pipe-task {
-        margin: 0 18px 16px;
-    }
-    .pipes.single .pipe-foot {
-        margin: 0;
-        border-left: 0;
-        border-top: 1px solid var(--line);
-    }
-}
-.pipe {
-    display: grid;
-    grid-template-columns: minmax(260px, 1fr) minmax(0, 1.7fr) 190px;
-    grid-template-areas:
-        'head task foot'
-        'body task foot';
-    grid-template-rows: auto 1fr;
-}
-.pipes.single .pipe-head {
-    grid-area: head;
-}
-.pipes.single .pipe-body {
-    grid-area: body;
-    padding-bottom: 18px;
-}
-.pipes.single .pipe-task {
-    grid-area: task;
-    justify-content: center;
-    margin: 16px 0;
-    padding: 16px 18px;
-    gap: 10px;
 }
 .pipes.single .pipe-task-title {
     font-size: 15px;
@@ -1651,6 +1599,19 @@ tr:hover .row-actions,
 .pipes.single .pipe-foot a + a {
     border-left: 0;
     border-top: 1px solid var(--line);
+}
+@media (max-width: 960px) {
+    /* Too narrow for three columns: the details stack under the head again. The card itself,
+       its task block and counters go back to stacking in the main 960px block further down. */
+    .pipes.single .pipe-body {
+        display: block;
+        padding: 0 0 14px;
+        border-top: 0;
+    }
+    .pipes.single .pipe-catalogs {
+        margin-top: 14px;
+        padding: 0 18px;
+    }
 }
 .pipe {
     display: flex;

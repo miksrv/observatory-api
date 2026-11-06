@@ -255,6 +255,30 @@ final class UiListsTest extends DatabaseTestCase
         $this->assertLessThan(strpos($body, '>FRESH<'), strpos($body, '>OLD<'));
     }
 
+    public function testAnomalyAddedDatesFollowTheReviewTab(): void
+    {
+        // REVIEWED's newest anomaly is already reviewed: on the default "new" tab the group sorts
+        // by its unreviewed one, and must show that date — not the reviewed one's.
+        $frame    = $this->frame('a.fits', '2026-09-01 20:00:00');
+        $reviewed = $this->source('REVIEWED');
+        $other    = $this->source('OTHER');
+        $this->anomaly($frame, $reviewed, 'UNKNOWN', '2026-09-02 08:00:00');
+        $this->anomaly($frame, $reviewed, 'MOVING_UNKNOWN', '2026-11-04 08:00:00');
+        $this->anomaly($frame, $other, 'UNKNOWN', '2026-10-01 08:00:00');
+        $this->db()->table('anomaly_reviews')->insert([
+            'id'           => uniqid('', true),
+            'frame_id'     => $frame,
+            'source_id'    => $reviewed,
+            'anomaly_type' => 'MOVING_UNKNOWN',
+        ]);
+
+        $body = $this->get('/ui/anomalies?sort=added')->response()->getBody();
+
+        $this->assertLessThan(strpos($body, '>REVIEWED<'), strpos($body, '>OTHER<'));
+        $this->assertStringContainsString('2026-09-02 08:00', $body);
+        $this->assertStringNotContainsString('2026-11-04 08:00', $body);
+    }
+
     // -------------------------------------------------------------------------
     // Charts
     // -------------------------------------------------------------------------
