@@ -127,8 +127,20 @@ final class PipelineCatalogsTest extends DatabaseTestCase
         $page->assertSee('Онлайн-каталоги · недоступно 1');
         $page->assertSee('Gaia DR3');
         $page->assertSee('412 мс');
-        $page->assertSee('title="connect timeout"', null);
+        $page->assertSee('Simbad: недоступен — connect timeout');
+        $page->assertSee('Gaia DR3: отвечает за 412 мс');
+        $page->assertSee('проверено');
         $page->assertDontSee('устарело');
+    }
+
+    public function testASlowCatalogIsMarkedAndItsTimeShownInSeconds(): void
+    {
+        $this->report(['catalogs' => [['name' => 'Gaia DR3', 'ok' => true, 'latency_ms' => 19720]]])->assertStatus(200);
+
+        $page = $this->get('/ui');
+        $page->assertSee('19,7 с');
+        $page->assertSee('cat-chip amber', null);
+        $page->assertSee('— медленно');
     }
 
     public function testAnOldCheckIsMarkedOutOfDate(): void

@@ -1543,7 +1543,80 @@ tr:hover .row-actions,
     gap: 14px;
 }
 
-/* A single pipeline: one wide card, sideways — who it is | what it's doing | its counters. */
+    display: grid;
+    grid-template-columns: minmax(260px, 1fr) minmax(0, 1.7fr) 260px;
+    grid-template-areas:
+        'head task foot'
+        'body body body';
+}
+.pipes.single .pipe-head {
+    grid-area: head;
+    padding-bottom: 16px;
+}
+.pipes.single .pipe-body {
+    grid-area: body;
+    display: grid;
+    grid-template-columns: subgrid;
+    align-items: start;
+    padding: 14px 0 16px;
+    border-top: 1px solid var(--line);
+}
+.pipes.single .pipe-body > .kv {
+    padding: 0 18px;
+}
+.pipes.single .pipe-catalogs {
+    grid-column: 2 / -1;
+    margin-top: 0;
+    padding-right: 18px;
+}
+.pipes.single .pipe-task {
+    grid-area: task;
+    align-self: center;
+    margin: 12px 0;
+    padding: 10px 14px;
+}
+.pipes.single .pipe-task.idle {
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 16px;
+}
+.pipes.single .pipe-foot {
+    grid-area: foot;
+    margin: 0 0 0 18px;
+    border-top: 0;
+    border-left: 1px solid var(--line);
+}
+.pipes.single .pipe-foot a {
+    justify-content: center;
+}
+@media (max-width: 960px) {
+    /* Too narrow for three columns: the single card stacks like any other. */
+    .pipes.single .pipe {
+        display: flex;
+    }
+    .pipes.single .pipe-body {
+        display: block;
+        padding: 0 0 14px;
+        border-top: 0;
+    }
+    .pipes.single .pipe-catalogs {
+        margin-top: 14px;
+        padding: 0 18px;
+    }
+    .pipes.single .pipe-task {
+        margin: 0 18px 16px;
+    }
+    .pipes.single .pipe-foot {
+        margin: 0;
+        border-left: 0;
+        border-top: 1px solid var(--line);
+    }
+}
+.pipe {
+/* A single pipeline: one wide card, sideways. The top row — who it is | what it's doing | its
+   counters — is only as tall as its head; the details (address, online catalogs) run underneath
+   across the whole width, so a long catalog list never stretches the task block. */
 .pipes.single {
     grid-template-columns: minmax(0, 1fr);
 }
@@ -1686,12 +1759,43 @@ a.pipe-task:hover .open {
     font-size: 13px;
 }
 /* online catalogs a pipeline reported (PipelineModel::catalogsOf()) */
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.cat-chip {
+    display: inline-flex;
 .pipe-catalogs {
     margin-top: 14px;
     display: grid;
-    gap: 8px;
+    gap: 6px;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: var(--r-xs);
+    background: var(--surface-2);
+    box-shadow: inset 0 0 0 1px var(--line);
+    color: var(--text-2);
+    font-size: 12px;
+    white-space: nowrap;
+    cursor: default;
 }
-.pipe-catalogs dt {
+.cat-chip.red {
+    background: var(--red-bg);
+    box-shadow: none;
+    color: var(--red);
+}
+.cat-chip .led {
+    width: 6px;
+    height: 6px;
+    box-shadow: none;
+}
+.cat-ms {
+    font: 11px var(--mono);
+    color: var(--muted);
+}
+.cat-chip.amber .cat-ms {
+    color: var(--amber);
+}
+.cat-chips {
     display: flex;
     align-items: center;
     gap: 8px;

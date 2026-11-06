@@ -24,9 +24,9 @@ $registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 
         <h1>Обзор</h1>
         <p class="sub">
             <?php if ($registered > 0): ?>
-                На связи <?= $online ?> из <?= $registered ?> pipeline<?= $tasksByStatus['RUNNING'] > 0 ? ', выполняется задач: ' . $tasksByStatus['RUNNING'] : '' ?>.
+                На связи <?= $online ?> из <?= $registered ?> <?= ui_plural($registered, 'сервера', 'серверов', 'серверов') ?> обработки<?= $tasksByStatus['RUNNING'] > 0 ? ', выполняется задач: ' . $tasksByStatus['RUNNING'] : '' ?>.
             <?php else: ?>
-                Ни один pipeline ещё не зарегистрирован.
+                Ни один сервер обработки ещё не зарегистрирован.
             <?php endif; ?>
         </p>
     </div>
@@ -60,9 +60,9 @@ $registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 
 </div>
 
 <div class="section-title">
-    <h2>Pipeline</h2>
+    <h2>Серверы обработки</h2>
     <?php if ($pendingShared > 0): ?>
-        <a class="small" href="/ui/tasks?status=PENDING">Общих задач в очереди (для любого pipeline): <?= $pendingShared ?></a>
+        <a class="small" href="/ui/tasks?status=PENDING">Общих задач в очереди (для любого сервера): <?= $pendingShared ?></a>
     <?php else: ?>
         <span class="small dim">Общих задач в очереди нет</span>
     <?php endif; ?>
@@ -72,7 +72,7 @@ $registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 
     <div class="panel">
         <div class="empty">
             <?= ui_icon('server') ?>
-            <strong>Pipeline не зарегистрированы</strong>
+            <strong>Серверы обработки не зарегистрированы</strong>
             <span>На сервере API выполните <code>php spark pipeline:create &lt;имя&gt;</code> — команда выдаст ключ для <code>API_KEY</code> в <code>.env</code> pipeline.</span>
         </div>
     </div>
@@ -108,18 +108,30 @@ $registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 
                             <div class="row between">
                                 <span class="eyebrow">Онлайн-каталоги<?= $catalogsDown > 0 ? ' · недоступно ' . $catalogsDown : '' ?></span>
                                 <span class="small<?= $p['catalogs_stale'] ? ' amber-text' : ' dim' ?>" title="<?= $p['catalogs_stale'] ? 'Pipeline давно не присылал проверку — данные устарели' : 'Время последней проверки' ?>">
-                                    <?= $p['catalogs_stale'] ? 'устарело · ' : '' ?><?= ui_when($p['catalog_checked_at'] ?? null) ?>
+                                    <?= $p['catalogs_stale'] ? 'устарело · ' : '' ?>проверено <?= ui_when($p['catalog_checked_at'] ?? null) ?>
                                 </span>
                             </div>
-                            <dl class="kv">
+                            <?php // Compact chips that wrap, not one row per catalog: the card stays short however many catalogs there are. ?>
+                            <div class="cat-chips">
                                 <?php foreach ($p['catalogs'] as $c): ?>
-                                    <?php $up = (bool) ($c['ok'] ?? false); ?>
-                                    <dt><span class="led <?= $p['catalogs_stale'] ? 'gray' : ($up ? 'green' : 'red') ?>"></span> <?= esc($c['name'] ?? '?') ?></dt>
-                                    <dd class="small<?= $up ? ' dim' : '' ?>"<?= ! $up && ($c['error'] ?? null) !== null ? ' title="' . esc($c['error'], 'attr') . '"' : '' ?>>
-                                        <?= $up ? (isset($c['latency_ms']) ? (int) $c['latency_ms'] . ' мс' : 'доступен') : 'недоступен' ?>
-                                    </dd>
+                                    <?php
+                                    $up      = (bool) ($c['ok'] ?? false);
+                                    $latency = isset($c['latency_ms']) ? (int) $c['latency_ms'] : null;
+                                    $slow    = $up && $latency !== null && $latency >= 5000;
+                                    $tone    = $p['catalogs_stale'] ? 'gray' : (! $up ? 'red' : ($slow ? 'amber' : 'green'));
+                                    $name    = (string) ($c['name'] ?? '?');
+                                    $hint    = $up
+                                        ? $name . ($latency !== null ? ': отвечает за ' . $latency . ' мс' . ($slow ? ' — медленно' : '') : ': доступен')
+                                        : $name . ': недоступен' . (($c['error'] ?? null) !== null ? ' — ' . $c['error'] : '');
+                                    ?>
+                                    <span class="cat-chip <?= $tone ?>" title="<?= esc($hint, 'attr') ?>">
+                                        <span class="led <?= $tone ?>"></span><?= esc($name) ?>
+                                        <?php if ($up && $latency !== null): ?>
+                                            <span class="cat-ms"><?= $latency >= 1000 ? number_format($latency / 1000, 1, ',', '') . ' с' : $latency . ' мс' ?></span>
+                                        <?php endif; ?>
+                                    </span>
                                 <?php endforeach; ?>
-                            </dl>
+                            </div>
                         </div>
                     <?php endif; ?>
                 </div>
