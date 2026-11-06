@@ -150,6 +150,7 @@ $typeTone = static fn (string $type): string => match ($type) {
                                 <span class="row-actions">
                                     <a class="btn icon sm" href="/ui/charts?source_id=<?= esc($g['source_id'], 'url') ?>" title="Графики источника"><?= ui_icon('charts') ?></a>
                                     <a class="btn icon sm" href="/ui/anomalies?source_id=<?= esc($g['source_id'], 'url') ?>" title="Только этот источник"><?= ui_icon('search') ?></a>
+                                    <a class="btn icon sm" href="/ui/frames?source_id=<?= esc($g['source_id'], 'url') ?>" title="Кадры с аномалиями источника — перезапустить или удалить"><?= ui_icon('frames') ?></a>
                                 </span>
                             <?php endif; ?>
                         </td>

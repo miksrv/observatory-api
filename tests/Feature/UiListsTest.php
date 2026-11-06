@@ -279,6 +279,40 @@ final class UiListsTest extends DatabaseTestCase
         $this->assertStringNotContainsString('2026-11-04 08:00', $body);
     }
 
+    public function testAnAnomalyGroupLinksToTheFramesItWasFoundOn(): void
+    {
+        $withA   = $this->frame('with-a.fits', '2026-09-01 20:00:00');
+        $withA2  = $this->frame('with-a-too.fits', '2026-09-02 20:00:00');
+        $other   = $this->frame('other.fits', '2026-09-03 20:00:00');
+        $sourceA = $this->source('A');
+        $sourceB = $this->source('B');
+        $this->anomaly($withA, $sourceA);
+        $this->anomaly($withA2, $sourceA, 'MOVING_UNKNOWN');
+        $this->anomaly($other, $sourceB);
+
+        $this->get('/ui/anomalies?source_id=' . urlencode($sourceA))
+            ->assertSee('/ui/frames?source_id=' . urlencode($sourceA), null);
+
+        $page = $this->get('/ui/frames?source_id=' . urlencode($sourceA));
+        $page->assertSee('with-a.fits');
+        $page->assertSee('with-a-too.fits');
+        $page->assertDontSee('other.fits');
+
+        // «All frames matching the filter» carries the source filter too: deleting them hits
+        // exactly the source's frames.
+        $this->post('/ui/tasks', $this->uiForm([
+            'type'         => 'DELETE_FRAME',
+            'all_matching' => '1',
+            'source_id'    => $sourceA,
+        ]))->assertRedirect();
+
+        $items = array_column($this->db()->table('task_items')->select('frame_id')->get()->getResultArray(), 'frame_id');
+        sort($items);
+        $expected = [$withA, $withA2];
+        sort($expected);
+        $this->assertSame($expected, $items);
+    }
+
     // -------------------------------------------------------------------------
     // Charts
     // -------------------------------------------------------------------------

@@ -7,6 +7,7 @@ use App\Models\FrameModel;
 use App\Models\PipelineModel;
 use App\Models\SourceObservationModel;
 use App\Models\TaskModel;
+use CodeIgniter\Database\BaseBuilder;
 use CodeIgniter\HTTP\ResponseInterface;
 
 /**
@@ -123,6 +124,7 @@ class FramesController extends BaseWebController
             'filterDateFrom' => $filters['date_from'],
             'filterDateTo'   => $filters['date_to'],
             'filterQc'       => $filters['qc'],
+            'filterSourceId' => $filters['source_id'],
             'list'           => $list,
             'taskTypes'      => array_keys(self::CREATABLE_TYPES),
         ]));
@@ -197,17 +199,17 @@ class FramesController extends BaseWebController
     }
 
     /**
-     * The list filter (object, pipeline, date_from, date_to, qc) as trimmed strings, read through
+     * The list filter (object, pipeline, date_from, date_to, qc, source_id) as trimmed strings, read through
      * `$get` — the query string for index(), the POST body for createTask()'s all_matching mode.
      *
      * @param callable(string): mixed $get
      *
-     * @return array{object: string, pipeline: string, date_from: string, date_to: string, qc: string}
+     * @return array{object: string, pipeline: string, date_from: string, date_to: string, qc: string, source_id: string}
      */
     private function readFilters(callable $get): array
     {
         $filters = [];
-        foreach (['object', 'pipeline', 'date_from', 'date_to', 'qc'] as $name) {
+        foreach (['object', 'pipeline', 'date_from', 'date_to', 'qc', 'source_id'] as $name) {
             $value          = $get($name);
             $filters[$name] = is_string($value) ? trim($value) : '';
         }
@@ -219,7 +221,7 @@ class FramesController extends BaseWebController
      * Narrow `$model` to the frames matching `$filters` — the one place the frames filter becomes
      * a query, so the list and "select every frame matching the filter" can never disagree.
      *
-     * @param array{object: string, pipeline: string, date_from: string, date_to: string, qc: string} $filters
+     * @param array{object: string, pipeline: string, date_from: string, date_to: string, qc: string, source_id: string} $filters
      * @param array<string, string> $pipelineNames id => name; `pipeline` is a pipeline NAME
      *                                             (readable, linkable from the dashboard)
      */
@@ -248,6 +250,19 @@ class FramesController extends BaseWebController
             $model->where('quality_flag <>', 'OK');
         } elseif ($filters['qc'] !== '') {
             $model->where('quality_flag', $filters['qc']);
+        }
+
+        // The frames a source's anomalies were found on — linked from the anomalies list, so the
+        // operator can re-run or delete exactly those frames. Not every frame the source was
+        // merely observed on (source_observations): only where it was flagged.
+        if ($filters['source_id'] !== '') {
+            $model->whereIn(
+                'id',
+                static fn (BaseBuilder $builder): BaseBuilder => $builder
+                    ->select('frame_id')
+                    ->from('anomalies')
+                    ->where('source_id', $filters['source_id'])
+            );
         }
 
         return $model;
