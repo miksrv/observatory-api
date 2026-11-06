@@ -1448,41 +1448,34 @@ tr:hover .row-actions,
     height: 10px;
 }
 
-/* stacked status bar (dashboard) */
-.spectrum {
-    display: flex;
-    height: 12px;
-    border-radius: 999px;
-    overflow: hidden;
-    background: var(--surface-3);
-    gap: 2px;
-}
-.spectrum span {
-    min-width: 4px;
-}
-.legend {
+/* live task counters (dashboard's recent tasks panel) */
+.task-counts {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px 18px;
-    margin-top: 14px;
+    gap: 6px 18px;
+    padding: 10px 18px;
+    border-bottom: 1px solid var(--line);
 }
-.legend a {
+.task-counts a {
     display: inline-flex;
     align-items: center;
     gap: 8px;
     color: var(--text-2);
     font-size: 13px;
 }
-.legend a:hover {
+.task-counts a:hover {
     color: var(--text);
     text-decoration: none;
 }
-.legend .sw {
+.task-counts a.zero {
+    opacity: 0.55;
+}
+.task-counts .sw {
     width: 10px;
     height: 10px;
     border-radius: 3px;
 }
-.legend b {
+.task-counts b {
     font: 600 13px var(--mono);
     color: var(--text);
 }
@@ -1543,6 +1536,13 @@ tr:hover .row-actions,
     gap: 14px;
 }
 
+/* A single pipeline: one wide card, sideways. The top row — who it is | what it's doing | its
+   counters — is only as tall as its head; the details (address, online catalogs) run underneath
+   across the whole width, so a long catalog list never stretches the task block. */
+.pipes.single {
+    grid-template-columns: minmax(0, 1fr);
+}
+.pipes.single .pipe {
     display: grid;
     grid-template-columns: minmax(260px, 1fr) minmax(0, 1.7fr) 260px;
     grid-template-areas:
@@ -1614,13 +1614,6 @@ tr:hover .row-actions,
     }
 }
 .pipe {
-/* A single pipeline: one wide card, sideways. The top row — who it is | what it's doing | its
-   counters — is only as tall as its head; the details (address, online catalogs) run underneath
-   across the whole width, so a long catalog list never stretches the task block. */
-.pipes.single {
-    grid-template-columns: minmax(0, 1fr);
-}
-.pipes.single .pipe {
     display: grid;
     grid-template-columns: minmax(260px, 1fr) minmax(0, 1.7fr) 190px;
     grid-template-areas:
@@ -1759,14 +1752,19 @@ a.pipe-task:hover .open {
     font-size: 13px;
 }
 /* online catalogs a pipeline reported (PipelineModel::catalogsOf()) */
+.pipe-catalogs {
+    margin-top: 14px;
+    display: grid;
+    gap: 8px;
+}
+.cat-chips {
+    display: flex;
     flex-wrap: wrap;
     gap: 6px;
 }
 .cat-chip {
     display: inline-flex;
-.pipe-catalogs {
-    margin-top: 14px;
-    display: grid;
+    align-items: center;
     gap: 6px;
     height: 24px;
     padding: 0 8px;
@@ -1794,11 +1792,6 @@ a.pipe-task:hover .open {
 }
 .cat-chip.amber .cat-ms {
     color: var(--amber);
-}
-.cat-chips {
-    display: flex;
-    align-items: center;
-    gap: 8px;
 }
 .pipe-catalogs .led::after {
     display: none;

@@ -1,7 +1,7 @@
 <?php
 /**
  * @var array<string, int>    $stats
- * @var array<string, int>    $tasksByStatus
+ * @var array<string, int>    $tasksByStatus PENDING / RUNNING / FAILED only
  * @var list<array>           $pipelines     PipelineModel::getOverview()
  * @var array<string, string> $pipelineNames
  * @var int                   $pendingShared
@@ -12,8 +12,7 @@ $this->extend('web/layout');
 $this->setVar('title', 'Обзор');
 $this->setVar('active', 'overview');
 
-$taskTotal  = array_sum($tasksByStatus);
-$statusTone = ['PENDING' => 'amber', 'RUNNING' => 'blue', 'COMPLETED' => 'green', 'FAILED' => 'red', 'CANCELLED' => 'gray'];
+$statusTone = ['PENDING' => 'amber', 'RUNNING' => 'blue', 'FAILED' => 'red'];
 $online     = count(array_filter($pipelines, static fn ($p) => $p['status'] === 'online'));
 $registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 'revoked'));
 ?>
@@ -169,35 +168,19 @@ $registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 
     </div>
 <?php endif; ?>
 
-<div class="section-title"><h2>Задачи</h2><a class="small" href="/ui/tasks">Все задачи</a></div>
-
-<div class="panel">
-    <div class="panel-body">
-        <div class="row between" style="margin-bottom: 12px">
-            <span class="eyebrow">Всего <?= ui_num($taskTotal) ?></span>
-        </div>
-        <div class="spectrum" role="img" aria-label="Задачи по статусам">
-            <?php foreach ($tasksByStatus as $status => $count): ?>
-                <?php if ($count > 0): ?>
-                    <span class="bg-<?= $statusTone[$status] ?>" style="flex: <?= (int) $count ?>" title="<?= esc(ui_task_status_label($status) . ': ' . $count, 'attr') ?>"></span>
-                <?php endif; ?>
-            <?php endforeach; ?>
-        </div>
-        <div class="legend">
-            <?php foreach ($tasksByStatus as $status => $count): ?>
-                <a href="/ui/tasks?status=<?= $status ?>" title="<?= $status ?>">
-                    <span class="sw bg-<?= $statusTone[$status] ?>"></span><?= esc(ui_task_status_label($status)) ?> <b><?= (int) $count ?></b>
-                </a>
-            <?php endforeach; ?>
-        </div>
-    </div>
-</div>
-
-<div class="grid-2" style="margin-top: 20px">
+<div class="grid-2" style="margin-top: 24px">
     <div class="panel">
         <div class="panel-head">
             <div class="title"><?= ui_icon('tasks') ?><h3>Последние задачи</h3></div>
-            <a class="small" href="/ui/tasks">Все</a>
+            <a class="small" href="/ui/tasks">Все задачи</a>
+        </div>
+        <?php // Only what needs attention now, as counters — a chart of all-time totals would only grow. ?>
+        <div class="task-counts">
+            <?php foreach ($tasksByStatus as $status => $count): ?>
+                <a href="/ui/tasks?status=<?= $status ?>"<?= $count === 0 ? ' class="zero"' : '' ?>>
+                    <span class="sw bg-<?= $statusTone[$status] ?>"></span><?= esc(ui_task_status_label($status)) ?> <b><?= (int) $count ?></b>
+                </a>
+            <?php endforeach; ?>
         </div>
         <?php if ($recentTasks === []): ?>
             <div class="empty"><?= ui_icon('tasks') ?><span>Задач пока не было.</span></div>
