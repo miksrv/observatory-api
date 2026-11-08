@@ -6,7 +6,7 @@
  * @var array<string, string> $pipelineNames
  */
 $this->extend('web/layout');
-$this->setVar('title', $task['type'] . ' · задача');
+$this->setVar('title', ui_task_type($task['type']) . ' · задача');
 $this->setVar('active', 'tasks');
 
 $terminal = in_array($task['status'], ['COMPLETED', 'FAILED', 'CANCELLED'], true);
@@ -22,10 +22,10 @@ $pending = (int) $task['total_items'] - (int) $task['completed_items'] - (int) $
     <div>
         <div class="crumbs"><a href="/ui/tasks"><?= ui_icon('back', 14) ?>Задачи</a></div>
         <div class="row wrap" style="gap: 12px">
-            <h1 class="mono"><?= esc($task['type']) ?></h1>
+            <h1 title="<?= esc($task['type'], 'attr') ?>"><?= esc(ui_task_type($task['type'])) ?></h1>
             <?= ui_task_status($task['status']) ?>
         </div>
-        <p class="sub"><span class="mono"><?= esc($task['id']) ?></span> · <?= esc(ui_task_type_hint($task['type'])) ?></p>
+        <p class="sub"><span class="mono"><?= esc($task['id']) ?></span> · <span class="mono"><?= esc($task['type']) ?></span> · <?= esc(ui_task_type_hint($task['type'])) ?></p>
     </div>
     <?php if (! $terminal): ?>
         <div class="actions">
@@ -84,7 +84,7 @@ $pending = (int) $task['total_items'] - (int) $task['completed_items'] - (int) $
             </thead>
             <tbody>
             <?php if (empty($items)): ?>
-                <tr><td colspan="6" class="empty-cell"><div class="empty"><?= ui_icon('tasks') ?><span>У задачи нет элементов<?= $task['type'] === 'RESTART' ? ' — RESTART это сигнал, а не работа' : '' ?>.</span></div></td></tr>
+                <tr><td colspan="6" class="empty-cell"><div class="empty"><?= ui_icon('tasks') ?><span>У задачи нет элементов<?= $task['type'] === 'RESTART' ? ' — перезапуск это сигнал, а не работа' : '' ?>.</span></div></td></tr>
             <?php endif; ?>
             <?php foreach ($items as $item): ?>
                 <?php

@@ -52,7 +52,7 @@ class SourcesController extends BaseWebController
         }
 
         if ($search !== '') {
-            $model = $model->like('catalog_id', $search);
+            $model = $model->like('catalog_id', UiListQuery::likeLiteral($search));
         }
 
         $list->paginate($model->countAllResults(false));
@@ -159,8 +159,8 @@ class SourcesController extends BaseWebController
 
         $msg = "Объединено {$result['merged_count']} источник(ов) в новый источник {$result['target_id']} "
             . "({$frameCount} кадр(ов): {$frameList}). "
-            . 'Старые графики/аномалии удалены. Не забудьте создать задачу DETECT_ANOMALIES '
-            . 'для затронутых кадров (страница «Кадры») и GENERATE_CHARTS для нового источника.';
+            . 'Старые графики/аномалии удалены. Не забудьте создать задачу «Поиск аномалий» '
+            . 'для затронутых кадров (страница «Кадры») и «Построение графиков» для нового источника.';
 
         if (! empty($result['missing_ids'])) {
             $msg .= ' Проигнорированы не найденные id: ' . implode(', ', $result['missing_ids']) . '.';

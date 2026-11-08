@@ -5,7 +5,9 @@ namespace App\Controllers\Web;
 use App\Libraries\UiListQuery;
 use App\Models\AnomalyModel;
 use App\Models\AnomalyReviewModel;
+use App\Models\FrameModel;
 use App\Models\SourceChartModel;
+use App\Models\TaskModel;
 use CodeIgniter\HTTP\ResponseInterface;
 
 /**
@@ -25,6 +27,11 @@ use CodeIgniter\HTTP\ResponseInterface;
  * reviewed with a note (review() — every current anomaly of those sources), then deletes the
  * charts (deleteSelected()). A source chart shows how many of its source's anomalies are still
  * unreviewed; `review=new|done` filters by that.
+ *
+ * A catalog preview is a picture of one FITS frame: its card links to that frame on /ui/frames,
+ * and deleteFrames() queues DELETE_FRAME for the frames of the checked previews — a bad frame is
+ * seen and deleted from the gallery; the previews go when the pipeline reports the frame deleted
+ * (FrameModel::deleteWithDependents()).
  */
 class ChartsController extends BaseWebController
 {
@@ -224,17 +231,25 @@ class ChartsController extends BaseWebController
 
     /**
      * POST /ui/charts/delete — delete every chart (all styles) of the checked sources
-     * (source_ids[]). Their anomalies and reviews stay.
+     * (source_ids[]) and the checked catalog previews (preview_ids[]). Anomalies, reviews and
+     * frames stay.
      */
     public function deleteSelected(): ResponseInterface
     {
-        $sourceIds = $this->selectedSourceIds();
-        if ($sourceIds === []) {
-            return redirect()->back()->with('error', 'Выберите хотя бы один график источника.');
+        $sourceIds  = $this->selectedSourceIds();
+        $previewIds = $this->selectedIds('preview_ids');
+        if ($sourceIds === [] && $previewIds === []) {
+            return redirect()->back()->with('error', 'Выберите хотя бы один график.');
         }
 
         $model  = new SourceChartModel();
-        $charts = $model->whereIn('source_id', $sourceIds)->findAll();
+        $charts = [];
+        if ($sourceIds !== []) {
+            $charts = $model->whereIn('source_id', $sourceIds)->findAll();
+        }
+        if ($previewIds !== []) {
+            $charts = array_merge($charts, (new SourceChartModel())->whereIn('task_item_id', $previewIds)->findAll());
+        }
         foreach ($charts as $chart) {
             $this->deleteChartFiles($chart);
         }
@@ -249,14 +264,98 @@ class ChartsController extends BaseWebController
     }
 
     /**
+     * POST /ui/charts/delete-frames — queue DELETE_FRAME for the frames the checked catalog
+     * previews (preview_ids[] = task_item ids) were made of: the operator saw the frame is bad.
+     * The file goes to FITS_REJECTED, the frame and its data leave the database, and so do these
+     * previews — once the pipeline holding the file reports it done. One task per pipeline.
+     */
+    public function deleteFrames(): ResponseInterface
+    {
+        $previewIds = $this->selectedIds('preview_ids');
+        if ($previewIds === []) {
+            return redirect()->back()->with('error', 'Выберите хотя бы одно превью кадра («Превью каталога»).');
+        }
+
+        // Frames hold the basename; a preview's task item may hold a full path (a task the
+        // pipeline queued itself).
+        $filenames = array_values(array_unique(array_map('basename', array_filter(array_column(
+            (new SourceChartModel())
+                ->select('task_items.filename')
+                ->join('task_items', 'task_items.id = source_charts.task_item_id', 'inner')
+                ->whereIn('source_charts.task_item_id', $previewIds)
+                ->findAll(),
+            'filename'
+        )))));
+
+        $frames = $filenames === []
+            ? []
+            : (new FrameModel())->select('id, pipeline_id')->whereIn('filename', $filenames)->findAll();
+
+        if ($frames === []) {
+            return redirect()->back()->with('error', 'Кадры выбранных превью не зарегистрированы — удалять нечего. Само превью можно удалить кнопкой «Удалить графики».');
+        }
+
+        // A preview stays in the gallery until the pipeline has deleted its frame: checking it
+        // again must not queue the same frame twice (the second item would fail on a frame gone).
+        $queued = array_column(
+            db_connect()->table('task_items')
+                ->select('task_items.frame_id')
+                ->join('tasks', 'tasks.id = task_items.task_id', 'inner')
+                ->where('tasks.type', 'DELETE_FRAME')
+                ->whereIn('tasks.status', ['PENDING', 'RUNNING'])
+                ->whereIn('task_items.status', ['PENDING', 'RUNNING'])
+                ->whereIn('task_items.frame_id', array_column($frames, 'id'))
+                ->get()->getResultArray(),
+            'frame_id'
+        );
+        $already = count($frames);
+        $frames  = array_values(array_filter($frames, static fn (array $f): bool => ! in_array($f['id'], $queued, true)));
+        $already -= count($frames);
+
+        if ($frames === []) {
+            return redirect()->back()->with('success', 'Эти кадры уже стоят в очереди на удаление — превью исчезнут, когда pipeline выполнит задачу.');
+        }
+
+        $itemsByPipeline = [];
+        foreach ($frames as $frame) {
+            $itemsByPipeline[$frame['pipeline_id'] ?? ''][] = ['frame_id' => $frame['id']];
+        }
+
+        $taskModel = new TaskModel();
+        if ($taskModel->createPerPipeline('DELETE_FRAME', $itemsByPipeline, null) === false) {
+            return redirect()->back()->with('error', 'Не удалось создать задачу: ' . implode(', ', $taskModel->errors()));
+        }
+
+        $missing = count($filenames) - count($frames) - $already;
+
+        return redirect()->back()->with(
+            'success',
+            'Поставлено на удаление: ' . count($frames) . ' ' . ui_plural(count($frames), 'кадр', 'кадра', 'кадров')
+            . ' (задача «Удаление кадра»). Их превью исчезнут, когда pipeline её выполнит.'
+            . ($missing > 0 ? ' Не зарегистрировано и пропущено: ' . $missing . '.' : '')
+            . ($already > 0 ? ' Уже в очереди на удаление: ' . $already . '.' : '')
+        );
+    }
+
+    /**
      * The checked source ids, as the gallery's checkboxes post them.
      *
      * @return list<string>
      */
     private function selectedSourceIds(): array
     {
+        return $this->selectedIds('source_ids');
+    }
+
+    /**
+     * Ids posted as `$name[]` (source ids or task item ids), validated against the id alphabet.
+     *
+     * @return list<string>
+     */
+    private function selectedIds(string $name): array
+    {
         $ids = array_filter(
-            (array) ($this->request->getPost('source_ids') ?? []),
+            (array) ($this->request->getPost($name) ?? []),
             static fn ($id): bool => is_string($id) && preg_match('/^[a-zA-Z0-9.]{1,64}$/', $id) === 1
         );
 

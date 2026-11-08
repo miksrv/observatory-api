@@ -194,8 +194,34 @@ whichever run happens to be re-processing it.
 
 **Required fields:** `filename`, `obs_time`, `ra_center`, `dec_center`, `fov_deg`, `quality_flag`.
 Everything else — `observation`, `instrument`, `sensor`, `observer`, `software`, `qc`,
-`position_angle_deg`, `pointing_error_arcsec`, `pointing_error_ra_arcsec`,
+`processing`, `position_angle_deg`, `pointing_error_arcsec`, `pointing_error_ra_arcsec`,
 `pointing_error_dec_arcsec` — is optional; any missing field is stored as `NULL`.
+
+**`processing`** (observatory-pipeline 1.7.0+) — what the analysis came to beyond QC. A QC-OK
+frame can still be analysed incompletely (astap found no solution, a catalog answered 503 so
+nothing was calibrated, a step raised); the pipeline logs and goes on, and only this block says
+so. Stored in the `processing_*`, `astrometry_solved`, `catalog_status`, `calibration`,
+`zero_point*`, `subtraction_*` columns and echoed by `GET /frames` as `processing`; the web UI's
+frames list shows and filters on it. Unlike `pointing_error_*` it **is** the current run's: a
+re-registration replaces it, and one without the block (an older pipeline) clears it to `NULL`
+("unknown") rather than leaving an earlier run's outcome standing.
+
+| Field | Type | Notes |
+|---|---|---|
+| `status` | string, **required** in the block | `OK` · `DEGRADED` (solved, something failed — `issues`) · `FAILED` (QC passed, no plate solve) · `SKIPPED` (QC rejected; nothing past QC ran) |
+| `issues` | string[] | Codes in step order: `astrometry_failed`, `no_sources`, `catalog_failed:<catalog>`, `catalog_error:<catalog>`, `calibration_failed`, `<step>_error` (`subtraction`, `catalog_matching`, `photometry`, `forced_photometry`). Unknown codes are stored as sent |
+| `astrometry_solved` | bool \| null | |
+| `catalogs` | object | catalog → `ok` / `failed` / `error` / `disabled` / `not_applicable` (stored as sent) |
+| `calibration` | `calibrated` \| `skipped` \| `failed` \| null | `skipped` = narrowband or 8-bit, on purpose |
+| `zero_point`, `zero_point_err` | number \| null | |
+| `subtraction_performed` | bool \| null | |
+| `subtraction_reference_count` | int \| null | |
+
+A block this API cannot read (an unknown `status` or `calibration`, `issues` not a list of at
+most 50 strings, a non-boolean flag, a non-finite number, …) does **not** fail the request: the
+frame is registered with its processing outcome unknown (`NULL`) and a warning is logged — the
+block is diagnostics, and refusing it would leave the frame with no record at all. Catalog
+outcomes are stored as sent.
 
 `quality_flag` is **not** guaranteed to be `"OK"` — observatory-pipeline registers a frame that
 failed its own QC too (`BLUR`/`TRAIL`/`HIGH_BACKGROUND`/`LOW_STARS`/`BAD`), with the `qc` block
@@ -259,6 +285,17 @@ astrometry, or photometry run against it.
     "sky_background": 850.3,
     "star_count": 287,
     "eccentricity": 0.4
+  },
+  "processing": {
+    "status": "DEGRADED",
+    "issues": ["catalog_failed:Gaia DR3", "calibration_failed"],
+    "astrometry_solved": true,
+    "catalogs": {"Simbad": "ok", "Gaia DR3": "failed", "2MASS": "ok", "Pan-STARRS": "disabled", "MPC": "ok"},
+    "calibration": "failed",
+    "zero_point": null,
+    "zero_point_err": null,
+    "subtraction_performed": true,
+    "subtraction_reference_count": 10
   }
 }
 ```
@@ -595,6 +632,7 @@ the original FITS file.
     "telescope": "Celestron EdgeHD 11",
     "camera": "ZWO ASI2600MM Pro",
     "qc_fwhm_median": 3.2,
+    "processing": {"status": "OK", "issues": [], "astrometry_solved": true, "catalogs": {"Gaia DR3": "ok"}, "calibration": "calibrated", "zero_point": 21.4, "zero_point_err": 0.02, "subtraction_performed": true, "subtraction_reference_count": 10},
     "...": "... every other frames column, same field names as POST /frames' flattened form"
   }
 }

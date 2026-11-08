@@ -10,6 +10,8 @@
 $this->extend('web/layout');
 $this->setVar('title', 'Графики');
 $this->setVar('active', 'charts');
+$this->setVar('fill', true);
+$this->setVar('bleed', true);
 
 $filtered = $filterSourceId !== '' || $filterStyle !== '';
 $reviewTab = static fn (?string $value): string => ui_query(['review' => $value, 'page' => null]);
@@ -21,15 +23,6 @@ $styleTone = static fn (string $style): string => match ($style) {
 };
 ?>
 <?= $this->section('content') ?>
-
-<div class="page-head">
-    <div>
-        <h1>Графики</h1>
-        <p class="sub">Карты-трекеры, стрипы и диагностические превью. Посмотрели и ничего интересного — отметьте
-            карточки и нажмите «Проверено» с заметкой: аномалии источников уйдут из непроверенных, затем графики можно удалить.
-            Две и больше карточки одного объекта (например, кометы, которую SkyBot распознал как разные источники) можно объединить.</p>
-    </div>
-</div>
 
 <!-- The merge checkboxes sit inside the cards, whose own delete forms can't nest a second form:
      they join this one through their form="" attribute instead. -->
@@ -78,7 +71,7 @@ $styleTone = static fn (string $style): string => match ($style) {
     </form>
 
     <?php if (empty($charts) && $list->total === 0): ?>
-        <div class="empty"><?= ui_icon('charts') ?><strong>Графиков не найдено</strong><span>Графики строит задача GENERATE_CHARTS — её можно поставить со страниц источников и аномалий.</span></div>
+        <div class="empty"><?= ui_icon('charts') ?><strong>Графиков не найдено</strong><span>Графики строит задача «Построение графиков» — её можно поставить со страниц источников и аномалий, а «Превью каталога» — со страницы кадров.</span></div>
     <?php else: ?>
         <div class="gallery">
             <?php foreach ($charts as $chart): ?>
@@ -96,7 +89,11 @@ $styleTone = static fn (string $style): string => match ($style) {
                 <div class="panel shot">
                     <?php if ($chart['source_id']): ?>
                         <label class="shot-pick" title="Выбрать">
-                            <input class="check js-pick" type="checkbox" form="merge-form" name="source_ids[]" value="<?= esc($chart['source_id'], 'attr') ?>" aria-label="Выбрать">
+                            <input class="check js-pick" type="checkbox" form="merge-form" name="source_ids[]" value="<?= esc($chart['source_id'], 'attr') ?>" data-source="1" aria-label="Выбрать">
+                        </label>
+                    <?php elseif ($chart['task_item_id']): ?>
+                        <label class="shot-pick" title="Выбрать">
+                            <input class="check js-pick" type="checkbox" form="merge-form" name="preview_ids[]" value="<?= esc($chart['task_item_id'], 'attr') ?>" data-preview="1" aria-label="Выбрать">
                         </label>
                     <?php endif; ?>
                     <span class="shot-style"><?= ui_chip($chart['style'], $styleTone($chart['style'])) ?></span>
@@ -126,7 +123,7 @@ $styleTone = static fn (string $style): string => match ($style) {
                                 </div>
                             <?php endif; ?>
                         <?php else: ?>
-                            <div class="shot-meta"><span>PREVIEW_CATALOG_MATCH</span></div>
+                            <div class="shot-meta"><span title="PREVIEW_CATALOG_MATCH">Превью каталога</span></div>
                             <div class="shot-meta"><span class="id mono"><?= esc($chart['task_item_id']) ?></span></div>
                         <?php endif; ?>
                         <div class="shot-meta"><span><?= ui_icon('clock', 13) ?> <?= ui_when($chart['updated_at']) ?></span></div>
@@ -134,13 +131,18 @@ $styleTone = static fn (string $style): string => match ($style) {
                     <div class="shot-foot">
                         <?php if ($chart['source_id']): ?>
                             <a class="btn sm grow" href="/ui/anomalies?source_id=<?= esc($chart['source_id'], 'url') ?>"><?= ui_icon('anomalies', 14) ?>Аномалии</a>
+                        <?php elseif ($chart['item_filename']): ?>
+                            <a class="btn sm grow" href="/ui/frames?search=<?= esc(basename($chart['item_filename']), 'url') ?>" title="Этот кадр в списке кадров"><?= ui_icon('frames', 14) ?>Кадр</a>
+                            <?php if ($chart['task_id']): ?>
+                                <a class="btn icon sm" href="/ui/tasks/<?= esc($chart['task_id'], 'url') ?>" title="К задаче" aria-label="К задаче"><?= ui_icon('tasks', 15) ?></a>
+                            <?php endif; ?>
                         <?php elseif ($chart['task_id']): ?>
                             <a class="btn sm grow" href="/ui/tasks/<?= esc($chart['task_id'], 'url') ?>"><?= ui_icon('tasks', 14) ?>К задаче</a>
                         <?php else: ?>
                             <span class="grow"></span>
                         <?php endif; ?>
                         <form class="inline" method="post" action="/ui/charts/<?= esc($chart['id'], 'url') ?>/delete"
-                              data-confirm="Запись и файл изображения будут удалены. Перестроить график можно задачей GENERATE_CHARTS." data-confirm-title="Удалить график?" data-confirm-ok="Удалить" data-danger>
+                              data-confirm="Запись и файл изображения будут удалены. Перестроить график можно задачей «Построение графиков»." data-confirm-title="Удалить график?" data-confirm-ok="Удалить" data-danger>
                             <?= csrf_field() ?>
                             <button type="submit" class="btn icon sm danger" title="Удалить график" aria-label="Удалить график"><?= ui_icon('trash', 15) ?></button>
                         </form>
@@ -153,19 +155,25 @@ $styleTone = static fn (string $style): string => match ($style) {
             <span class="count"><b data-sel-count>0</b>выбрано</span>
             <button class="btn" type="button" data-pick-every>Выбрать все</button>
             <span class="sep"></span>
-            <input class="input" type="text" name="note" form="merge-form" maxlength="1000" placeholder="Заметка: что это на кадре" aria-label="Заметка к проверке" data-enter="review">
-            <button class="btn primary" type="submit" form="merge-form" formaction="/ui/charts/review" data-min-select="1" data-enter-target="review"
+            <input class="input narrow" type="text" name="note" form="merge-form" maxlength="1000" placeholder="Заметка: что это на кадре" aria-label="Заметка к проверке" data-enter="review">
+            <button class="btn primary" type="submit" form="merge-form" formaction="/ui/charts/review" data-min-select="1" data-needs="source" data-enter-target="review"
                     title="Посмотрел, ничего интересного: все текущие аномалии источников уйдут из непроверенных и из счётчиков">
                 <?= ui_icon('check', 14) ?>Проверено
             </button>
             <button class="btn" type="submit" form="merge-form" formaction="/ui/charts/delete" data-min-select="1"
-                    data-confirm="Будут удалены все графики выбранных источников ({n}). Аномалии и отметки «проверено» останутся."
+                    data-confirm="Будут удалены выбранные графики ({n}; у источника — все его графики). Аномалии, отметки «проверено» и сами кадры останутся."
                     data-confirm-title="Удалить графики?" data-confirm-ok="Удалить" data-danger>
                 <?= ui_icon('trash', 14) ?>Удалить графики
             </button>
+            <button class="btn danger" type="submit" form="merge-form" formaction="/ui/charts/delete-frames" data-min-select="1" data-needs="preview"
+                    title="Для выбранных превью каталога: удалить сами FITS-кадры"
+                    data-confirm="Кадры выбранных превью будут удалены: файлы уйдут в FITS_REJECTED, кадры со всеми наблюдениями и аномалиями — из базы, превью — из галереи, когда pipeline выполнит задачу «Удаление кадра»."
+                    data-confirm-title="Удалить кадры?" data-confirm-ok="Удалить кадры" data-danger>
+                <?= ui_icon('frames', 14) ?>Удалить кадры
+            </button>
             <span class="sep"></span>
-            <button class="btn" type="submit" form="merge-form" data-min-select="2"
-                    data-confirm="{n} источник(ов) станут одним новым. Их графики и аномалии будут удалены — потом поставьте DETECT_ANOMALIES для затронутых кадров и GENERATE_CHARTS для нового источника."
+            <button class="btn" type="submit" form="merge-form" data-min-select="2" data-needs="source"
+                    data-confirm="Выбранные источники станут одним новым. Их графики и аномалии будут удалены — потом поставьте «Поиск аномалий» для затронутых кадров и «Построение графиков» для нового источника."
                     data-confirm-title="Объединить источники?" data-confirm-ok="Объединить" data-danger>
                 <?= ui_icon('merge', 14) ?>Объединить
             </button>

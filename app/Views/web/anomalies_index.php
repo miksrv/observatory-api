@@ -9,6 +9,7 @@ $this->extend('web/layout');
 $this->setVar('title', 'Аномалии');
 $this->setVar('active', 'anomalies');
 $this->setVar('fill', true);
+$this->setVar('bleed', true);
 
 $filtered = $filters['anomaly_type'] !== '' || $filters['object'] !== '' || $filters['frame_id'] !== '' || $filters['source_id'] !== '';
 $typeTone = static fn (string $type): string => match ($type) {
@@ -20,14 +21,6 @@ $typeTone = static fn (string $type): string => match ($type) {
 };
 ?>
 <?= $this->section('content') ?>
-
-<div class="page-head">
-    <div>
-        <h1>Аномалии</h1>
-        <p class="sub">Сгруппированы по источнику: одна строка — все аномалии объекта за время наблюдений (число — по выбранной вкладке; действия касаются всей группы). Красная метка слева — есть алерт.
-            Просмотренные и неинтересные отметьте «Проверено» — они уйдут из списка и счётчиков; отметка переживает повторный поиск аномалий.</p>
-    </div>
-</div>
 
 <div class="panel" data-select-scope>
     <nav class="tabs" aria-label="Проверка">

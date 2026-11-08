@@ -444,4 +444,128 @@ final class FramesCreateTest extends DatabaseTestCase
         $this->assertNull($row['pointing_error_ra_arcsec']);
         $this->assertNull($row['pointing_error_dec_arcsec']);
     }
+
+    // -------------------------------------------------------------------------
+    // processing — what the analysis came to beyond QC (observatory-pipeline 1.7.0+)
+    // -------------------------------------------------------------------------
+
+    private function degradedProcessing(): array
+    {
+        return [
+            'status'                      => 'DEGRADED',
+            'issues'                      => ['catalog_failed:Gaia DR3', 'calibration_failed'],
+            'astrometry_solved'           => true,
+            'catalogs'                    => ['Simbad' => 'ok', 'Gaia DR3' => 'failed', 'Pan-STARRS' => 'disabled'],
+            'calibration'                 => 'failed',
+            'zero_point'                  => null,
+            'zero_point_err'              => null,
+            'subtraction_performed'       => true,
+            'subtraction_reference_count' => 10,
+        ];
+    }
+
+    public function testProcessingIsStoredAndEchoedByGetFrame(): void
+    {
+        $result = $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post(self::ENDPOINT, $this->validPayload(['processing' => $this->degradedProcessing()]));
+
+        $result->assertStatus(201);
+        $id = json_decode($result->getJSON(), true)['id'];
+
+        $row = \Config\Database::connect()->table('frames')->where('id', $id)->get()->getRowArray();
+        $this->assertSame('DEGRADED', $row['processing_status']);
+        $this->assertSame('failed', $row['calibration']);
+        $this->assertSame(10, (int) $row['subtraction_reference_count']);
+
+        $frame = json_decode($this->withHeaders($this->authHeaders())->get(self::ENDPOINT . '/' . $id)->getJSON(), true)['frame'];
+        $this->assertSame('DEGRADED', $frame['processing']['status']);
+        $this->assertSame(['catalog_failed:Gaia DR3', 'calibration_failed'], $frame['processing']['issues']);
+        $this->assertSame('failed', $frame['processing']['catalogs']['Gaia DR3']);
+        $this->assertTrue($frame['processing']['astrometry_solved']);
+        $this->assertTrue($frame['processing']['subtraction_performed']);
+        $this->assertNull($frame['processing']['zero_point']);
+    }
+
+    public function testFrameWithoutProcessingReportsNull(): void
+    {
+        $id = json_decode($this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post(self::ENDPOINT, $this->validPayload())->getJSON(), true)['id'];
+
+        $frame = json_decode($this->withHeaders($this->authHeaders())->get(self::ENDPOINT . '/' . $id)->getJSON(), true)['frame'];
+        $this->assertNull($frame['processing']);
+    }
+
+    /**
+     * A re-analysis replaces the outcome — and one by a pipeline that sends none (older than
+     * 1.7.0) clears it to "unknown" rather than leaving the earlier run's outcome standing.
+     */
+    public function testReanalysisReplacesOrClearsTheProcessingOutcome(): void
+    {
+        $id = json_decode($this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post(self::ENDPOINT, $this->validPayload(['processing' => $this->degradedProcessing()]))->getJSON(), true)['id'];
+
+        $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post(self::ENDPOINT, $this->validPayload(['processing' => [
+                'status' => 'OK', 'issues' => [], 'astrometry_solved' => true, 'calibration' => 'calibrated',
+                'zero_point' => 21.4, 'zero_point_err' => 0.02,
+            ]]))->assertStatus(200);
+
+        $db  = \Config\Database::connect();
+        $row = $db->table('frames')->where('id', $id)->get()->getRowArray();
+        $this->assertSame('OK', $row['processing_status']);
+        $this->assertNull($row['processing_issues']);
+        $this->assertEqualsWithDelta(21.4, (float) $row['zero_point'], 1e-4);
+
+        $this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post(self::ENDPOINT, $this->validPayload())->assertStatus(200);
+
+        $row = $db->table('frames')->where('id', $id)->get()->getRowArray();
+        $this->assertNull($row['processing_status']);
+        $this->assertNull($row['zero_point']);
+    }
+
+    /**
+     * `processing` is diagnostics: a block this API cannot read (a newer pipeline's status, a
+     * wrong type) must not cost the frame its registration — it is stored as unknown.
+     */
+    public function testUnreadableProcessingStillRegistersTheFrameWithUnknownOutcome(): void
+    {
+        foreach ([
+            ['status' => 'GREAT'],
+            ['status' => 'OK', 'issues' => 'catalog_failed:Gaia DR3'],
+            ['status' => 'OK', 'issues' => [42]],
+            ['status' => 'OK', 'issues' => array_fill(0, 51, 'x')],
+            ['status' => 'OK', 'catalogs' => ['ok', 'failed']],
+            ['status' => 'OK', 'calibration' => 'maybe'],
+            ['status' => 'OK', 'zero_point' => 'twenty'],
+            ['status' => 'OK', 'astrometry_solved' => 'false'],
+            'DEGRADED',
+        ] as $n => $processing) {
+            $result = $this->withHeaders($this->authHeaders())
+                ->withBodyFormat('json')
+                ->post(self::ENDPOINT, $this->validPayload(['filename' => "bad_processing_{$n}.fits", 'processing' => $processing]));
+
+            $result->assertStatus(201);
+            $id  = json_decode($result->getJSON(), true)['id'];
+            $row = \Config\Database::connect()->table('frames')->where('id', $id)->get()->getRowArray();
+            $this->assertNull($row['processing_status'], json_encode($processing));
+        }
+    }
+
+    public function testCatalogOutcomesAreStoredAsSentEvenWithNumericNames(): void
+    {
+        $id = json_decode($this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post(self::ENDPOINT, $this->validPayload(['processing' => [
+                'status' => 'OK', 'catalogs' => ['2' => 'ok', 'Gaia DR3' => 'partial'],
+            ]]))->getJSON(), true)['id'];
+
+        $frame = json_decode($this->withHeaders($this->authHeaders())->get(self::ENDPOINT . '/' . $id)->getJSON(), true)['frame'];
+        $this->assertSame(['2' => 'ok', 'Gaia DR3' => 'partial'], $frame['processing']['catalogs']);
+    }
 }

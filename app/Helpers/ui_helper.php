@@ -211,13 +211,32 @@ if (! function_exists('ui_task_type_hint')) {
     function ui_task_type_hint(string $type): string
     {
         return match ($type) {
-            'ANALYZE'               => 'Полный разбор файла с начала: астрометрия, фотометрия, аномалии.',
+            'ANALYZE'               => 'Полный разбор файла с начала: QC, астрометрия, каталоги, фотометрия; кадр и источники сохраняются. Аномалии ищет отдельная задача «Поиск аномалий».',
             'DETECT_ANOMALIES'      => 'Повторный поиск аномалий по уже сохранённым данным кадра.',
             'GENERATE_CHARTS'       => 'Построить карты-трекеры и стрипы для источника.',
             'PREVIEW_CATALOG_MATCH' => 'Диагностика: сопоставление с каталогом без регистрации кадра.',
             'DELETE_FRAME'          => 'Убрать файл в FITS_REJECTED и удалить кадр со всеми данными.',
             'RESTART'               => 'Перезапуск pipeline с новыми настройками.',
             default                 => '',
+        };
+    }
+}
+
+if (! function_exists('ui_task_type')) {
+    /**
+     * A task type (TaskModel's ENUM, the wire value) in words, for every place the UI shows one.
+     * The enum itself stays in `title` attributes and the API — it is what the pipeline knows.
+     */
+    function ui_task_type(string $type): string
+    {
+        return match ($type) {
+            'ANALYZE'               => 'Анализ кадра',
+            'DETECT_ANOMALIES'      => 'Поиск аномалий',
+            'GENERATE_CHARTS'       => 'Построение графиков',
+            'PREVIEW_CATALOG_MATCH' => 'Превью каталога',
+            'DELETE_FRAME'          => 'Удаление кадра',
+            'RESTART'               => 'Перезапуск pipeline',
+            default                 => $type,
         };
     }
 }
@@ -237,6 +256,64 @@ if (! function_exists('ui_qc')) {
         };
 
         return ui_chip($flag, $tone);
+    }
+}
+
+if (! function_exists('ui_processing_issue')) {
+    /**
+     * One `frames.processing_issues` code (observatory-pipeline's _processing_report()) in words.
+     * An unknown code — a newer pipeline's — is shown as is.
+     */
+    function ui_processing_issue(string $code): string
+    {
+        if (str_starts_with($code, 'catalog_failed:')) {
+            return substr($code, strlen('catalog_failed:')) . ' не ответил';
+        }
+        if (str_starts_with($code, 'catalog_error:')) {
+            return substr($code, strlen('catalog_error:')) . ': ошибка сопоставления';
+        }
+
+        return match ($code) {
+            'astrometry_failed'       => 'астрометрия не удалась',
+            'no_sources'              => 'источники не извлечены',
+            'calibration_failed'      => 'нет нуль-пункта',
+            'subtraction_error'       => 'ошибка вычитания',
+            'catalog_matching_error'  => 'ошибка сопоставления',
+            'photometry_error'        => 'ошибка фотометрии',
+            'forced_photometry_error' => 'ошибка forced photometry',
+            default                   => $code,
+        };
+    }
+}
+
+if (! function_exists('ui_processing')) {
+    /**
+     * A frame's processing outcome (frames.processing_status + processing_issues) as a chip, with
+     * the issues spelled out under it. NULL = registered by a pipeline older than 1.7.0.
+     */
+    function ui_processing(?string $status, ?string $issuesJson): string
+    {
+        if ($status === null || $status === '') {
+            return '<span class="dim" title="Нет данных: кадр обработан pipeline старше 1.7.0 — перезапустите «Анализ кадра»">—</span>';
+        }
+
+        [$label, $tone, $title] = match ($status) {
+            'OK'       => ['OK', 'green', 'Все шаги анализа выполнены'],
+            'DEGRADED' => ['частично', 'amber', 'Кадр решён, но часть анализа не выполнена — перезапустите «Анализ кадра»'],
+            'FAILED'   => ['сбой', 'red', 'QC пройден, но астрометрия не дала решения — источников нет'],
+            'SKIPPED'  => ['пропущен', 'gray', 'QC отклонил кадр — анализ не выполнялся'],
+            default    => [$status, 'gray', ''],
+        };
+
+        $issues = json_decode((string) $issuesJson, true);
+        $issues = is_array($issues) ? array_map('ui_processing_issue', array_filter($issues, 'is_string')) : [];
+
+        $html = ui_chip($label, $tone, $title . ($issues !== [] ? ': ' . implode(', ', $issues) : ''), true);
+        if ($issues !== []) {
+            $html .= '<span class="issues"><span>' . implode('</span><span>', array_map('esc', $issues)) . '</span></span>';
+        }
+
+        return $html;
     }
 }
 

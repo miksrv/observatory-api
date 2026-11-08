@@ -14,6 +14,7 @@ $this->extend('web/layout');
 $this->setVar('title', 'Задачи');
 $this->setVar('active', 'tasks');
 $this->setVar('fill', true);
+$this->setVar('bleed', true);
 
 // Refresh while anything in view is still moving.
 if ($counts['RUNNING'] > 0 || $counts['PENDING'] > 0) {
@@ -23,17 +24,6 @@ if ($counts['RUNNING'] > 0 || $counts['PENDING'] > 0) {
 $filtered = $filterType !== '' || $filterObjectQ !== '' || $filterPipeline !== '';
 ?>
 <?= $this->section('content') ?>
-
-<div class="page-head">
-    <div>
-        <h1>Задачи</h1>
-        <p class="sub">Очередь заданий pipeline. Задачи создаются на страницах кадров, источников и аномалий
-            или самим pipeline.<?= $counts['RUNNING'] > 0 || $counts['PENDING'] > 0 ? ' Страница обновляется автоматически.' : '' ?></p>
-    </div>
-    <div class="actions">
-        <a class="btn primary" href="/ui/frames"><?= ui_icon('play') ?>Новая задача</a>
-    </div>
-</div>
 
 <div class="panel">
     <nav class="tabs" aria-label="Статус">
@@ -52,7 +42,7 @@ $filtered = $filterType !== '' || $filterObjectQ !== '' || $filterPipeline !== '
             <select class="input" name="type" data-autosubmit>
                 <option value="">Все типы</option>
                 <?php foreach ($types as $t): ?>
-                    <option value="<?= esc($t, 'attr') ?>" <?= $t === $filterType ? 'selected' : '' ?>><?= esc($t) ?></option>
+                    <option value="<?= esc($t, 'attr') ?>" <?= $t === $filterType ? 'selected' : '' ?>><?= esc(ui_task_type($t)) ?></option>
                 <?php endforeach; ?>
             </select>
         </label>
@@ -96,7 +86,7 @@ $filtered = $filterType !== '' || $filterObjectQ !== '' || $filterPipeline !== '
             <?php foreach ($tasks as $task): ?>
                 <tr data-href="/ui/tasks/<?= esc($task['id'], 'url') ?>">
                     <td>
-                        <a class="primary mono" href="/ui/tasks/<?= esc($task['id'], 'url') ?>"><?= esc($task['type']) ?></a>
+                        <a class="primary" href="/ui/tasks/<?= esc($task['id'], 'url') ?>" title="<?= esc($task['type'], 'attr') ?>"><?= esc(ui_task_type($task['type'])) ?></a>
                         <span class="sub id"><?= esc($task['id']) ?></span>
                     </td>
                     <td><?= ui_task_status($task['status']) ?></td>

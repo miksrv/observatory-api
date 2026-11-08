@@ -8,6 +8,8 @@
  * @var int|null $autorefresh  reload the page every N seconds while it's visible and idle
  * @var bool     $fill         a list page exactly one window high: its last panel's table takes
  *                             the room left under the head and scrolls inside
+ * @var bool     $bleed        with $fill: the list's panel takes the whole content area — no page
+ *                              head, gutter, frame or rounding (frames, sources, anomalies, charts, tasks)
  */
 use App\Libraries\UiAuth;
 use App\Libraries\UiShell;
@@ -15,6 +17,7 @@ use App\Libraries\UiShell;
 $active      = $active ?? '';
 $autorefresh = $autorefresh ?? null;
 $fill        = ! empty($fill);
+$bleed       = ! empty($bleed);
 $shell       = UiShell::data();
 $user        = (string) (session(UiAuth::SESSION_KEY)['user'] ?? '');
 
@@ -122,7 +125,7 @@ $flashes = array_filter([
             </span>
         </header>
 
-        <main class="page<?= $fill ? ' fill' : '' ?>">
+        <main class="page<?= $fill ? ' fill' : '' ?><?= $bleed ? ' bleed' : '' ?>">
             <?php foreach ($flashes as $type => $message): ?>
                 <div class="notice <?= $type ?>" role="<?= $type === 'error' ? 'alert' : 'status' ?>">
                     <?= ui_icon($type === 'error' ? 'alert' : 'check') ?>

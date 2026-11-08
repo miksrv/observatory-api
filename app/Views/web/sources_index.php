@@ -12,21 +12,11 @@ $this->extend('web/layout');
 $this->setVar('title', 'Источники');
 $this->setVar('active', 'sources');
 $this->setVar('fill', true);
+$this->setVar('bleed', true);
 
 $filtered = $filterCatalog !== '' || $filterObjectType !== '' || $filterSearch !== '';
 ?>
 <?= $this->section('content') ?>
-
-<div class="page-head">
-    <div>
-        <h1>Источники</h1>
-        <p class="sub">
-            Каталог обнаруженных объектов. Позиция — по последнему наблюдению (у источника нет своих
-            координат: движущиеся объекты смещаются от кадра к кадру). Клик по строке открывает
-            <a href="https://aladin.cds.unistra.fr/AladinLite/" target="_blank" rel="noopener">Aladin Lite</a>.
-        </p>
-    </div>
-</div>
 
 <div class="panel">
     <form class="filters" method="get" action="/ui/sources">
@@ -113,7 +103,7 @@ $filtered = $filterCatalog !== '' || $filterObjectType !== '' || $filterSearch !
                             <form class="inline" method="post" action="/ui/sources/generate-charts">
                                 <?= csrf_field() ?>
                                 <input type="hidden" name="source_id" value="<?= esc($source['id'], 'attr') ?>">
-                                <button type="submit" class="btn sm" title="Создать задачу GENERATE_CHARTS"><?= ui_icon('refresh', 14) ?>Построить графики</button>
+                                <button type="submit" class="btn sm" title="Создать задачу «Построение графиков»"><?= ui_icon('refresh', 14) ?>Построить графики</button>
                             </form>
                         </span>
                     </td>

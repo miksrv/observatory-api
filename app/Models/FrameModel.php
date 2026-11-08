@@ -57,6 +57,15 @@ class FrameModel extends BaseModel
         'qc_sky_background',
         'qc_star_count',
         'qc_eccentricity',
+        'processing_status',
+        'processing_issues',
+        'astrometry_solved',
+        'catalog_status',
+        'calibration',
+        'zero_point',
+        'zero_point_err',
+        'subtraction_performed',
+        'subtraction_reference_count',
     ];
 
     /**
@@ -112,7 +121,9 @@ class FrameModel extends BaseModel
      * Wrapped in a transaction: either the frame and every now-orphaned
      * source disappear together, or nothing changes.
      *
-     * @return array{deleted: bool, purged_source_ids: string[]}
+     * Also deletes the frame's PREVIEW_CATALOG_MATCH charts (SourceChartModel::deletePreviewsOfFile()).
+     *
+     * @return array{deleted: bool, purged_source_ids: string[], deleted_previews: int}
      *
      * @throws \RuntimeException if the transaction fails
      */
@@ -122,6 +133,7 @@ class FrameModel extends BaseModel
         $sourceModel      = new SourceModel();
 
         $sourceIds = $frameSourceModel->getSourceIdsForFrame($frameId);
+        $filename  = $this->find($frameId)['filename'] ?? null;
 
         $this->db->transStart();
 
@@ -140,9 +152,22 @@ class FrameModel extends BaseModel
             throw new \RuntimeException("Failed to delete frame {$frameId} (transaction rolled back).");
         }
 
+        // Its catalog previews go with it (after the commit: they delete files too). A frame
+        // deleted from the charts gallery would otherwise leave its preview there for good.
+        $previews = 0;
+        if ($filename !== null) {
+            try {
+                $previews = (new SourceChartModel())->deletePreviewsOfFile($filename);
+            } catch (\Throwable $e) {
+                // The frame is gone; only its previews stay behind — not a failed frame deletion.
+                log_message('error', "Frame {$frameId} deleted, but its catalog previews were not: " . $e->getMessage());
+            }
+        }
+
         return [
             'deleted'           => (bool) $deleted,
             'purged_source_ids' => $purgedSourceIds,
+            'deleted_previews'  => $previews,
         ];
     }
 }

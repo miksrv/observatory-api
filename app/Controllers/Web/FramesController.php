@@ -52,6 +52,17 @@ class FramesController extends BaseWebController
     private const QC_NOT_OK = 'not_ok';
 
     /**
+     * `processing` filter values beyond the plain statuses (Api\V1\FramesController::PROCESSING_STATUSES):
+     * every frame analysed incompletely (DEGRADED or FAILED — the ones to re-run ANALYZE on), and
+     * every frame with no recorded outcome (registered by a pipeline older than 1.7.0).
+     */
+    private const PROCESSING_PROBLEMS = 'problems';
+    private const PROCESSING_UNKNOWN  = 'unknown';
+
+    /** The list filters, in the order the side panel and the applied-filter badges show them. */
+    private const FILTERS = ['object', 'search', 'processing', 'qc', 'pipeline', 'date_from', 'date_to', 'source_id'];
+
+    /**
      * Most frames one "select every frame matching the filter" task may carry — a forgotten
      * filter must not queue the whole archive by accident.
      */
@@ -70,6 +81,7 @@ class FramesController extends BaseWebController
                 'exptime'    => 'exptime',
                 'fov'        => 'fov_deg',
                 'qc'         => 'quality_flag',
+                'processing' => 'processing_status',
                 'stars'      => 'qc_star_count',
                 'fwhm'       => 'qc_fwhm_median',
                 'snr'        => 'qc_snr_median',
@@ -119,6 +131,12 @@ class FramesController extends BaseWebController
             'pipelineNone'   => self::PIPELINE_NONE,
             'qcFlags'        => array_column($qcFlags, 'quality_flag'),
             'qcNotOk'        => self::QC_NOT_OK,
+            'processingProblems' => self::PROCESSING_PROBLEMS,
+            'processingUnknown'  => self::PROCESSING_UNKNOWN,
+            'filters'        => $filters,
+            // The side panel starts open (no-JS: «Фильтры» and the badges are links with ?filters=1).
+            'filtersOpen'    => $this->request->getGet('filters') === '1',
+            'filterSearch'   => $filters['search'],
             'filterPipeline' => $filters['pipeline'],
             'filterObject'   => $filters['object'],
             'filterDateFrom' => $filters['date_from'],
@@ -199,17 +217,17 @@ class FramesController extends BaseWebController
     }
 
     /**
-     * The list filter (object, pipeline, date_from, date_to, qc, source_id) as trimmed strings, read through
-     * `$get` — the query string for index(), the POST body for createTask()'s all_matching mode.
+     * The list filter (self::FILTERS) as trimmed strings, read through `$get` — the query string
+     * for index(), the POST body for createTask()'s all_matching mode.
      *
      * @param callable(string): mixed $get
      *
-     * @return array{object: string, pipeline: string, date_from: string, date_to: string, qc: string, source_id: string}
+     * @return array{object: string, search: string, processing: string, qc: string, pipeline: string, date_from: string, date_to: string, source_id: string}
      */
     private function readFilters(callable $get): array
     {
         $filters = [];
-        foreach (['object', 'pipeline', 'date_from', 'date_to', 'qc', 'source_id'] as $name) {
+        foreach (self::FILTERS as $name) {
             $value          = $get($name);
             $filters[$name] = is_string($value) ? trim($value) : '';
         }
@@ -221,12 +239,17 @@ class FramesController extends BaseWebController
      * Narrow `$model` to the frames matching `$filters` — the one place the frames filter becomes
      * a query, so the list and "select every frame matching the filter" can never disagree.
      *
-     * @param array{object: string, pipeline: string, date_from: string, date_to: string, qc: string, source_id: string} $filters
+     * @param array{object: string, search: string, processing: string, qc: string, pipeline: string, date_from: string, date_to: string, source_id: string} $filters
      * @param array<string, string> $pipelineNames id => name; `pipeline` is a pipeline NAME
      *                                             (readable, linkable from the dashboard)
      */
     private function applyFilters(FrameModel $model, array $filters, array $pipelineNames): FrameModel
     {
+        // Any part of the file name.
+        if ($filters['search'] !== '') {
+            $model->like('filename', UiListQuery::likeLiteral($filters['search']));
+        }
+
         if ($filters['object'] !== '') {
             $model->where('object', $filters['object']);
         }
@@ -250,6 +273,15 @@ class FramesController extends BaseWebController
             $model->where('quality_flag <>', 'OK');
         } elseif ($filters['qc'] !== '') {
             $model->where('quality_flag', $filters['qc']);
+        }
+
+        // What the analysis came to beyond QC (frames.processing_status, observatory-pipeline 1.7.0+).
+        if ($filters['processing'] === self::PROCESSING_PROBLEMS) {
+            $model->whereIn('processing_status', ['DEGRADED', 'FAILED']);
+        } elseif ($filters['processing'] === self::PROCESSING_UNKNOWN) {
+            $model->where('processing_status', null);
+        } elseif ($filters['processing'] !== '') {
+            $model->where('processing_status', $filters['processing']);
         }
 
         // The frames a source's anomalies were found on — linked from the anomalies list, so the

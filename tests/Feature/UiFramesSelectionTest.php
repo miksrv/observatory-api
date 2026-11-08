@@ -112,6 +112,110 @@ final class UiFramesSelectionTest extends DatabaseTestCase
         $this->assertStringContainsString('<option value="TRAIL"', $all->getBody());
     }
 
+    public function testSearchMatchesAnyPartOfTheFileName(): void
+    {
+        $this->db()->table('frames')->insertBatch([
+            ['id' => 'f-m51', 'filename' => 'M51_Luminance_2026-10-01_001.fits', 'pipeline_id' => $this->pipelines['a'], 'object' => 'M51', 'obs_time' => '2026-10-01 20:00:00', 'ra_center' => 10.0, 'dec_center' => 20.0, 'fov_deg' => 1.0, 'quality_flag' => 'OK'],
+            ['id' => 'f-m31', 'filename' => 'M31_Red_2026-10-02_001.fits', 'pipeline_id' => $this->pipelines['a'], 'object' => 'M31', 'obs_time' => '2026-10-02 20:00:00', 'ra_center' => 10.0, 'dec_center' => 20.0, 'fov_deg' => 1.0, 'quality_flag' => 'OK'],
+            ['id' => 'f-pct', 'filename' => 'odd_100%_x.fits', 'pipeline_id' => $this->pipelines['a'], 'object' => 'X', 'obs_time' => '2026-10-03 20:00:00', 'ra_center' => 10.0, 'dec_center' => 20.0, 'fov_deg' => 1.0, 'quality_flag' => 'OK'],
+        ]);
+
+        $page = $this->get('/ui/frames?search=' . urlencode('Luminance_2026'));
+        $page->assertSee('M51_Luminance_2026-10-01_001.fits');
+        $page->assertDontSee('M31_Red_2026-10-02_001.fits');
+        $page->assertSee('Сбросить');
+
+        // `%` is a literal character, not a wildcard.
+        $page = $this->get('/ui/frames?search=' . urlencode('0%_'));
+        $page->assertSee('odd_100%_x.fits');
+        $page->assertDontSee('M51_Luminance_2026-10-01_001.fits');
+
+        // «All frames matching the filter» takes the search too.
+        $this->post('/ui/tasks', $this->uiForm(['type' => 'DETECT_ANOMALIES', 'all_matching' => '1', 'search' => 'M31_']));
+        $this->assertSame([$this->pipelines['a'] => ['f-m31']], $this->taskFramesByPipeline());
+    }
+
+    /** @return array<string, string> processing status ('' = none recorded) => frame id */
+    private function framesByProcessing(): array
+    {
+        $ids = [];
+        foreach (['OK' => null, 'DEGRADED' => '["catalog_failed:Gaia DR3","calibration_failed"]', 'FAILED' => '["astrometry_failed"]', 'SKIPPED' => null, '' => null] as $status => $issues) {
+            $id = 'proc-' . ($status === '' ? 'none' : strtolower($status));
+            $this->db()->table('frames')->insert([
+                'id' => $id, 'filename' => "{$id}.fits", 'pipeline_id' => $this->pipelines['a'], 'object' => 'M81',
+                'obs_time' => '2026-10-01 20:00:00', 'ra_center' => 10.0, 'dec_center' => 20.0, 'fov_deg' => 1.0,
+                'quality_flag' => $status === 'SKIPPED' ? 'BLUR' : 'OK',
+                'processing_status' => $status === '' ? null : $status, 'processing_issues' => $issues,
+            ]);
+            $ids[$status] = $id;
+        }
+
+        return $ids;
+    }
+
+    public function testProcessingFilterFindsFramesAnalysedIncompletely(): void
+    {
+        $ids = $this->framesByProcessing();
+
+        $page = $this->get('/ui/frames?processing=problems');
+        $page->assertSee($ids['DEGRADED']);
+        $page->assertSee($ids['FAILED']);
+        $page->assertDontSee($ids['OK']);
+        $page->assertDontSee($ids['SKIPPED']);
+        $page->assertDontSee($ids['']);
+        // The issues are spelled out under the status, and the filter shows as a badge.
+        $page->assertSee('Gaia DR3 не ответил');
+        $page->assertSee('астрометрия не удалась');
+        $page->assertSee('Обработка: С проблемами');
+
+        $page = $this->get('/ui/frames?processing=unknown');
+        $page->assertSee($ids['']);
+        $page->assertDontSee($ids['OK']);
+
+        $page = $this->get('/ui/frames?processing=SKIPPED');
+        $page->assertSee($ids['SKIPPED']);
+        $page->assertDontSee($ids['DEGRADED']);
+
+        // «All frames matching the filter» takes it too: re-run ANALYZE on exactly those frames.
+        $this->post('/ui/tasks', $this->uiForm(['type' => 'DETECT_ANOMALIES', 'all_matching' => '1', 'processing' => 'problems']));
+        $expected = [$ids['DEGRADED'], $ids['FAILED']];
+        sort($expected);
+        $this->assertSame([$this->pipelines['a'] => $expected], $this->taskFramesByPipeline());
+    }
+
+    /**
+     * Only «Объект» stays in the bar; every other filter is in the side panel, and an applied one
+     * shows as a badge whose × drops just that filter (keeping «Объект» and the sort).
+     */
+    public function testAppliedPanelFiltersShowAsRemovableBadges(): void
+    {
+        $this->frames([['M51', 'OK', 'a']], 1);
+
+        $page = $this->get('/ui/frames?object=M51&qc=OK&search=M51_&sort=filename&dir=asc');
+        $page->assertSee('QC: OK');
+        $page->assertSee('Файл: M51_');
+        $body = (string) $page->getBody();
+        $this->assertDoesNotMatchRegularExpression('/<aside class="filter-drawer"[^>]*data-open/', $body);
+        // × on the QC badge: the same list without qc.
+        $this->assertStringContainsString(
+            'href="/ui/frames?object=M51&search=M51_&sort=filename&dir=asc"',
+            html_entity_decode($body, ENT_QUOTES | ENT_HTML5)
+        );
+        // The badge itself opens the panel (a link for a browser without JS).
+        $this->assertStringContainsString('filters=1', $body);
+
+        // ?filters=1 renders the panel open; the bar has no badges without panel filters.
+        $open = (string) $this->get('/ui/frames?object=M51&filters=1')->getBody();
+        $this->assertMatchesRegularExpression('/<aside class="filter-drawer"[^>]*data-open/', $open);
+        $this->assertStringNotContainsString('class="applied"', $open);
+        // The open flag is how the page was opened, not what it lists: sort links drop it.
+        preg_match_all('/href="([^"]*sort=[^"]*)"/', html_entity_decode($open, ENT_QUOTES | ENT_HTML5), $sortLinks);
+        $this->assertNotEmpty($sortLinks[1]);
+        foreach ($sortLinks[1] as $href) {
+            $this->assertStringNotContainsString('filters=1', $href);
+        }
+    }
+
     public function testAllMatchingCreatesTasksForEveryMatchingFrameAcrossPages(): void
     {
         // 250 matching frames: more than the largest page (200).

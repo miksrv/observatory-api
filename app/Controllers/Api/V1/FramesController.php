@@ -32,6 +32,15 @@ class FramesController extends BaseApiController
     /** Attempts per chunk in saveSourcesForFrame() when it loses a deadlock / lock wait timeout. */
     private const CHUNK_ATTEMPTS = 3;
 
+    /** `processing.status` values (frames.processing_status ENUM) — see processingColumns(). */
+    public const PROCESSING_STATUSES = ['OK', 'DEGRADED', 'FAILED', 'SKIPPED'];
+
+    /** `processing.calibration` values (frames.calibration ENUM). */
+    private const CALIBRATIONS = ['calibrated', 'skipped', 'failed'];
+
+    /** Most issue codes one frame's `processing.issues` may carry (a real run has a handful). */
+    private const PROCESSING_MAX_ISSUES = 50;
+
     /**
      * POST /api/v1/frames
      *
@@ -103,6 +112,16 @@ class FramesController extends BaseApiController
             ]);
         }
 
+        // `processing` is diagnostics: a block this API cannot read (a newer pipeline's status, a
+        // malformed value) must never cost the frame its registration — that would leave it with
+        // no sources and no record at all. It is stored as unknown and logged instead.
+        $processing = $this->processingColumns($body['processing'] ?? null);
+
+        if (is_string($processing)) {
+            log_message('warning', 'FramesController::create — processing block ignored for ' . $body['filename'] . ': ' . $processing);
+            $processing = $this->processingColumns(null);
+        }
+
         // ----------------------------------------------------------------
         // Flatten nested objects into the DB column layout
         // ----------------------------------------------------------------
@@ -166,7 +185,7 @@ class FramesController extends BaseApiController
             'qc_sky_background'=> isset($qc['sky_background']) ? (float) $qc['sky_background']: null,
             'qc_star_count'    => isset($qc['star_count'])     ? (int)   $qc['star_count']    : null,
             'qc_eccentricity'  => isset($qc['eccentricity'])   ? (float) $qc['eccentricity']  : null,
-        ];
+        ] + $processing;
 
         // ----------------------------------------------------------------
         // Persist — upsert by filename (see docblock above for why)
@@ -1355,6 +1374,102 @@ class FramesController extends BaseApiController
     }
 
     /**
+     * `POST /frames`' optional `processing` block (observatory-pipeline 1.7.0+) as frames columns:
+     * what the analysis came to beyond QC — see the AddFrameProcessing migration. Absent → every
+     * column NULL ("unknown"), so a re-analysis by an older pipeline never leaves an earlier run's
+     * outcome standing as if it described this one. Returns an error message when the block is
+     * malformed — create() then stores it as unknown rather than refusing the frame.
+     *
+     * @return array<string, mixed>|string
+     */
+    private function processingColumns(mixed $processing): array|string
+    {
+        $columns = [
+            'processing_status'           => null,
+            'processing_issues'           => null,
+            'astrometry_solved'           => null,
+            'catalog_status'              => null,
+            'calibration'                 => null,
+            'zero_point'                  => null,
+            'zero_point_err'              => null,
+            'subtraction_performed'       => null,
+            'subtraction_reference_count' => null,
+        ];
+
+        if ($processing === null) {
+            return $columns;
+        }
+
+        if (! is_array($processing) || array_is_list($processing) && $processing !== []) {
+            return 'processing must be an object';
+        }
+
+        $status = $processing['status'] ?? null;
+        if (! in_array($status, self::PROCESSING_STATUSES, true)) {
+            return 'processing.status must be one of ' . implode(', ', self::PROCESSING_STATUSES);
+        }
+
+        $issues = $processing['issues'] ?? [];
+        if (! is_array($issues) || ! array_is_list($issues) || count($issues) > self::PROCESSING_MAX_ISSUES) {
+            return 'processing.issues must be a list of at most ' . self::PROCESSING_MAX_ISSUES . ' strings';
+        }
+        foreach ($issues as $issue) {
+            if (! is_string($issue) || $issue === '' || strlen($issue) > 100) {
+                return 'processing.issues must be a list of strings';
+            }
+        }
+
+        $catalogs = $processing['catalogs'] ?? [];
+        if (! is_array($catalogs) || array_is_list($catalogs) && $catalogs !== []) {
+            return 'processing.catalogs must be an object of catalog => outcome';
+        }
+        if (count($catalogs) > 20) {
+            return 'processing.catalogs must be an object of catalog => outcome';
+        }
+        foreach ($catalogs as $catalog => $outcome) {
+            // A numeric JSON key ("2") arrives as an int key; the outcome is stored as sent, so a
+            // newer pipeline's value needs no API release.
+            if (! is_string($outcome) || strlen((string) $catalog) > 50 || strlen($outcome) > 30) {
+                return 'processing.catalogs must be an object of catalog => outcome';
+            }
+        }
+
+        $calibration = $processing['calibration'] ?? null;
+        if ($calibration !== null && ! in_array($calibration, self::CALIBRATIONS, true)) {
+            return 'processing.calibration must be one of ' . implode(', ', self::CALIBRATIONS) . ', or null';
+        }
+
+        foreach (['zero_point', 'zero_point_err', 'subtraction_reference_count'] as $field) {
+            if (isset($processing[$field]) && (! is_numeric($processing[$field]) || ! is_finite((float) $processing[$field]) || abs((float) $processing[$field]) > 1e30)) {
+                return "processing.{$field} must be a finite number or null";
+            }
+        }
+
+        foreach (['astrometry_solved', 'subtraction_performed'] as $field) {
+            $value = $processing[$field] ?? null;
+            if ($value !== null && ! is_bool($value) && $value !== 0 && $value !== 1) {
+                return "processing.{$field} must be a boolean or null";
+            }
+        }
+
+        $flag = static fn (mixed $value): ?int => $value === null ? null : ((bool) $value ? 1 : 0);
+
+        return [
+            'processing_status'           => $status,
+            'processing_issues'           => $issues === [] ? null : json_encode(array_values(array_unique($issues)), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            'astrometry_solved'           => $flag($processing['astrometry_solved'] ?? null),
+            'catalog_status'              => $catalogs === [] ? null : json_encode((object) $catalogs, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            'calibration'                 => $calibration,
+            'zero_point'                  => isset($processing['zero_point']) ? (float) $processing['zero_point'] : null,
+            'zero_point_err'              => isset($processing['zero_point_err']) ? (float) $processing['zero_point_err'] : null,
+            'subtraction_performed'       => $flag($processing['subtraction_performed'] ?? null),
+            'subtraction_reference_count' => isset($processing['subtraction_reference_count'])
+                ? max(0, min(65535, (int) $processing['subtraction_reference_count']))
+                : null,
+        ];
+    }
+
+    /**
      * Flatten a `frames` row into the API's public shape — shared by index() and show() so both
      * endpoints stay in sync automatically as columns are added.
      */
@@ -1402,7 +1517,37 @@ class FramesController extends BaseApiController
             'qc_sky_background'    => $frame['qc_sky_background'] !== null ? (float) $frame['qc_sky_background'] : null,
             'qc_star_count'         => $frame['qc_star_count'] !== null ? (int) $frame['qc_star_count'] : null,
             'qc_eccentricity'       => $frame['qc_eccentricity'] !== null ? (float) $frame['qc_eccentricity'] : null,
+            'processing'            => self::formatProcessing($frame),
             'created_at'            => $frame['created_at'] ? gmdate('Y-m-d\TH:i:s\Z', strtotime($frame['created_at'])) : null,
+        ];
+    }
+
+    /**
+     * A frame row's processing columns in `POST /frames`' `processing` shape — `null` when the
+     * frame has no recorded outcome (registered by a pipeline older than 1.7.0).
+     *
+     * @return array<string, mixed>|null
+     */
+    public static function formatProcessing(array $frame): ?array
+    {
+        if (($frame['processing_status'] ?? null) === null) {
+            return null;
+        }
+
+        $issues   = json_decode((string) ($frame['processing_issues'] ?? ''), true);
+        $catalogs = json_decode((string) ($frame['catalog_status'] ?? ''), true);
+        $flag     = static fn (mixed $value): ?bool => $value === null ? null : (bool) $value;
+
+        return [
+            'status'                      => $frame['processing_status'],
+            'issues'                      => is_array($issues) ? $issues : [],
+            'astrometry_solved'           => $flag($frame['astrometry_solved'] ?? null),
+            'catalogs'                    => is_array($catalogs) ? (object) $catalogs : (object) [],
+            'calibration'                 => $frame['calibration'] ?? null,
+            'zero_point'                  => isset($frame['zero_point']) ? (float) $frame['zero_point'] : null,
+            'zero_point_err'              => isset($frame['zero_point_err']) ? (float) $frame['zero_point_err'] : null,
+            'subtraction_performed'       => $flag($frame['subtraction_performed'] ?? null),
+            'subtraction_reference_count' => isset($frame['subtraction_reference_count']) ? (int) $frame['subtraction_reference_count'] : null,
         ];
     }
 }

@@ -368,4 +368,146 @@ final class DeleteFrameTaskTest extends DatabaseTestCase
         $itemAfter = $db->table('task_items')->where('id', $itemId2)->get()->getRowArray();
         $this->assertSame('DONE', $itemAfter['status']);
     }
+
+    // -------------------------------------------------------------------------
+    // Catalog previews: a frame seen bad in the charts gallery is deleted from there
+    // -------------------------------------------------------------------------
+
+    /** A PREVIEW_CATALOG_MATCH chart of `$filename`, with its image file. Returns the task_item id. */
+    private function createPreviewOf(string $filename): string
+    {
+        $db     = \Config\Database::connect();
+        $taskId = uniqid('', true);
+        $itemId = uniqid('', true);
+        $db->table('tasks')->insert(['id' => $taskId, 'type' => 'PREVIEW_CATALOG_MATCH', 'status' => 'COMPLETED', 'total_items' => 1]);
+        $db->table('task_items')->insert([
+            'id' => $itemId, 'task_id' => $taskId, 'seq' => 0, 'filename' => $filename, 'status' => 'DONE',
+        ]);
+        $db->table('source_charts')->insert([
+            'id' => uniqid('', true), 'task_item_id' => $itemId, 'style' => 'catalog_preview', 'frame_count' => 1,
+            'updated_at' => date('Y-m-d H:i:s'),
+        ]);
+        @mkdir(WRITEPATH . 'uploads/charts', 0777, true);
+        file_put_contents(WRITEPATH . 'uploads/charts/' . $itemId . '.png', "\x89PNG\r\n\x1a\n");
+
+        return $itemId;
+    }
+
+    public function testDeletedFrameTakesItsCatalogPreviewsWithIt(): void
+    {
+        $frameId   = $this->createFrame(['filename' => 'bad_frame.fits']);
+        $preview   = $this->createPreviewOf('bad_frame.fits');
+        $unrelated = $this->createPreviewOf('good_frame.fits');
+        $task      = $this->createDeleteFrameTask($frameId);
+
+        $this->postProgress($task['task_id'], $task['item_id'], 'DONE')->assertStatus(200);
+
+        $db = \Config\Database::connect();
+        $this->assertSame(0, $db->table('source_charts')->where('task_item_id', $preview)->countAllResults());
+        $this->assertFileDoesNotExist(WRITEPATH . 'uploads/charts/' . $preview . '.png');
+        $this->assertSame(1, $db->table('source_charts')->where('task_item_id', $unrelated)->countAllResults());
+        $this->assertFileExists(WRITEPATH . 'uploads/charts/' . $unrelated . '.png');
+        @unlink(WRITEPATH . 'uploads/charts/' . $unrelated . '.png');
+    }
+
+    public function testDeleteFramesFromTheChartsGalleryQueuesDeleteFrameForTheirFrames(): void
+    {
+        $badA    = $this->createFrame(['filename' => 'bad_a.fits']);
+        $badB    = $this->createFrame(['filename' => 'bad_b.fits']);
+        $this->createFrame(['filename' => 'kept.fits']);
+        $previewA = $this->createPreviewOf('bad_a.fits');
+        $previewB = $this->createPreviewOf('bad_b.fits');
+        $orphan   = $this->createPreviewOf('never_registered.fits');
+
+        $result = $this->post('/ui/charts/delete-frames', $this->uiForm(['preview_ids' => [$previewA, $previewB, $orphan]]));
+        $result->assertRedirect();
+
+        $db    = \Config\Database::connect();
+        $tasks = $db->table('tasks')->where('type', 'DELETE_FRAME')->get()->getResultArray();
+        $this->assertCount(1, $tasks);
+        $frameIds = array_column($db->table('task_items')->where('task_id', $tasks[0]['id'])->get()->getResultArray(), 'frame_id');
+        sort($frameIds);
+        $expected = [$badA, $badB];
+        sort($expected);
+        $this->assertSame($expected, $frameIds);
+
+        // Nothing is deleted before the pipeline has moved the files.
+        $this->assertSame(3, $db->table('frames')->countAllResults());
+        $this->assertSame(1, $db->table('source_charts')->where('task_item_id', $previewA)->countAllResults());
+        foreach ([$previewA, $previewB, $orphan] as $id) {
+            @unlink(WRITEPATH . 'uploads/charts/' . $id . '.png');
+        }
+    }
+
+    public function testDeleteFramesWithOnlyUnregisteredPreviewsCreatesNothing(): void
+    {
+        $orphan = $this->createPreviewOf('never_registered.fits');
+
+        $this->post('/ui/charts/delete-frames', $this->uiForm(['preview_ids' => [$orphan]]))->assertRedirect();
+
+        $this->assertSame(0, \Config\Database::connect()->table('tasks')->where('type', 'DELETE_FRAME')->countAllResults());
+        @unlink(WRITEPATH . 'uploads/charts/' . $orphan . '.png');
+    }
+
+    public function testDeleteChartsRemovesCheckedPreviewsButKeepsTheirFrames(): void
+    {
+        $this->createFrame(['filename' => 'looked_at.fits']);
+        $preview = $this->createPreviewOf('looked_at.fits');
+
+        $this->post('/ui/charts/delete', $this->uiForm(['preview_ids' => [$preview]]))->assertRedirect();
+
+        $db = \Config\Database::connect();
+        $this->assertSame(0, $db->table('source_charts')->where('task_item_id', $preview)->countAllResults());
+        $this->assertFileDoesNotExist(WRITEPATH . 'uploads/charts/' . $preview . '.png');
+        $this->assertSame(1, $db->table('frames')->countAllResults());
+    }
+
+    public function testPreviewCardLinksToItsFrame(): void
+    {
+        $this->createFrame(['filename' => 'M51_Light_L_300_2026-10-01T20-00-00.fits']);
+        $preview = $this->createPreviewOf('M51_Light_L_300_2026-10-01T20-00-00.fits');
+
+        $body = html_entity_decode((string) $this->get('/ui/charts')->getBody(), ENT_QUOTES | ENT_HTML5);
+
+        $this->assertStringContainsString('href="/ui/frames?search=M51_Light_L_300_2026-10-01T20-00-00.fits"', $body);
+        $this->assertStringContainsString('name="preview_ids[]" value="' . $preview . '"', $body);
+        @unlink(WRITEPATH . 'uploads/charts/' . $preview . '.png');
+    }
+
+    /** A preview queued by the pipeline itself carries the full FITS path; the frame, the basename. */
+    public function testPreviewWithAFullPathFindsAndFollowsItsFrame(): void
+    {
+        $frameId = $this->createFrame(['filename' => 'M51_bad.fits']);
+        $preview = $this->createPreviewOf('/fits/archive/M51/L/M51_bad.fits');
+        $other   = $this->createPreviewOf('/fits/archive/M51/L/XM51_bad.fits');
+
+        $this->post('/ui/charts/delete-frames', $this->uiForm(['preview_ids' => [$preview]]))->assertRedirect();
+
+        $db   = \Config\Database::connect();
+        $task = $db->table('tasks')->where('type', 'DELETE_FRAME')->get()->getRowArray();
+        $this->assertNotNull($task);
+        $item = $db->table('task_items')->where('task_id', $task['id'])->get()->getRowArray();
+        $this->assertSame($frameId, $item['frame_id']);
+
+        $this->postProgress($task['id'], $item['id'], 'DONE')->assertStatus(200);
+
+        $this->assertSame(0, $db->table('source_charts')->where('task_item_id', $preview)->countAllResults());
+        // A file whose name merely ends the same way is another frame's preview.
+        $this->assertSame(1, $db->table('source_charts')->where('task_item_id', $other)->countAllResults());
+        @unlink(WRITEPATH . 'uploads/charts/' . $other . '.png');
+    }
+
+    /** The preview stays until the pipeline is done: checking it again must not queue the frame twice. */
+    public function testAFrameAlreadyQueuedForDeletionIsNotQueuedAgain(): void
+    {
+        $this->createFrame(['filename' => 'twice.fits']);
+        $preview = $this->createPreviewOf('twice.fits');
+
+        $this->post('/ui/charts/delete-frames', $this->uiForm(['preview_ids' => [$preview]]))->assertRedirect();
+        $this->post('/ui/charts/delete-frames', $this->uiForm(['preview_ids' => [$preview]]))->assertRedirect();
+
+        $db = \Config\Database::connect();
+        $this->assertSame(1, $db->table('tasks')->where('type', 'DELETE_FRAME')->countAllResults());
+        @unlink(WRITEPATH . 'uploads/charts/' . $preview . '.png');
+    }
 }
