@@ -109,6 +109,7 @@ $routes->group('ui', ['filter' => ['csrf', 'ui_auth']], static function (RouteCo
     $routes->get('charts/(:segment)/image', 'Web\ChartsController::image/$1');
     $routes->post('charts/review', 'Web\ChartsController::review');
     $routes->post('charts/delete', 'Web\ChartsController::deleteSelected');
+    $routes->post('charts/delete-frames', 'Web\ChartsController::deleteFrames');
     $routes->post('charts/(:segment)/delete', 'Web\ChartsController::delete/$1');
 
     $routes->get('anomalies', 'Web\AnomaliesController::index');

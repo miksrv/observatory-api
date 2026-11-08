@@ -202,4 +202,35 @@ class SourceChartModel extends BaseModel
 
         return $this->where('task_item_id', $taskItemId)->first();
     }
+
+    /**
+     * Delete every PREVIEW_CATALOG_MATCH chart (task_item-keyed) made of the FITS file
+     * `$filename`, rows and image files. A preview is tied to the task item that rendered it, not
+     * to a frame — without this, deleting a bad frame left its preview in the gallery for good.
+     *
+     * @return int how many charts were deleted
+     */
+    public function deletePreviewsOfFile(string $filename): int
+    {
+        $charts = $this->select('source_charts.id, source_charts.task_item_id')
+            ->join('task_items', 'task_items.id = source_charts.task_item_id', 'inner')
+            ->where('task_items.filename', $filename)
+            ->findAll();
+
+        if ($charts === []) {
+            return 0;
+        }
+
+        $this->whereIn('id', array_column($charts, 'id'))->delete();
+
+        foreach ($charts as $chart) {
+            // A task_item-keyed chart's file never carries a style suffix (class docblock).
+            $path = WRITEPATH . 'uploads/charts/' . $chart['task_item_id'] . '.png';
+            if (is_file($path)) {
+                unlink($path);
+            }
+        }
+
+        return count($charts);
+    }
 }

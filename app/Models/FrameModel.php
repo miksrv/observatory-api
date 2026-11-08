@@ -121,7 +121,9 @@ class FrameModel extends BaseModel
      * Wrapped in a transaction: either the frame and every now-orphaned
      * source disappear together, or nothing changes.
      *
-     * @return array{deleted: bool, purged_source_ids: string[]}
+     * Also deletes the frame's PREVIEW_CATALOG_MATCH charts (SourceChartModel::deletePreviewsOfFile()).
+     *
+     * @return array{deleted: bool, purged_source_ids: string[], deleted_previews: int}
      *
      * @throws \RuntimeException if the transaction fails
      */
@@ -131,6 +133,7 @@ class FrameModel extends BaseModel
         $sourceModel      = new SourceModel();
 
         $sourceIds = $frameSourceModel->getSourceIdsForFrame($frameId);
+        $filename  = $this->find($frameId)['filename'] ?? null;
 
         $this->db->transStart();
 
@@ -149,9 +152,14 @@ class FrameModel extends BaseModel
             throw new \RuntimeException("Failed to delete frame {$frameId} (transaction rolled back).");
         }
 
+        // Its catalog previews go with it (after the commit: they delete files too). A frame
+        // deleted from the charts gallery would otherwise leave its preview there for good.
+        $previews = $filename !== null ? (new SourceChartModel())->deletePreviewsOfFile($filename) : 0;
+
         return [
             'deleted'           => (bool) $deleted,
             'purged_source_ids' => $purgedSourceIds,
+            'deleted_previews'  => $previews,
         ];
     }
 }
