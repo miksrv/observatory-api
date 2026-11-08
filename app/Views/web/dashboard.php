@@ -36,10 +36,10 @@ $registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 
 </div>
 
 <div class="metrics">
-    <a class="panel metric" href="/ui/frames">
+    <a class="panel metric" href="/ui/frames<?= $stats['frames_problems'] > 0 ? '?processing=problems' : '' ?>">
         <div class="metric-top"><span class="eyebrow">Кадры</span><span class="metric-icon"><?= ui_icon('frames') ?></span></div>
         <div class="metric-value"><?= ui_num($stats['frames']) ?></div>
-        <div class="metric-foot">зарегистрировано FITS</div>
+        <div class="metric-foot">зарегистрировано FITS<?= $stats['frames_problems'] > 0 ? ' · <span style="color: var(--amber)">' . ui_num($stats['frames_problems']) . ' с проблемами обработки</span>' : '' ?></div>
     </a>
     <a class="panel metric" href="/ui/sources">
         <div class="metric-top"><span class="eyebrow">Источники</span><span class="metric-icon cyan"><?= ui_icon('sources') ?></span></div>

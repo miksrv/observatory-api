@@ -240,6 +240,60 @@ if (! function_exists('ui_qc')) {
     }
 }
 
+if (! function_exists('ui_processing_issue')) {
+    /**
+     * One `frames.processing_issues` code (observatory-pipeline's _processing_report()) in words.
+     * An unknown code — a newer pipeline's — is shown as is.
+     */
+    function ui_processing_issue(string $code): string
+    {
+        if (str_starts_with($code, 'catalog_failed:')) {
+            return substr($code, strlen('catalog_failed:')) . ' не ответил';
+        }
+
+        return match ($code) {
+            'astrometry_failed'       => 'astap не решил кадр',
+            'calibration_failed'      => 'нет нуль-пункта',
+            'subtraction_error'       => 'ошибка вычитания',
+            'catalog_matching_error'  => 'ошибка сопоставления',
+            'photometry_error'        => 'ошибка фотометрии',
+            'forced_photometry_error' => 'ошибка forced photometry',
+            default                   => $code,
+        };
+    }
+}
+
+if (! function_exists('ui_processing')) {
+    /**
+     * A frame's processing outcome (frames.processing_status + processing_issues) as a chip, with
+     * the issues spelled out under it. NULL = registered by a pipeline older than 1.7.0.
+     */
+    function ui_processing(?string $status, ?string $issuesJson): string
+    {
+        if ($status === null || $status === '') {
+            return '<span class="dim" title="Нет данных: кадр обработан pipeline старше 1.7.0 — перезапустите ANALYZE">—</span>';
+        }
+
+        [$label, $tone, $title] = match ($status) {
+            'OK'       => ['OK', 'green', 'Все шаги анализа выполнены'],
+            'DEGRADED' => ['частично', 'amber', 'Кадр решён, но часть анализа не выполнена — перезапустите ANALYZE'],
+            'FAILED'   => ['сбой', 'red', 'QC пройден, но кадр не решён — источников нет'],
+            'SKIPPED'  => ['пропущен', 'gray', 'QC отклонил кадр — анализ не выполнялся'],
+            default    => [$status, 'gray', ''],
+        };
+
+        $issues = json_decode((string) $issuesJson, true);
+        $issues = is_array($issues) ? array_map('ui_processing_issue', array_filter($issues, 'is_string')) : [];
+
+        $html = ui_chip($label, $tone, $title . ($issues !== [] ? ': ' . implode(', ', $issues) : ''), true);
+        if ($issues !== []) {
+            $html .= '<span class="issues"><span>' . implode('</span><span>', array_map('esc', $issues)) . '</span></span>';
+        }
+
+        return $html;
+    }
+}
+
 if (! function_exists('ui_pipeline_status')) {
     /** [css tone, label] for PipelineModel's online / stale / offline / revoked. */
     function ui_pipeline_status(string $status): array

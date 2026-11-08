@@ -52,7 +52,7 @@ class SourcesController extends BaseWebController
         }
 
         if ($search !== '') {
-            $model = $model->like('catalog_id', $search);
+            $model = $model->like('catalog_id', UiListQuery::likeLiteral($search));
         }
 
         $list->paginate($model->countAllResults(false));

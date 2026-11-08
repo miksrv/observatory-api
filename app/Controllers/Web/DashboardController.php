@@ -41,6 +41,8 @@ class DashboardController extends BaseWebController
 
         $stats = [
             'frames'    => (new FrameModel())->countAllResults(),
+            // Analysed incompletely (observatory-pipeline 1.7.0+): worth a re-run of ANALYZE.
+            'frames_problems' => (new FrameModel())->whereIn('processing_status', ['DEGRADED', 'FAILED'])->countAllResults(),
             'sources'   => (new SourceModel())->countAllResults(),
             'anomalies' => $unreviewed()->countAllResults(),
             'alerts'    => $unreviewed()->where('anomalies.is_alert', 1)->countAllResults(),

@@ -299,6 +299,62 @@
         if (e.target.matches('select[data-autosubmit]')) e.target.form.submit();
     });
 
+    /* side filter panel: opened by «Фильтры» or an applied filter's badge, closed by its ×, the
+       scrim or Escape (unapplied edits are dropped); «Очистить» only empties the fields — like
+       every edit there, it takes effect on «Применить». Without JS all of these are links. */
+    $$('[data-filter-scope]').forEach(function (scope) {
+        var drawer = $('.filter-drawer', scope);
+        if (!drawer) return;
+        var form = $('form', drawer);
+        var toggles = $$('[aria-controls="' + drawer.id + '"]', scope);
+        function setOpen(open, focusName) {
+            if (open) {
+                drawer.setAttribute('data-open', '');
+            } else {
+                drawer.removeAttribute('data-open');
+                form.reset();
+            }
+            toggles.forEach(function (b) {
+                b.setAttribute('aria-expanded', open ? 'true' : 'false');
+            });
+            if (open) {
+                var field = (focusName && $('[data-filter="' + focusName + '"]', drawer)) || $('[data-filter]', drawer);
+                if (field) field.focus({ preventScroll: true });
+            }
+        }
+        scope.addEventListener('click', function (e) {
+            var opener = e.target.closest('[data-filters-open]');
+            if (opener) {
+                if (e.metaKey || e.ctrlKey) return;
+                e.preventDefault();
+                setOpen(true, opener.dataset.focus);
+                return;
+            }
+            if (e.target.closest('[data-filters-close]')) {
+                e.preventDefault();
+                setOpen(false);
+                return;
+            }
+            if (e.target.closest('[data-filters-clear]')) {
+                e.preventDefault();
+                $$('[data-filter]', drawer).forEach(function (f) {
+                    f.value = '';
+                });
+            }
+        });
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && drawer.hasAttribute('data-open') && !$('dialog[open]')) setOpen(false);
+        });
+        // Opened from a ?filters=1 link (no JS at the time, or a reload): keep the panel, drop the
+        // flag from the address so a later reload or a shared link shows the list itself.
+        if (window.history && history.replaceState && /[?&]filters=1(&|$)/.test(location.search)) {
+            var params = new URLSearchParams(location.search);
+            params.delete('filters');
+            var query = params.toString();
+            history.replaceState(null, '', location.pathname + (query ? '?' + query : '') + location.hash);
+        }
+    });
+
     /* the task type's description under the frames' action bar */
     $$('select[data-type-hint]').forEach(function (sel) {
         var out = $(sel.dataset.typeHint);

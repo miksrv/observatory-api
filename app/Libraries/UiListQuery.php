@@ -16,6 +16,16 @@ final class UiListQuery
 {
     public const PER_PAGE = [25, 50, 100, 200];
 
+    /**
+     * `$text` for a list's "contains" search through the query builder's like(), with `%` and `_`
+     * matched literally. CI's like() appends `ESCAPE '!'` but leaves wildcards in the value as
+     * they are — and file names and catalog ids are full of `_`.
+     */
+    public static function likeLiteral(string $text): string
+    {
+        return str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $text);
+    }
+
     public readonly string $sort;
     public readonly string $dir;
     public readonly int $perPage;

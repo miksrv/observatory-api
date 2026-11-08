@@ -182,6 +182,17 @@ final class UiListsTest extends DatabaseTestCase
         $this->assertLessThan(strpos($body, '>few<'), strpos($body, '>many<'));
     }
 
+    public function testSourcesSearchMatchesUnderscoreLiterally(): void
+    {
+        $this->source('J1_2');
+        $this->source('J1x2');
+
+        $body = $this->get('/ui/sources?search=' . urlencode('1_2'))->response()->getBody();
+
+        $this->assertStringContainsString('>J1_2<', $body);
+        $this->assertStringNotContainsString('>J1x2<', $body);
+    }
+
     // -------------------------------------------------------------------------
     // Anomalies: pages of groups, not of anomalies
     // -------------------------------------------------------------------------
