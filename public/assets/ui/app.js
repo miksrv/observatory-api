@@ -157,7 +157,7 @@
             return !b.hasAttribute('data-empty');
         })[0];
         document.body.classList.toggle('selbar-open', !!bar);
-        $$('.page.fill .table-wrap').forEach(function (wrap) {
+        $$('.page.fill .table-wrap, .page.fill .gallery').forEach(function (wrap) {
             wrap.style.paddingBottom = '';
             // On a phone the page scrolls as a whole (not one window high): nothing to pad.
             if (!bar || getComputedStyle(wrap.closest('.page')).display !== 'flex') return;
@@ -299,8 +299,8 @@
         if (e.target.matches('select[data-autosubmit]')) e.target.form.submit();
     });
 
-    /* side filter panel: opened by «Фильтры» or an applied filter's badge, closed by its ×, the
-       scrim or Escape (unapplied edits are dropped); «Очистить» only empties the fields — like
+    /* side filter panel: opened by «Фильтры» or an applied filter's badge, closed by «Фильтры»
+       again, its ×, the scrim or Escape (unapplied edits are dropped); «Очистить» only empties the fields — like
        every edit there, it takes effect on «Применить». Without JS all of these are links. */
     $$('[data-filter-scope]').forEach(function (scope) {
         var drawer = $('.filter-drawer', scope);
@@ -331,6 +331,11 @@
             if (link) {
                 if (e.metaKey || e.ctrlKey) return;
                 e.preventDefault();
+                // «Фильтры» toggles; a badge always opens (at its own field).
+                if (drawer.hasAttribute('data-open') && toggles.indexOf(link) !== -1) {
+                    setOpen(false);
+                    return;
+                }
                 opener = link;
                 setOpen(true, link.dataset.focus);
                 return;

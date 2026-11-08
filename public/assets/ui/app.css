@@ -1243,7 +1243,7 @@ input[type='datetime-local'].input {
 }
 
 /* quick filter bar + side filter panel (frames): the bar keeps one quick filter, the badges of
-   the applied panel filters and the «Фильтры» button; the panel slides in from the left over the
+   the applied panel filters and the «Фильтры» button; the panel slides in from the right over the
    table and applies only on «Применить». Without JS the button and badges are ?filters=1 links. */
 .quickbar .quick {
     display: flex;
@@ -1349,14 +1349,14 @@ input[type='datetime-local'].input {
     position: absolute;
     top: 0;
     bottom: 0;
-    left: 0;
+    right: 0;
     z-index: 20;
     display: flex;
     width: min(340px, 100%);
     background: var(--surface);
-    border-right: 1px solid var(--line);
+    border-left: 1px solid var(--line);
     box-shadow: var(--shadow-lg);
-    transform: translateX(-104%);
+    transform: translateX(104%);
     visibility: hidden;
     transition:
         transform 0.2s ease,
@@ -1510,6 +1510,34 @@ input[type='datetime-local'].input {
 .page.fill .table-wrap {
     flex: 1;
     min-height: 160px;
+}
+/* Full-bleed list pages (.page.fill.bleed — frames, sources, anomalies): the panel is the whole
+   content area, edge to edge and top to bottom — no page head, gutter, frame, shadow or rounding. */
+.page.bleed {
+    max-width: none;
+    padding: 0;
+}
+.page.bleed > .notice {
+    margin: 12px;
+}
+.page.bleed > .panel {
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+}
+/* The charts gallery is its list: on a one-window page it scrolls inside, like a table. */
+.page.fill .gallery {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    align-content: start;
+    /* A fixed-height grid would squeeze its rows to fit: every card keeps its own height. */
+    grid-auto-rows: max-content;
+}
+.page.bleed .filters,
+.page.bleed .panel > .table-wrap:last-child,
+.page.bleed .panel-foot {
+    border-radius: 0;
 }
 /* A table that ends its panel (no foot under it): the last row's hover stays inside the corners. */
 .panel > .table-wrap:last-child {
@@ -2135,6 +2163,10 @@ body.selbar-open .page.fill {
     background-color: var(--rail-bg-2);
     border-color: var(--rail-line);
     color: var(--rail-text);
+}
+/* A bar with many actions (charts) keeps them on one line. */
+.selbar input.input.narrow {
+    width: 180px;
 }
 .selbar input.input::placeholder {
     color: var(--rail-muted);

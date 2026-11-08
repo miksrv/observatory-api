@@ -24,6 +24,7 @@ $this->extend('web/layout');
 $this->setVar('title', 'Кадры');
 $this->setVar('active', 'frames');
 $this->setVar('fill', true);
+$this->setVar('bleed', true);
 
 $processingLabels = [
     $processingProblems => 'С проблемами',
@@ -63,13 +64,6 @@ $matchFilter = $filters;
 ?>
 <?= $this->section('content') ?>
 
-<div class="page-head">
-    <div>
-        <h1>Кадры</h1>
-        <p class="sub">Зарегистрированные FITS-кадры. Отметьте нужные, чтобы поставить задачу — она уйдёт тому pipeline, который хранит файл кадра.</p>
-    </div>
-</div>
-
 <div class="panel" data-select-scope data-match-total="<?= (int) $list->total ?>" data-filter-scope>
     <div class="filters quickbar">
         <form class="quick" method="get" action="/ui/frames">
@@ -101,7 +95,7 @@ $matchFilter = $filters;
 
         <div class="actions">
             <?php if ($filtered): ?><a class="btn ghost" href="/ui/frames"><?= ui_icon('x', 14) ?>Сбросить</a><?php endif; ?>
-            <a class="btn<?= $panelFilters !== [] ? ' active' : '' ?>" href="<?= esc($openUrl, 'attr') ?>" data-filters-open aria-controls="frames-filters" aria-expanded="<?= $filtersOpen ? 'true' : 'false' ?>">
+            <a class="btn<?= $panelFilters !== [] ? ' active' : '' ?>" href="<?= esc($filtersOpen ? $closeUrl : $openUrl, 'attr') ?>" data-filters-open aria-controls="frames-filters" aria-expanded="<?= $filtersOpen ? 'true' : 'false' ?>">
                 <?= ui_icon('settings', 14) ?>Фильтры<?php if ($panelFilters !== []): ?><span class="count"><?= count($panelFilters) ?></span><?php endif; ?>
             </a>
         </div>
@@ -127,7 +121,7 @@ $matchFilter = $filters;
                                 <option value="<?= esc($value, 'attr') ?>" <?= $value === $filters['processing'] ? 'selected' : '' ?>><?= esc($label) ?></option>
                             <?php endforeach; ?>
                         </select>
-                        <span class="help">«С проблемами» — кадры, проанализированные не полностью (каталог не ответил, нет нуль-пункта, astap не решил): их стоит перезапустить через ANALYZE.</span>
+                        <span class="help">«С проблемами» — кадры, проанализированные не полностью (каталог не ответил, нет нуль-пункта, астрометрия не удалась): их стоит перезапустить задачей «Анализ кадра».</span>
                     </label>
                     <label class="field">
                         <span class="label">QC</span>
@@ -246,7 +240,7 @@ $matchFilter = $filters;
             <select class="input" name="type" data-type-hint="#type-hint" aria-label="Тип задачи">
                 <?php foreach ($taskTypes as $type): ?>
                     <option value="<?= esc($type, 'attr') ?>" data-hint="<?= esc(ui_task_type_hint($type), 'attr') ?>"
-                        <?= $type === 'DELETE_FRAME' ? 'data-confirm="Файлы {n} кадр(ов) уйдут в FITS_REJECTED, а сами кадры со всеми наблюдениями и аномалиями будут удалены из базы." data-confirm-title="Удалить кадры?" data-confirm-ok="Удалить" data-danger' : '' ?>><?= esc($type) ?></option>
+                        <?= $type === 'DELETE_FRAME' ? 'data-confirm="Файлы {n} кадр(ов) уйдут в FITS_REJECTED, а сами кадры со всеми наблюдениями и аномалиями будут удалены из базы." data-confirm-title="Удалить кадры?" data-confirm-ok="Удалить" data-danger' : '' ?>><?= esc(ui_task_type($type)) ?></option>
                 <?php endforeach; ?>
             </select>
             <span class="hint" id="type-hint"></span>

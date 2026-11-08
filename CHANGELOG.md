@@ -8,6 +8,11 @@
 - Web UI: the frames list has an «Обработка» column and filter — «С проблемами» lists the frames to re-run `ANALYZE` on, and the dashboard counts them
 - Web UI: the frames list keeps only the «Объект» filter in its bar; every other filter is in a side panel opened by «Фильтры» and applied with «Применить». Applied filters show as badges after «Объект» — a badge opens the panel, its × drops that filter
 
+- Web UI: a catalog preview (PREVIEW_CATALOG_MATCH) card links to its frame, and «Удалить кадры» in the charts gallery queues DELETE_FRAME for the frames of the checked previews — a frame seen bad in its preview is deleted from there; «Удалить графики» deletes checked previews too
+- Frames: a deleted frame takes its catalog previews with it (rows and images) — they used to stay in the gallery for good
+- Web UI: the frames, sources, anomalies, charts and tasks pages give the whole content area to the list — no page heading, gutter or frame
+- Web UI: task types are shown by name («Анализ кадра», «Поиск аномалий», «Превью каталога», …) in the task lists, the task page, the dashboard, the task type choice and the messages; the API value stays in tooltips and on the task page
+
 ### Patch Changes
 
 - Web UI: the frames list can be searched by any part of the file name (also honoured by «select every frame matching the filter»)
