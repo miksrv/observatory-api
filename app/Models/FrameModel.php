@@ -154,7 +154,15 @@ class FrameModel extends BaseModel
 
         // Its catalog previews go with it (after the commit: they delete files too). A frame
         // deleted from the charts gallery would otherwise leave its preview there for good.
-        $previews = $filename !== null ? (new SourceChartModel())->deletePreviewsOfFile($filename) : 0;
+        $previews = 0;
+        if ($filename !== null) {
+            try {
+                $previews = (new SourceChartModel())->deletePreviewsOfFile($filename);
+            } catch (\Throwable $e) {
+                // The frame is gone; only its previews stay behind — not a failed frame deletion.
+                log_message('error', "Frame {$frameId} deleted, but its catalog previews were not: " . $e->getMessage());
+            }
+        }
 
         return [
             'deleted'           => (bool) $deleted,

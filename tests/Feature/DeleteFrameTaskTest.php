@@ -473,4 +473,41 @@ final class DeleteFrameTaskTest extends DatabaseTestCase
         $this->assertStringContainsString('name="preview_ids[]" value="' . $preview . '"', $body);
         @unlink(WRITEPATH . 'uploads/charts/' . $preview . '.png');
     }
+
+    /** A preview queued by the pipeline itself carries the full FITS path; the frame, the basename. */
+    public function testPreviewWithAFullPathFindsAndFollowsItsFrame(): void
+    {
+        $frameId = $this->createFrame(['filename' => 'M51_bad.fits']);
+        $preview = $this->createPreviewOf('/fits/archive/M51/L/M51_bad.fits');
+        $other   = $this->createPreviewOf('/fits/archive/M51/L/XM51_bad.fits');
+
+        $this->post('/ui/charts/delete-frames', $this->uiForm(['preview_ids' => [$preview]]))->assertRedirect();
+
+        $db   = \Config\Database::connect();
+        $task = $db->table('tasks')->where('type', 'DELETE_FRAME')->get()->getRowArray();
+        $this->assertNotNull($task);
+        $item = $db->table('task_items')->where('task_id', $task['id'])->get()->getRowArray();
+        $this->assertSame($frameId, $item['frame_id']);
+
+        $this->postProgress($task['id'], $item['id'], 'DONE')->assertStatus(200);
+
+        $this->assertSame(0, $db->table('source_charts')->where('task_item_id', $preview)->countAllResults());
+        // A file whose name merely ends the same way is another frame's preview.
+        $this->assertSame(1, $db->table('source_charts')->where('task_item_id', $other)->countAllResults());
+        @unlink(WRITEPATH . 'uploads/charts/' . $other . '.png');
+    }
+
+    /** The preview stays until the pipeline is done: checking it again must not queue the frame twice. */
+    public function testAFrameAlreadyQueuedForDeletionIsNotQueuedAgain(): void
+    {
+        $this->createFrame(['filename' => 'twice.fits']);
+        $preview = $this->createPreviewOf('twice.fits');
+
+        $this->post('/ui/charts/delete-frames', $this->uiForm(['preview_ids' => [$preview]]))->assertRedirect();
+        $this->post('/ui/charts/delete-frames', $this->uiForm(['preview_ids' => [$preview]]))->assertRedirect();
+
+        $db = \Config\Database::connect();
+        $this->assertSame(1, $db->table('tasks')->where('type', 'DELETE_FRAME')->countAllResults());
+        @unlink(WRITEPATH . 'uploads/charts/' . $preview . '.png');
+    }
 }

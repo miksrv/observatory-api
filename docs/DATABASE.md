@@ -129,7 +129,7 @@ CLI commands, see [`../README.md`](../README.md).
 | `processing_status` | ENUM('OK','DEGRADED','FAILED','SKIPPED') NULL | What the analysis came to beyond QC (`POST /frames`' `processing`, observatory-pipeline 1.7.0+). NULL = unknown (an older pipeline). Replaced on every re-registration |
 | `processing_issues` | TEXT NULL | JSON array of issue codes (`catalog_failed:Gaia DR3`, `calibration_failed`, …) |
 | `astrometry_solved` | TINYINT(1) NULL | |
-| `catalog_status` | TEXT NULL | JSON object catalog → `ok`/`failed`/`disabled`/`not_applicable` |
+| `catalog_status` | TEXT NULL | JSON object catalog → `ok`/`failed`/`error`/`disabled`/`not_applicable` (stored as sent) |
 | `calibration` | ENUM('calibrated','skipped','failed') NULL | |
 | `zero_point`, `zero_point_err` | FLOAT NULL | The frame's photometric zero point and its scatter |
 | `subtraction_performed` | TINYINT(1) NULL | |

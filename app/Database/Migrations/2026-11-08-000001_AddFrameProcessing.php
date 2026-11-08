@@ -39,7 +39,7 @@ class AddFrameProcessing extends Migration
                 'null'       => true,
                 'after'      => 'processing_issues',
             ],
-            // JSON object catalog => ok | failed | disabled | not_applicable.
+            // JSON object catalog => ok | failed | error | disabled | not_applicable (stored as sent).
             'catalog_status' => [
                 'type'  => 'TEXT',
                 'null'  => true,

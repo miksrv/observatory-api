@@ -276,14 +276,16 @@ class ChartsController extends BaseWebController
             return redirect()->back()->with('error', 'Выберите хотя бы одно превью кадра («Превью каталога»).');
         }
 
-        $filenames = array_values(array_unique(array_filter(array_column(
+        // Frames hold the basename; a preview's task item may hold a full path (a task the
+        // pipeline queued itself).
+        $filenames = array_values(array_unique(array_map('basename', array_filter(array_column(
             (new SourceChartModel())
                 ->select('task_items.filename')
                 ->join('task_items', 'task_items.id = source_charts.task_item_id', 'inner')
                 ->whereIn('source_charts.task_item_id', $previewIds)
                 ->findAll(),
             'filename'
-        ))));
+        )))));
 
         $frames = $filenames === []
             ? []
@@ -291,6 +293,27 @@ class ChartsController extends BaseWebController
 
         if ($frames === []) {
             return redirect()->back()->with('error', 'Кадры выбранных превью не зарегистрированы — удалять нечего. Само превью можно удалить кнопкой «Удалить графики».');
+        }
+
+        // A preview stays in the gallery until the pipeline has deleted its frame: checking it
+        // again must not queue the same frame twice (the second item would fail on a frame gone).
+        $queued = array_column(
+            db_connect()->table('task_items')
+                ->select('task_items.frame_id')
+                ->join('tasks', 'tasks.id = task_items.task_id', 'inner')
+                ->where('tasks.type', 'DELETE_FRAME')
+                ->whereIn('tasks.status', ['PENDING', 'RUNNING'])
+                ->whereIn('task_items.status', ['PENDING', 'RUNNING'])
+                ->whereIn('task_items.frame_id', array_column($frames, 'id'))
+                ->get()->getResultArray(),
+            'frame_id'
+        );
+        $already = count($frames);
+        $frames  = array_values(array_filter($frames, static fn (array $f): bool => ! in_array($f['id'], $queued, true)));
+        $already -= count($frames);
+
+        if ($frames === []) {
+            return redirect()->back()->with('success', 'Эти кадры уже стоят в очереди на удаление — превью исчезнут, когда pipeline выполнит задачу.');
         }
 
         $itemsByPipeline = [];
@@ -303,13 +326,14 @@ class ChartsController extends BaseWebController
             return redirect()->back()->with('error', 'Не удалось создать задачу: ' . implode(', ', $taskModel->errors()));
         }
 
-        $missing = count($filenames) - count($frames);
+        $missing = count($filenames) - count($frames) - $already;
 
         return redirect()->back()->with(
             'success',
             'Поставлено на удаление: ' . count($frames) . ' ' . ui_plural(count($frames), 'кадр', 'кадра', 'кадров')
             . ' (задача «Удаление кадра»). Их превью исчезнут, когда pipeline её выполнит.'
             . ($missing > 0 ? ' Не зарегистрировано и пропущено: ' . $missing . '.' : '')
+            . ($already > 0 ? ' Уже в очереди на удаление: ' . $already . '.' : '')
         );
     }
 

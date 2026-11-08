@@ -4,10 +4,9 @@
 
 ### Minor Changes
 
-- Frames: `POST /frames` takes the analysis outcome beyond QC as `processing` — `OK` / `DEGRADED` / `FAILED` / `SKIPPED`, the issues (a catalog that did not answer, no zero point, no plate solve, a step that raised), each catalog's outcome, the zero point and the subtraction reference count — stored on the frame (migration `AddFrameProcessing`: run `php spark migrate`) and echoed by `GET /frames` (requires observatory-pipeline 1.7.0 to be filled in; frames registered earlier show «нет данных» until re-analysed)
+- Frames: `POST /frames` takes the analysis outcome beyond QC as `processing` — `OK` / `DEGRADED` / `FAILED` / `SKIPPED`, the issues (a catalog that did not answer, no zero point, no plate solve, a step that raised), each catalog's outcome, the zero point and the subtraction reference count — stored on the frame (migration `AddFrameProcessing`: run `php spark migrate` right after the deploy — until then `POST /frames` fails and no frame can be registered) and echoed by `GET /frames` (requires observatory-pipeline 1.7.0 to be filled in; frames registered earlier show «нет данных» until re-analysed)
 - Web UI: the frames list has an «Обработка» column and filter — «С проблемами» lists the frames to re-run `ANALYZE` on, and the dashboard counts them
 - Web UI: the frames list keeps only the «Объект» filter in its bar; every other filter is in a side panel opened by «Фильтры» and applied with «Применить». Applied filters show as badges after «Объект» — a badge opens the panel, its × drops that filter
-
 - Web UI: a catalog preview (PREVIEW_CATALOG_MATCH) card links to its frame, and «Удалить кадры» in the charts gallery queues DELETE_FRAME for the frames of the checked previews — a frame seen bad in its preview is deleted from there; «Удалить графики» deletes checked previews too
 - Frames: a deleted frame takes its catalog previews with it (rows and images) — they used to stay in the gallery for good
 - Web UI: the frames, sources, anomalies, charts and tasks pages give the whole content area to the list — no page heading, gutter or frame

@@ -212,9 +212,14 @@ class SourceChartModel extends BaseModel
      */
     public function deletePreviewsOfFile(string $filename): int
     {
+        // The frame holds the basename; a preview's task item holds what its task was given —
+        // the basename from the UI, a full FITS path from a task the pipeline queued itself.
         $charts = $this->select('source_charts.id, source_charts.task_item_id')
             ->join('task_items', 'task_items.id = source_charts.task_item_id', 'inner')
-            ->where('task_items.filename', $filename)
+            ->groupStart()
+                ->where('task_items.filename', $filename)
+                ->orLike('task_items.filename', '/' . \App\Libraries\UiListQuery::likeLiteral($filename), 'before')
+            ->groupEnd()
             ->findAll();
 
         if ($charts === []) {

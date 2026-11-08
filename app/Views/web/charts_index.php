@@ -132,7 +132,7 @@ $styleTone = static fn (string $style): string => match ($style) {
                         <?php if ($chart['source_id']): ?>
                             <a class="btn sm grow" href="/ui/anomalies?source_id=<?= esc($chart['source_id'], 'url') ?>"><?= ui_icon('anomalies', 14) ?>Аномалии</a>
                         <?php elseif ($chart['item_filename']): ?>
-                            <a class="btn sm grow" href="/ui/frames?search=<?= esc($chart['item_filename'], 'url') ?>" title="Этот кадр в списке кадров"><?= ui_icon('frames', 14) ?>Кадр</a>
+                            <a class="btn sm grow" href="/ui/frames?search=<?= esc(basename($chart['item_filename']), 'url') ?>" title="Этот кадр в списке кадров"><?= ui_icon('frames', 14) ?>Кадр</a>
                             <?php if ($chart['task_id']): ?>
                                 <a class="btn icon sm" href="/ui/tasks/<?= esc($chart['task_id'], 'url') ?>" title="К задаче" aria-label="К задаче"><?= ui_icon('tasks', 15) ?></a>
                             <?php endif; ?>
@@ -173,7 +173,7 @@ $styleTone = static fn (string $style): string => match ($style) {
             </button>
             <span class="sep"></span>
             <button class="btn" type="submit" form="merge-form" data-min-select="2" data-needs="source"
-                    data-confirm="{n} источник(ов) станут одним новым. Их графики и аномалии будут удалены — потом поставьте «Поиск аномалий» для затронутых кадров и «Построение графиков» для нового источника."
+                    data-confirm="Выбранные источники станут одним новым. Их графики и аномалии будут удалены — потом поставьте «Поиск аномалий» для затронутых кадров и «Построение графиков» для нового источника."
                     data-confirm-title="Объединить источники?" data-confirm-ok="Объединить" data-danger>
                 <?= ui_icon('merge', 14) ?>Объединить
             </button>

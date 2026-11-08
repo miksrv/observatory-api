@@ -1340,9 +1340,16 @@ input[type='datetime-local'].input {
     visibility: hidden;
 }
 /* A phone scrolls the page as a whole, so the table can be shorter than the open panel. */
+/* A phone scrolls the page as a whole, so a panel as tall as the table would put «Применить»
+   a long scroll away: there the panel and its scrim are fixed to the screen, above the topbar. */
 @media (max-width: 960px) {
-    .panel > .filter-host:has(.filter-drawer[data-open]) {
-        min-height: 520px;
+    .filter-host .filter-drawer {
+        position: fixed;
+        z-index: 41;
+    }
+    .filter-host .filter-scrim {
+        position: fixed;
+        z-index: 40;
     }
 }
 .filter-drawer {
@@ -1511,7 +1518,7 @@ input[type='datetime-local'].input {
     flex: 1;
     min-height: 160px;
 }
-/* Full-bleed list pages (.page.fill.bleed — frames, sources, anomalies): the panel is the whole
+/* Full-bleed list pages (.page.fill.bleed — frames, sources, anomalies, charts, tasks): the panel is the whole
    content area, edge to edge and top to bottom — no page head, gutter, frame, shadow or rounding. */
 .page.bleed {
     max-width: none;
@@ -2133,6 +2140,10 @@ body.selbar-open .page {
    the table's last rows (a narrow window wraps the bar), app.js pads the table by just that much. */
 body.selbar-open .page.fill {
     padding-bottom: 20px;
+}
+/* …but a full-bleed list keeps reaching the bottom edge: the bar floats over its foot. */
+body.selbar-open .page.fill.bleed {
+    padding-bottom: 0;
 }
 .selbar .count {
     display: inline-flex;
@@ -2773,7 +2784,8 @@ dialog::backdrop {
         transform: translateY(12px);
     }
     body.selbar-open .page,
-    body.selbar-open .page.fill {
+    body.selbar-open .page.fill,
+    body.selbar-open .page.fill.bleed {
         padding-bottom: 150px;
     }
     .selbar select.input {

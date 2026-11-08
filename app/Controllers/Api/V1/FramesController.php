@@ -1440,7 +1440,7 @@ class FramesController extends BaseApiController
         }
 
         foreach (['zero_point', 'zero_point_err', 'subtraction_reference_count'] as $field) {
-            if (isset($processing[$field]) && (! is_numeric($processing[$field]) || ! is_finite((float) $processing[$field]))) {
+            if (isset($processing[$field]) && (! is_numeric($processing[$field]) || ! is_finite((float) $processing[$field]) || abs((float) $processing[$field]) > 1e30)) {
                 return "processing.{$field} must be a finite number or null";
             }
         }
