@@ -208,6 +208,12 @@ final class UiFramesSelectionTest extends DatabaseTestCase
         $open = (string) $this->get('/ui/frames?object=M51&filters=1')->getBody();
         $this->assertMatchesRegularExpression('/<aside class="filter-drawer"[^>]*data-open/', $open);
         $this->assertStringNotContainsString('class="applied"', $open);
+        // The open flag is how the page was opened, not what it lists: sort links drop it.
+        preg_match_all('/href="([^"]*sort=[^"]*)"/', html_entity_decode($open, ENT_QUOTES | ENT_HTML5), $sortLinks);
+        $this->assertNotEmpty($sortLinks[1]);
+        foreach ($sortLinks[1] as $href) {
+            $this->assertStringNotContainsString('filters=1', $href);
+        }
     }
 
     public function testAllMatchingCreatesTasksForEveryMatchingFrameAcrossPages(): void

@@ -149,6 +149,12 @@ final class UiListQuery
     }
 
     /**
+     * Query params that describe how the page was opened, not what it lists (`filters=1`: the
+     * frames side panel starts open) — never carried into sort, page or kept-filter links.
+     */
+    private const TRANSIENT_PARAMS = ['filters'];
+
+    /**
      * The current query string's parameters other than the given ones — for the per-page form,
      * which must keep the filter and the sort as hidden fields.
      *
@@ -156,7 +162,7 @@ final class UiListQuery
      */
     public function keptParams(string ...$except): array
     {
-        $params = array_diff_key((array) $this->request->getGet(), array_flip($except));
+        $params = array_diff_key((array) $this->request->getGet(), array_flip([...$except, ...self::TRANSIENT_PARAMS]));
 
         return array_filter($params, static fn ($v): bool => is_string($v) && $v !== '');
     }
@@ -169,7 +175,7 @@ final class UiListQuery
     /** @param array<string, scalar|null> $changes */
     private function url(array $changes): string
     {
-        $params = array_merge((array) $this->request->getGet(), $changes);
+        $params = array_merge(array_diff_key((array) $this->request->getGet(), array_flip(self::TRANSIENT_PARAMS)), $changes);
         $params = array_filter($params, static fn ($v): bool => $v !== null && $v !== '');
         $path   = '/' . trim($this->request->getUri()->getRoutePath(), '/');
 

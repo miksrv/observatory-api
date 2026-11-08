@@ -529,25 +529,43 @@ final class FramesCreateTest extends DatabaseTestCase
         $this->assertNull($row['zero_point']);
     }
 
-    public function testMalformedProcessingIsRejectedWith422AndInsertsNothing(): void
+    /**
+     * `processing` is diagnostics: a block this API cannot read (a newer pipeline's status, a
+     * wrong type) must not cost the frame its registration — it is stored as unknown.
+     */
+    public function testUnreadableProcessingStillRegistersTheFrameWithUnknownOutcome(): void
     {
         foreach ([
             ['status' => 'GREAT'],
             ['status' => 'OK', 'issues' => 'catalog_failed:Gaia DR3'],
             ['status' => 'OK', 'issues' => [42]],
+            ['status' => 'OK', 'issues' => array_fill(0, 51, 'x')],
             ['status' => 'OK', 'catalogs' => ['ok', 'failed']],
             ['status' => 'OK', 'calibration' => 'maybe'],
             ['status' => 'OK', 'zero_point' => 'twenty'],
+            ['status' => 'OK', 'astrometry_solved' => 'false'],
             'DEGRADED',
-        ] as $processing) {
+        ] as $n => $processing) {
             $result = $this->withHeaders($this->authHeaders())
                 ->withBodyFormat('json')
-                ->post(self::ENDPOINT, $this->validPayload(['processing' => $processing]));
+                ->post(self::ENDPOINT, $this->validPayload(['filename' => "bad_processing_{$n}.fits", 'processing' => $processing]));
 
-            $result->assertStatus(422);
-            $this->assertSame('processing', json_decode($result->getJSON(), true)['details']['field'] ?? null);
+            $result->assertStatus(201);
+            $id  = json_decode($result->getJSON(), true)['id'];
+            $row = \Config\Database::connect()->table('frames')->where('id', $id)->get()->getRowArray();
+            $this->assertNull($row['processing_status'], json_encode($processing));
         }
+    }
 
-        $this->assertSame(0, \Config\Database::connect()->table('frames')->countAllResults());
+    public function testCatalogOutcomesAreStoredAsSentEvenWithNumericNames(): void
+    {
+        $id = json_decode($this->withHeaders($this->authHeaders())
+            ->withBodyFormat('json')
+            ->post(self::ENDPOINT, $this->validPayload(['processing' => [
+                'status' => 'OK', 'catalogs' => ['2' => 'ok', 'Gaia DR3' => 'partial'],
+            ]]))->getJSON(), true)['id'];
+
+        $frame = json_decode($this->withHeaders($this->authHeaders())->get(self::ENDPOINT . '/' . $id)->getJSON(), true)['frame'];
+        $this->assertSame(['2' => 'ok', 'Gaia DR3' => 'partial'], $frame['processing']['catalogs']);
     }
 }

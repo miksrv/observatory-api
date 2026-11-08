@@ -38,6 +38,9 @@ class FramesController extends BaseApiController
     /** `processing.calibration` values (frames.calibration ENUM). */
     private const CALIBRATIONS = ['calibrated', 'skipped', 'failed'];
 
+    /** Most issue codes one frame's `processing.issues` may carry (a real run has a handful). */
+    private const PROCESSING_MAX_ISSUES = 50;
+
     /**
      * POST /api/v1/frames
      *
@@ -109,13 +112,14 @@ class FramesController extends BaseApiController
             ]);
         }
 
+        // `processing` is diagnostics: a block this API cannot read (a newer pipeline's status, a
+        // malformed value) must never cost the frame its registration — that would leave it with
+        // no sources and no record at all. It is stored as unknown and logged instead.
         $processing = $this->processingColumns($body['processing'] ?? null);
 
         if (is_string($processing)) {
-            return $this->respondError(422, 'Validation failed', [
-                'field'   => 'processing',
-                'message' => $processing,
-            ]);
+            log_message('warning', 'FramesController::create — processing block ignored for ' . $body['filename'] . ': ' . $processing);
+            $processing = $this->processingColumns(null);
         }
 
         // ----------------------------------------------------------------
@@ -1374,7 +1378,7 @@ class FramesController extends BaseApiController
      * what the analysis came to beyond QC — see the AddFrameProcessing migration. Absent → every
      * column NULL ("unknown"), so a re-analysis by an older pipeline never leaves an earlier run's
      * outcome standing as if it described this one. Returns an error message when the block is
-     * malformed.
+     * malformed — create() then stores it as unknown rather than refusing the frame.
      *
      * @return array<string, mixed>|string
      */
@@ -1406,8 +1410,8 @@ class FramesController extends BaseApiController
         }
 
         $issues = $processing['issues'] ?? [];
-        if (! is_array($issues) || ! array_is_list($issues)) {
-            return 'processing.issues must be a list of strings';
+        if (! is_array($issues) || ! array_is_list($issues) || count($issues) > self::PROCESSING_MAX_ISSUES) {
+            return 'processing.issues must be a list of at most ' . self::PROCESSING_MAX_ISSUES . ' strings';
         }
         foreach ($issues as $issue) {
             if (! is_string($issue) || $issue === '' || strlen($issue) > 100) {
@@ -1419,8 +1423,13 @@ class FramesController extends BaseApiController
         if (! is_array($catalogs) || array_is_list($catalogs) && $catalogs !== []) {
             return 'processing.catalogs must be an object of catalog => outcome';
         }
+        if (count($catalogs) > 20) {
+            return 'processing.catalogs must be an object of catalog => outcome';
+        }
         foreach ($catalogs as $catalog => $outcome) {
-            if (! is_string($catalog) || ! is_string($outcome) || strlen($catalog) > 50 || strlen($outcome) > 30) {
+            // A numeric JSON key ("2") arrives as an int key; the outcome is stored as sent, so a
+            // newer pipeline's value needs no API release.
+            if (! is_string($outcome) || strlen((string) $catalog) > 50 || strlen($outcome) > 30) {
                 return 'processing.catalogs must be an object of catalog => outcome';
             }
         }
@@ -1431,8 +1440,15 @@ class FramesController extends BaseApiController
         }
 
         foreach (['zero_point', 'zero_point_err', 'subtraction_reference_count'] as $field) {
-            if (isset($processing[$field]) && ! is_numeric($processing[$field])) {
-                return "processing.{$field} must be numeric or null";
+            if (isset($processing[$field]) && (! is_numeric($processing[$field]) || ! is_finite((float) $processing[$field]))) {
+                return "processing.{$field} must be a finite number or null";
+            }
+        }
+
+        foreach (['astrometry_solved', 'subtraction_performed'] as $field) {
+            $value = $processing[$field] ?? null;
+            if ($value !== null && ! is_bool($value) && $value !== 0 && $value !== 1) {
+                return "processing.{$field} must be a boolean or null";
             }
         }
 
@@ -1442,7 +1458,7 @@ class FramesController extends BaseApiController
             'processing_status'           => $status,
             'processing_issues'           => $issues === [] ? null : json_encode(array_values(array_unique($issues)), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
             'astrometry_solved'           => $flag($processing['astrometry_solved'] ?? null),
-            'catalog_status'              => $catalogs === [] ? null : json_encode($catalogs, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            'catalog_status'              => $catalogs === [] ? null : json_encode((object) $catalogs, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
             'calibration'                 => $calibration,
             'zero_point'                  => isset($processing['zero_point']) ? (float) $processing['zero_point'] : null,
             'zero_point_err'              => isset($processing['zero_point_err']) ? (float) $processing['zero_point_err'] : null,

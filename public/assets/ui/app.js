@@ -307,12 +307,16 @@
         if (!drawer) return;
         var form = $('form', drawer);
         var toggles = $$('[aria-controls="' + drawer.id + '"]', scope);
+        var opener = null;
         function setOpen(open, focusName) {
             if (open) {
                 drawer.setAttribute('data-open', '');
             } else {
                 drawer.removeAttribute('data-open');
                 form.reset();
+                // Back to what opened it: focus left inside a hidden panel would fall to <body>.
+                var back = opener && document.contains(opener) ? opener : toggles[0];
+                if (back) back.focus({ preventScroll: true });
             }
             toggles.forEach(function (b) {
                 b.setAttribute('aria-expanded', open ? 'true' : 'false');
@@ -323,11 +327,12 @@
             }
         }
         scope.addEventListener('click', function (e) {
-            var opener = e.target.closest('[data-filters-open]');
-            if (opener) {
+            var link = e.target.closest('[data-filters-open]');
+            if (link) {
                 if (e.metaKey || e.ctrlKey) return;
                 e.preventDefault();
-                setOpen(true, opener.dataset.focus);
+                opener = link;
+                setOpen(true, link.dataset.focus);
                 return;
             }
             if (e.target.closest('[data-filters-close]')) {

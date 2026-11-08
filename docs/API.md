@@ -211,14 +211,17 @@ re-registration replaces it, and one without the block (an older pipeline) clear
 | `status` | string, **required** in the block | `OK` · `DEGRADED` (solved, something failed — `issues`) · `FAILED` (QC passed, no plate solve) · `SKIPPED` (QC rejected; nothing past QC ran) |
 | `issues` | string[] | Codes in step order: `astrometry_failed`, `catalog_failed:<catalog>`, `calibration_failed`, `<step>_error` (`subtraction`, `catalog_matching`, `photometry`, `forced_photometry`). Unknown codes are stored as sent |
 | `astrometry_solved` | bool \| null | |
-| `catalogs` | object | catalog → `ok` / `failed` / `disabled` / `not_applicable` |
+| `catalogs` | object | catalog → `ok` / `failed` / `disabled` / `not_applicable` (stored as sent) |
 | `calibration` | `calibrated` \| `skipped` \| `failed` \| null | `skipped` = narrowband or 8-bit, on purpose |
 | `zero_point`, `zero_point_err` | number \| null | |
 | `subtraction_performed` | bool \| null | |
 | `subtraction_reference_count` | int \| null | |
 
-A malformed block (unknown `status`, `issues` not a list of strings, …) is refused with `422`,
-`details.field` = `processing`.
+A block this API cannot read (an unknown `status` or `calibration`, `issues` not a list of at
+most 50 strings, a non-boolean flag, a non-finite number, …) does **not** fail the request: the
+frame is registered with its processing outcome unknown (`NULL`) and a warning is logged — the
+block is diagnostics, and refusing it would leave the frame with no record at all. Catalog
+outcomes are stored as sent.
 
 `quality_flag` is **not** guaranteed to be `"OK"` — observatory-pipeline registers a frame that
 failed its own QC too (`BLUR`/`TRAIL`/`HIGH_BACKGROUND`/`LOW_STARS`/`BAD`), with the `qc` block
@@ -308,8 +311,7 @@ astrometry, or photometry run against it.
 The `id` is the same value in both cases when `filename` matches an existing row.
 
 **Errors:** `400` missing required field · `422` a required numeric field (`ra_center`,
-`dec_center`, `fov_deg`) isn't numeric, `obs_time` isn't a parseable datetime, or `processing` is
-malformed · `409`
+`dec_center`, `fov_deg`) isn't numeric, or `obs_time` isn't a parseable datetime · `409`
 `filename` is already registered by another pipeline (`details.pipeline` names the owner,
 `details.frame_id` the frame) · `500` insert/update failed
 

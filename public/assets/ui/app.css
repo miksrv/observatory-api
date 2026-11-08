@@ -1335,9 +1335,15 @@ input[type='datetime-local'].input {
 .page.fill > .panel > .filter-host > form > :not(.table-wrap) {
     flex-shrink: 0;
 }
-/* A short list (or a phone, where the page scrolls as a whole): room for the open panel. */
-.panel > .filter-host:has(.filter-drawer[data-open]) {
-    min-height: 520px;
+/* The selection bar is fixed over the page: while the panel is open it would cover «Применить». */
+.filter-host:has(.filter-drawer[data-open]) .selbar {
+    visibility: hidden;
+}
+/* A phone scrolls the page as a whole, so the table can be shorter than the open panel. */
+@media (max-width: 960px) {
+    .panel > .filter-host:has(.filter-drawer[data-open]) {
+        min-height: 520px;
+    }
 }
 .filter-drawer {
     position: absolute;
