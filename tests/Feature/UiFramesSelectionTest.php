@@ -165,7 +165,7 @@ final class UiFramesSelectionTest extends DatabaseTestCase
         $page->assertDontSee($ids['']);
         // The issues are spelled out under the status, and the filter shows as a badge.
         $page->assertSee('Gaia DR3 не ответил');
-        $page->assertSee('astap не решил кадр');
+        $page->assertSee('астрометрия не удалась');
         $page->assertSee('Обработка: С проблемами');
 
         $page = $this->get('/ui/frames?processing=unknown');

@@ -250,9 +250,13 @@ if (! function_exists('ui_processing_issue')) {
         if (str_starts_with($code, 'catalog_failed:')) {
             return substr($code, strlen('catalog_failed:')) . ' не ответил';
         }
+        if (str_starts_with($code, 'catalog_error:')) {
+            return substr($code, strlen('catalog_error:')) . ': ошибка сопоставления';
+        }
 
         return match ($code) {
-            'astrometry_failed'       => 'astap не решил кадр',
+            'astrometry_failed'       => 'астрометрия не удалась',
+            'no_sources'              => 'источники не извлечены',
             'calibration_failed'      => 'нет нуль-пункта',
             'subtraction_error'       => 'ошибка вычитания',
             'catalog_matching_error'  => 'ошибка сопоставления',
@@ -277,7 +281,7 @@ if (! function_exists('ui_processing')) {
         [$label, $tone, $title] = match ($status) {
             'OK'       => ['OK', 'green', 'Все шаги анализа выполнены'],
             'DEGRADED' => ['частично', 'amber', 'Кадр решён, но часть анализа не выполнена — перезапустите ANALYZE'],
-            'FAILED'   => ['сбой', 'red', 'QC пройден, но кадр не решён — источников нет'],
+            'FAILED'   => ['сбой', 'red', 'QC пройден, но астрометрия не дала решения — источников нет'],
             'SKIPPED'  => ['пропущен', 'gray', 'QC отклонил кадр — анализ не выполнялся'],
             default    => [$status, 'gray', ''],
         };

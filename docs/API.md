@@ -209,9 +209,9 @@ re-registration replaces it, and one without the block (an older pipeline) clear
 | Field | Type | Notes |
 |---|---|---|
 | `status` | string, **required** in the block | `OK` · `DEGRADED` (solved, something failed — `issues`) · `FAILED` (QC passed, no plate solve) · `SKIPPED` (QC rejected; nothing past QC ran) |
-| `issues` | string[] | Codes in step order: `astrometry_failed`, `catalog_failed:<catalog>`, `calibration_failed`, `<step>_error` (`subtraction`, `catalog_matching`, `photometry`, `forced_photometry`). Unknown codes are stored as sent |
+| `issues` | string[] | Codes in step order: `astrometry_failed`, `no_sources`, `catalog_failed:<catalog>`, `catalog_error:<catalog>`, `calibration_failed`, `<step>_error` (`subtraction`, `catalog_matching`, `photometry`, `forced_photometry`). Unknown codes are stored as sent |
 | `astrometry_solved` | bool \| null | |
-| `catalogs` | object | catalog → `ok` / `failed` / `disabled` / `not_applicable` (stored as sent) |
+| `catalogs` | object | catalog → `ok` / `failed` / `error` / `disabled` / `not_applicable` (stored as sent) |
 | `calibration` | `calibrated` \| `skipped` \| `failed` \| null | `skipped` = narrowband or 8-bit, on purpose |
 | `zero_point`, `zero_point_err` | number \| null | |
 | `subtraction_performed` | bool \| null | |
