@@ -57,6 +57,15 @@ class FrameModel extends BaseModel
         'qc_sky_background',
         'qc_star_count',
         'qc_eccentricity',
+        'processing_status',
+        'processing_issues',
+        'astrometry_solved',
+        'catalog_status',
+        'calibration',
+        'zero_point',
+        'zero_point_err',
+        'subtraction_performed',
+        'subtraction_reference_count',
     ];
 
     /**
