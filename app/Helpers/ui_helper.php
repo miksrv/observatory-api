@@ -211,13 +211,32 @@ if (! function_exists('ui_task_type_hint')) {
     function ui_task_type_hint(string $type): string
     {
         return match ($type) {
-            'ANALYZE'               => 'Полный разбор файла с начала: астрометрия, фотометрия, аномалии.',
+            'ANALYZE'               => 'Полный разбор файла с начала: QC, астрометрия, каталоги, фотометрия; кадр и источники сохраняются. Аномалии ищет отдельная задача «Поиск аномалий».',
             'DETECT_ANOMALIES'      => 'Повторный поиск аномалий по уже сохранённым данным кадра.',
             'GENERATE_CHARTS'       => 'Построить карты-трекеры и стрипы для источника.',
             'PREVIEW_CATALOG_MATCH' => 'Диагностика: сопоставление с каталогом без регистрации кадра.',
             'DELETE_FRAME'          => 'Убрать файл в FITS_REJECTED и удалить кадр со всеми данными.',
             'RESTART'               => 'Перезапуск pipeline с новыми настройками.',
             default                 => '',
+        };
+    }
+}
+
+if (! function_exists('ui_task_type')) {
+    /**
+     * A task type (TaskModel's ENUM, the wire value) in words, for every place the UI shows one.
+     * The enum itself stays in `title` attributes and the API — it is what the pipeline knows.
+     */
+    function ui_task_type(string $type): string
+    {
+        return match ($type) {
+            'ANALYZE'               => 'Анализ кадра',
+            'DETECT_ANOMALIES'      => 'Поиск аномалий',
+            'GENERATE_CHARTS'       => 'Построение графиков',
+            'PREVIEW_CATALOG_MATCH' => 'Превью каталога',
+            'DELETE_FRAME'          => 'Удаление кадра',
+            'RESTART'               => 'Перезапуск pipeline',
+            default                 => $type,
         };
     }
 }
@@ -275,12 +294,12 @@ if (! function_exists('ui_processing')) {
     function ui_processing(?string $status, ?string $issuesJson): string
     {
         if ($status === null || $status === '') {
-            return '<span class="dim" title="Нет данных: кадр обработан pipeline старше 1.7.0 — перезапустите ANALYZE">—</span>';
+            return '<span class="dim" title="Нет данных: кадр обработан pipeline старше 1.7.0 — перезапустите «Анализ кадра»">—</span>';
         }
 
         [$label, $tone, $title] = match ($status) {
             'OK'       => ['OK', 'green', 'Все шаги анализа выполнены'],
-            'DEGRADED' => ['частично', 'amber', 'Кадр решён, но часть анализа не выполнена — перезапустите ANALYZE'],
+            'DEGRADED' => ['частично', 'amber', 'Кадр решён, но часть анализа не выполнена — перезапустите «Анализ кадра»'],
             'FAILED'   => ['сбой', 'red', 'QC пройден, но астрометрия не дала решения — источников нет'],
             'SKIPPED'  => ['пропущен', 'gray', 'QC отклонил кадр — анализ не выполнялся'],
             default    => [$status, 'gray', ''],

@@ -87,7 +87,7 @@ class SettingsController extends BaseWebController
         $targets = $pipelines === [] ? 'pipeline' : 'pipeline: ' . implode(', ', $pipelines);
 
         return redirect()->to('/ui/settings')
-            ->with('success', "Сохранено {$changed} параметр(ов). Создана задача RESTART для перезагрузки {$targets}.");
+            ->with('success', "Сохранено {$changed} параметр(ов). Создана задача «Перезапуск pipeline» для перезагрузки {$targets}.");
     }
 }
 

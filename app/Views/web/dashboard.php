@@ -141,7 +141,7 @@ $registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 
                             <span class="dim small">начата <?= ui_when($running['started_at']) ?></span>
                         </span>
                         <span class="pipe-task-title">
-                            <span class="mono"><?= esc($running['type']) ?></span><?= ui_task_status('RUNNING') ?>
+                            <span title="<?= esc($running['type'], 'attr') ?>"><?= esc(ui_task_type($running['type'])) ?></span><?= ui_task_status('RUNNING') ?>
                             <span class="open"><?= ui_icon('chevron', 14) ?></span>
                         </span>
                         <?= view('web/partials/progress', ['task' => $running, 'large' => count($pipelines) === 1]) ?>
@@ -189,7 +189,7 @@ $registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 
                 <?php foreach ($recentTasks as $t): ?>
                     <li>
                         <div class="main-col">
-                            <a class="mono" href="/ui/tasks/<?= esc($t['id'], 'url') ?>"><?= esc($t['type']) ?></a>
+                            <a href="/ui/tasks/<?= esc($t['id'], 'url') ?>" title="<?= esc($t['type'], 'attr') ?>"><?= esc(ui_task_type($t['type'])) ?></a>
                             <span class="meta">
                                 <?= ui_when($t['created_at']) ?> · <?= view('web/partials/task_pipeline', ['task' => $t, 'names' => $pipelineNames]) ?><?= $t['scope_object'] ? ' · ' . esc($t['scope_object']) : '' ?>
                             </span>

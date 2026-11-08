@@ -18,6 +18,7 @@ trait RedirectsToCreatedTasks
     private function redirectToCreatedTasks(array $created, string $type, string $details = ''): RedirectResponse
     {
         $details = $details !== '' ? ' ' . $details : '';
+        $type    = '«' . ui_task_type($type) . '»';
         $names   = (new PipelineModel())->getAllNames();
 
         if (count($created) === 1) {
