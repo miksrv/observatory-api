@@ -536,6 +536,87 @@ final class BatchTest extends DatabaseTestCase
         $this->assertGreaterThan(200, $totalMatches);
     }
 
+    public function testSourcesNearBatchLeavesNoStatementTimeLimitBehind(): void
+    {
+        $db = \Config\Database::connect();
+        $this->createSource();
+
+        $this->withHeaders($this->authHeaders())->withBodyFormat('json')
+            ->post('/api/v1/sources/near/batch', ['positions' => [['ra' => 10.0, 'dec' => 20.0]], 'radius_arcsec' => 5.0])
+            ->assertStatus(200);
+
+        // The cap is for the history query only — the rest of the request
+        // (and a persistent connection's next request) runs at the default.
+        $row = $db->query('SELECT @@SESSION.max_statement_time AS s, @@GLOBAL.max_statement_time AS g')->getRowArray();
+        $this->assertSame($row['g'], $row['s']);
+    }
+
+    public function testSourcesNearBatchAnswers503WhenTheCapFiresWhileRowsStream(): void
+    {
+        // Enough rows in one field that the cap fires while they are read, not in the query: the
+        // driver then throws mysqli_sql_exception from the fetch, which used to escape as a 500.
+        $db      = \Config\Database::connect();
+        // (frame_id, source_id) is unique: 200 frames × 200 sources.
+        $frames  = array_map(fn () => $this->createFrame(), range(1, 200));
+        $sources = array_map(fn () => $this->createSource(), range(1, 200));
+        $rows    = [];
+        for ($i = 0; $i < 40000; $i++) {
+            $rows[] = [
+                'id' => 'so' . $i, 'source_id' => $sources[intdiv($i, 200)], 'frame_id' => $frames[$i % 200],
+                'ra' => 10.0 + ($i % 200) * 1e-4, 'dec' => 20.0 + intdiv($i, 200) * 1e-4,
+                'mag' => 15.0, 'flux' => 1000.0, 'obs_time' => '2024-01-01 00:00:00',
+            ];
+            if (count($rows) === 2000) {
+                $db->table('source_observations')->insertBatch($rows);
+                $rows = [];
+            }
+        }
+
+        $previousCap = \App\Controllers\Api\V1\SourcesController::$historyQueryMaxSec;
+        \App\Controllers\Api\V1\SourcesController::$historyQueryMaxSec = 0.05;
+
+        try {
+            $result = $this->withHeaders($this->authHeaders())->withBodyFormat('json')
+                ->post('/api/v1/sources/near/batch', [
+                    'positions'     => array_map(static fn ($i) => ['ra' => 10.01, 'dec' => 20.0 + $i * 0.001], range(0, 199)),
+                    'radius_arcsec' => 30.0,
+                ]);
+        } finally {
+            \App\Controllers\Api\V1\SourcesController::$historyQueryMaxSec = $previousCap;
+        }
+
+        $result->assertStatus(503);
+        $row = $db->query('SELECT @@SESSION.max_statement_time AS s, @@GLOBAL.max_statement_time AS g')->getRowArray();
+        $this->assertSame($row['g'], $row['s']);
+    }
+
+    public function testSourcesNearBatchAnswers503WhenTheHistoryQueryRunsTooLong(): void
+    {
+        // A second connection holds a write lock, so the history query waits
+        // until the statement time cap stops it.
+        $locker = \Config\Database::connect('tests', false);
+        $locker->query('LOCK TABLES source_observations WRITE');
+
+        $previousCap = \App\Controllers\Api\V1\SourcesController::$historyQueryMaxSec;
+        \App\Controllers\Api\V1\SourcesController::$historyQueryMaxSec = 0.5;
+
+        try {
+            $result = $this->withHeaders($this->authHeaders())->withBodyFormat('json')
+                ->post('/api/v1/sources/near/batch', ['positions' => [['ra' => 10.0, 'dec' => 20.0]], 'radius_arcsec' => 5.0]);
+        } finally {
+            \App\Controllers\Api\V1\SourcesController::$historyQueryMaxSec = $previousCap;
+            $locker->query('UNLOCK TABLES');
+            $locker->close();
+        }
+
+        $result->assertStatus(503);
+        $this->assertStringContainsString('retry later', $result->getJSON());
+
+        $row = \Config\Database::connect()
+            ->query('SELECT @@SESSION.max_statement_time AS s, @@GLOBAL.max_statement_time AS g')->getRowArray();
+        $this->assertSame($row['g'], $row['s']);
+    }
+
     // =========================================================================
     // POST /api/v1/frames/covering/batch
     // =========================================================================

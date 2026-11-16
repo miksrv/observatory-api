@@ -30,7 +30,7 @@ Built with **CodeIgniter 4 / PHP**, database — **MariaDB**.
 
 ## Requirements
 
-- **PHP 8.2+** with extensions: `intl`, `mbstring`, `json`, `mysqlnd`
+- **PHP 8.4+** with extensions: `intl`, `mbstring`, `json`, `mysqlnd`
 - **Composer**
 - **Docker + Docker Compose** (for MariaDB)
 

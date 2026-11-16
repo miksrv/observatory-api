@@ -19,6 +19,9 @@ class PipelinesController extends BaseApiController
     /** A probe's error message is kept to this many characters. */
     private const MAX_ERROR_LENGTH = 300;
 
+    /** A catalog name, as in the report's entries. */
+    private const CATALOG_NAME = '/^[A-Za-z0-9][A-Za-z0-9 ._\/()-]{0,39}$/';
+
     /**
      * POST /api/v1/pipelines/catalogs
      *
@@ -30,11 +33,15 @@ class PipelinesController extends BaseApiController
      *   "catalogs": [
      *     {"name": "Simbad", "ok": false, "latency_ms": null, "error": "connect timeout"},
      *     {"name": "Gaia DR3", "ok": true, "latency_ms": 412, "error": null}
-     *   ]
+     *   ],
+     *   "waiting": {"reason": "catalogs", "catalogs": ["Gaia DR3"], "since": "...", "task_id": "...", "filename": "..."}
      * }
      *
+     * `waiting` is optional: absent keeps the stored wait (the pipeline's periodic check omits it),
+     * null clears it — see docs/API.md.
+     *
      * Response 200: {"data": {"stored": 2, "checked_at": "2026-10-31 20:00:00"}}
-     * Response 400: malformed body. Response 503: the migration adding the columns has not been run.
+     * Response 400: malformed body. Response 503: a migration adding the columns has not been run.
      */
     public function catalogs(): ResponseInterface
     {
@@ -58,7 +65,7 @@ class PipelinesController extends BaseApiController
             $latencyMs = is_array($entry) ? ($entry['latency_ms'] ?? null) : null;
             $error     = is_array($entry) ? ($entry['error'] ?? null) : null;
 
-            if (! is_string($name) || preg_match('/^[A-Za-z0-9][A-Za-z0-9 ._\/()-]{0,39}$/', $name) !== 1) {
+            if (! is_string($name) || preg_match(self::CATALOG_NAME, $name) !== 1) {
                 return $this->respondError(400, 'Invalid catalog name', ['index' => $index]);
             }
             if (! is_bool($ok)) {
@@ -79,15 +86,29 @@ class PipelinesController extends BaseApiController
             ];
         }
 
+        // `waiting` (observatory-pipeline 1.7.1+): absent = keep the stored state, null = the wait
+        // ended, an object = the worker holds an ANALYZE item until these catalogs answer.
+        $setWaiting = is_array($body) && array_key_exists('waiting', $body);
+        $waiting    = null;
+        if ($setWaiting && $body['waiting'] !== null) {
+            $waiting = $this->cleanWaiting($body['waiting']);
+            if (is_string($waiting)) {
+                return $this->respondError(400, $waiting);
+            }
+        }
+
         $checkedAt = gmdate('Y-m-d H:i:s');
 
-        // DBDebug off (production) makes a failed write return false instead of throwing.
-        try {
-            $saved = (new PipelineModel())->saveCatalogStatus($pipelineId, $clean, $checkedAt);
-            $why   = 'update failed';
-        } catch (DatabaseException $e) {
-            $saved = false;
-            $why   = $e->getMessage();
+        [$saved, $why] = $this->saveStatus($pipelineId, $clean, $checkedAt, $waiting, $setWaiting);
+
+        if (! $saved && $setWaiting) {
+            // Most likely the AddPipelineCatalogWaiting migration has not run yet: keep the
+            // catalog check itself rather than losing it with the wait.
+            [$saved, $whyRetry] = $this->saveStatus($pipelineId, $clean, $checkedAt, null, false);
+            if ($saved) {
+                log_message('warning', 'Catalog wait not recorded (run php spark migrate?): {message}', ['message' => $why]);
+            }
+            $why = $whyRetry;
         }
 
         if (! $saved) {
@@ -97,5 +118,76 @@ class PipelinesController extends BaseApiController
         }
 
         return $this->respondOk(['data' => ['stored' => count($clean), 'checked_at' => $checkedAt]]);
+    }
+
+    /**
+     * PipelineModel::saveCatalogStatus(), as [saved, why-not]. DBDebug off (production) makes a
+     * failed write return false instead of throwing.
+     *
+     * @param array<string, mixed>|null $waiting
+     *
+     * @return array{0: bool, 1: string}
+     */
+    private function saveStatus(string $pipelineId, array $clean, string $checkedAt, ?array $waiting, bool $setWaiting): array
+    {
+        try {
+            return [(new PipelineModel())->saveCatalogStatus($pipelineId, $clean, $checkedAt, $waiting, $setWaiting), 'update failed'];
+        } catch (DatabaseException $e) {
+            return [false, $e->getMessage()];
+        }
+    }
+
+    /**
+     * Validate a report's `waiting` object: `{reason, catalogs, since, task_id, filename}`.
+     * Returns the cleaned array (since as UTC `Y-m-d H:i:s`), or the 400 message.
+     *
+     * @return array<string, mixed>|string
+     */
+    private function cleanWaiting(mixed $waiting): array|string
+    {
+        if (! is_array($waiting) || array_is_list($waiting)) {
+            return 'waiting must be an object or null';
+        }
+
+        $reason = $waiting['reason'] ?? null;
+        if (! is_string($reason) || preg_match('/^[a-z_]{1,20}$/', $reason) !== 1) {
+            return 'waiting.reason must be a short lowercase word';
+        }
+
+        $catalogs = $waiting['catalogs'] ?? null;
+        if (! is_array($catalogs) || ! array_is_list($catalogs) || $catalogs === [] || count($catalogs) > self::MAX_CATALOGS) {
+            return 'waiting.catalogs must be a non-empty list of at most ' . self::MAX_CATALOGS . ' names';
+        }
+        foreach ($catalogs as $name) {
+            if (! is_string($name) || preg_match(self::CATALOG_NAME, $name) !== 1) {
+                return 'Invalid catalog name in waiting.catalogs';
+            }
+        }
+
+        // ISO 8601 only — strtotime() alone would take "tomorrow" or "+1 week" — and not ahead of
+        // the API's clock by more than a few minutes of drift.
+        $since = $waiting['since'] ?? null;
+        $time  = is_string($since)
+            && preg_match('/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/', $since) === 1
+            ? strtotime($since)
+            : false;
+        if ($time === false || $time > time() + 300) {
+            return 'waiting.since must be an ISO 8601 date-time, not in the future';
+        }
+
+        foreach (['task_id' => 64, 'filename' => 255] as $field => $max) {
+            $value = $waiting[$field] ?? null;
+            if ($value !== null && (! is_string($value) || mb_strlen($value) > $max)) {
+                return "waiting.{$field} must be a string of at most {$max} characters, or null";
+            }
+        }
+
+        return [
+            'reason'   => $reason,
+            'catalogs' => array_values(array_unique($catalogs)),
+            'since'    => gmdate('Y-m-d H:i:s', $time),
+            'task_id'  => $waiting['task_id'] ?? null,
+            'filename' => $waiting['filename'] ?? null,
+        ];
     }
 }

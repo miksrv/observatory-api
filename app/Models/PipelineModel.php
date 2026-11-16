@@ -20,7 +20,7 @@ class PipelineModel extends BaseModel
     // created_at is handled by the DB DEFAULT — no CI timestamp management needed.
     protected $useTimestamps = false;
 
-    protected $allowedFields = ['id', 'name', 'key_hash', 'last_seen_at', 'last_ip', 'version', 'catalog_status', 'catalog_checked_at', 'revoked_at'];
+    protected $allowedFields = ['id', 'name', 'key_hash', 'last_seen_at', 'last_ip', 'version', 'catalog_status', 'catalog_checked_at', 'catalog_waiting', 'revoked_at'];
 
     /**
      * Seen within this many seconds = online. The worker polls at least once a minute when idle
@@ -127,14 +127,42 @@ class PipelineModel extends BaseModel
      * {name, ok, latency_ms, error}), checked at `$checkedAt` (UTC). False — or, with DBDebug on,
      * a DatabaseException — when the columns do not exist yet (migration not run).
      *
+     * `$waiting` replaces the stored wait (an array, or null to clear it) only when `$setWaiting`:
+     * a report without the `waiting` key leaves the stored one alone — the pipeline's periodic
+     * check omits it, so it can never erase a wait its worker is in.
+     *
      * @param list<array{name: string, ok: bool, latency_ms: ?int, error: ?string}> $catalogs
+     * @param array<string, mixed>|null                                               $waiting
      */
-    public function saveCatalogStatus(string $id, array $catalogs, string $checkedAt): bool
+    public function saveCatalogStatus(string $id, array $catalogs, string $checkedAt, ?array $waiting = null, bool $setWaiting = false): bool
     {
-        return (bool) $this->db->table($this->table)->where('id', $id)->update([
+        $fields = [
             'catalog_status'     => json_encode($catalogs, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
             'catalog_checked_at' => $checkedAt,
-        ]);
+        ];
+        if ($setWaiting) {
+            $fields['catalog_waiting'] = $waiting === null ? null : json_encode($waiting, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        }
+
+        return (bool) $this->db->table($this->table)->where('id', $id)->update($fields);
+    }
+
+    /**
+     * The wait stored in a `pipelines` row — `{reason, catalogs, since, task_id, filename}` — or
+     * null when the pipeline is not waiting (or the column does not exist yet).
+     *
+     * @return array{reason: string, catalogs: list<string>, since: ?string, task_id: ?string, filename: ?string}|null
+     */
+    public static function waitingOf(array $pipeline): ?array
+    {
+        $raw = $pipeline['catalog_waiting'] ?? null;
+        if (! is_string($raw) || $raw === '') {
+            return null;
+        }
+
+        $decoded = json_decode($raw, true);
+
+        return is_array($decoded) && isset($decoded['catalogs']) && is_array($decoded['catalogs']) ? $decoded : null;
     }
 
     /**
@@ -153,6 +181,33 @@ class PipelineModel extends BaseModel
         $decoded = json_decode($raw, true);
 
         return is_array($decoded) && array_is_list($decoded) ? $decoded : [];
+    }
+
+    /**
+     * The catalog-check lines that serve each `waiting.catalogs` name: MPC is asked through
+     * SkyBot / JPL SB Ident (the pipeline's MPC_SOURCES); every other catalog has its own line.
+     */
+    private const WAIT_REPORT_NAMES = ['MPC' => ['SkyBot', 'JPL SB Ident']];
+
+    /**
+     * True when the latest catalog check shows every catalog of `$waiting` answering — the wait is
+     * over even if the pipeline's report clearing it never arrived (a single attempt, an API blip),
+     * so the dashboard does not show it. A catalog the check has no line for keeps the wait shown.
+     *
+     * @param array{catalogs: list<string>}                 $waiting
+     * @param list<array{name: string, ok: bool}>           $catalogs
+     */
+    public static function waitIsOver(array $waiting, array $catalogs): bool
+    {
+        foreach ($waiting['catalogs'] as $name) {
+            $names = self::WAIT_REPORT_NAMES[$name] ?? [$name];
+            $lines = array_filter($catalogs, static fn ($c) => in_array($c['name'] ?? null, $names, true));
+            if ($lines === [] || array_filter($lines, static fn ($c) => (bool) ($c['ok'] ?? false)) === []) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /** True when a catalog check exists but is older than CATALOG_STALE_SEC. */
@@ -251,6 +306,10 @@ class PipelineModel extends BaseModel
             $pipeline['pending_own']  = $pending[$id] ?? 0;
             $pipeline['frame_count']  = $frames[$id] ?? 0;
             $pipeline['catalogs']     = self::catalogsOf($pipeline);
+            $pipeline['waiting']      = self::waitingOf($pipeline);
+            if ($pipeline['waiting'] !== null && self::waitIsOver($pipeline['waiting'], $pipeline['catalogs'])) {
+                $pipeline['waiting'] = null;
+            }
             $pipeline['catalogs_stale'] = self::catalogCheckIsStale($pipeline['catalog_checked_at'] ?? null);
         }
         unset($pipeline);

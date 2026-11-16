@@ -156,7 +156,7 @@ README.md's Architecture section for the full picture.
 
 ## CodeIgniter 4 Conventions
 
-- **PHP 8.2+** (pinned by `composer.json`: `"php": "^8.2"`)
+- **PHP 8.4+** (pinned by `composer.json`: `"php": "^8.4"`)
 - Namespace: `App\Controllers`, `App\Models`, etc.
 - Routes: `app/Config/Routes.php`
 - Environment: `.env` file at project root (copy from `env` template)

@@ -14,6 +14,23 @@ use CodeIgniter\HTTP\ResponseInterface;
 class SourcesController extends BaseApiController
 {
     /**
+     * Server-side ceiling on nearBatch()'s history query, in seconds — below
+     * the pipeline's 30 s client timeout. A query the client has given up on
+     * otherwise kept running on the database while the client's retry started
+     * the same query again; on 2026-10-28 and 2026-11-05 those piled-up queries
+     * were killed by the hosting ("MySQL server has gone away") and then used
+     * up its connection limit, failing every request for minutes.
+     *
+     * The rows are read unbuffered, so the cap also counts the time PHP spends
+     * sweeping them, not only the database's. Public and static only so a test
+     * can lower it.
+     */
+    public static float $historyQueryMaxSec = 25.0;
+
+    /** "max_statement_time exceeded" (MariaDB) and "maximum statement execution time exceeded" (MySQL). */
+    private const STATEMENT_TIMEOUT_ERRORS = [1969, 3024];
+
+    /**
      * GET /api/v1/sources/near
      *
      * Cone search for sources near a sky position.
@@ -416,12 +433,32 @@ class SourcesController extends BaseApiController
             $db->resultMode = MYSQLI_USE_RESULT;
         }
 
+        $timeLimit = $unbuffered ? $this->limitStatementTime($db) : null;
+
         try {
             $query = $db->query($sql, $params);
+        } catch (\CodeIgniter\Database\Exceptions\DatabaseException $e) {
+            $this->restoreStatementTime($db, $timeLimit);
+            if (! in_array($e->getCode(), self::STATEMENT_TIMEOUT_ERRORS, true)) {
+                throw $e;
+            }
+
+            return $this->respondHistoryTimeout(count($positions));
         } finally {
             if ($unbuffered) {
                 $db->resultMode = $previousMode;
             }
+        }
+
+        if ($query === false) {
+            // DBDebug off: query() reports the failure by returning false.
+            // Read the error before the reset, which would clear it.
+            $timedOut = $this->isStatementTimeout($db);
+            $this->restoreStatementTime($db, $timeLimit);
+
+            return $timedOut
+                ? $this->respondHistoryTimeout(count($positions))
+                : $this->respondError(500, 'Failed to read historical observations');
         }
 
         try {
@@ -462,20 +499,32 @@ class SourcesController extends BaseApiController
                 }
             }
 
-            // An unbuffered read that fails midway can end the loop like the last row did. A
-            // truncated history must not go out as a 200: the pipeline would read the missing
-            // observations as "never seen here" and raise false alerts. A 500 makes it treat the
-            // history as unavailable instead.
+            // A truncated history must not go out as a 200: the pipeline would read the missing
+            // observations as "never seen here" and raise false alerts. CI's MySQLi driver
+            // reports strictly, so a read failing midway — the time cap firing while rows stream,
+            // which is when it usually fires — throws mysqli_sql_exception (caught below); this
+            // check stays for a driver that ends the loop silently instead.
             $error = $db->error();
             if ((int) ($error['code'] ?? 0) !== 0) {
+                if ($this->isStatementTimeout($db)) {
+                    return $this->respondHistoryTimeout(count($positions));
+                }
                 log_message('error', 'SourcesController::nearBatch — reading candidates failed: ' . ($error['message'] ?? ''));
 
                 return $this->respondError(500, 'Failed to read historical observations');
             }
+        } catch (\mysqli_sql_exception $e) {
+            if (in_array($e->getCode(), self::STATEMENT_TIMEOUT_ERRORS, true)) {
+                return $this->respondHistoryTimeout(count($positions));
+            }
+            log_message('error', 'SourcesController::nearBatch — reading candidates failed: ' . $e->getMessage());
+
+            return $this->respondError(500, 'Failed to read historical observations');
         } finally {
             // An unbuffered result must be released before the connection
             // runs anything else (ApiKeyFilter::after() writes the heartbeat).
             $query->freeResult();
+            $this->restoreStatementTime($db, $timeLimit);
         }
 
         // ----------------------------------------------------------------
@@ -503,6 +552,80 @@ class SourcesController extends BaseApiController
         $body .= '}}';
 
         return $this->response->setStatusCode(200)->setJSON($body);
+    }
+
+    /**
+     * Caps this connection's statement time at $historyQueryMaxSec and returns the variable to
+     * reset afterwards, or null when the server takes neither (the query then runs unbounded, as
+     * before). MariaDB's max_statement_time (seconds) and MySQL's max_execution_time
+     * (milliseconds, SELECT only) are both tried — the version string picks which goes first, but
+     * a proxy may rewrite it. A failed SET throws with DBDebug on and returns false with it off.
+     */
+    private function limitStatementTime(\CodeIgniter\Database\BaseConnection $db): ?string
+    {
+        $candidates = [
+            'max_statement_time' => sprintf('%.3F', self::$historyQueryMaxSec),
+            'max_execution_time' => (string) max(1, (int) round(self::$historyQueryMaxSec * 1000)),
+        ];
+        if (! str_contains($db->getVersion(), 'MariaDB')) {
+            // Probably MySQL: its variable first, so a working setup logs no failed SET.
+            $candidates = array_reverse($candidates, true);
+        }
+        $why = '';
+
+        foreach ($candidates as $variable => $value) {
+            try {
+                if ($db->query("SET SESSION {$variable} = {$value}") !== false) {
+                    return $variable;
+                }
+                $why = (string) ($db->error()['message'] ?? 'failed');
+            } catch (\Throwable $e) {
+                $why = $e->getMessage();
+            }
+        }
+
+        log_message('warning', 'SourcesController::nearBatch — no statement time cap: ' . $why);
+
+        return null;
+    }
+
+    /**
+     * Back to the server's default, so nothing else this request runs (the
+     * heartbeat in ApiKeyFilter::after()) inherits the cap. Clears $variable,
+     * so a second call is a no-op.
+     */
+    private function restoreStatementTime(\CodeIgniter\Database\BaseConnection $db, ?string &$variable): void
+    {
+        if ($variable === null) {
+            return;
+        }
+        $name     = $variable;
+        $variable = null;
+
+        try {
+            $db->query("SET SESSION {$name} = DEFAULT");
+        } catch (\Throwable $e) {
+            log_message('warning', "SourcesController::nearBatch — cannot reset {$name}: " . $e->getMessage());
+        }
+    }
+
+    private function isStatementTimeout(\CodeIgniter\Database\BaseConnection $db): bool
+    {
+        return in_array((int) ($db->error()['code'] ?? 0), self::STATEMENT_TIMEOUT_ERRORS, true);
+    }
+
+    /**
+     * 503, not 500: the pipeline retries any 5xx and, if every attempt fails,
+     * re-queues the frame's anomaly detection — the right outcome for an
+     * overloaded database, and nothing is left running behind the answer.
+     */
+    private function respondHistoryTimeout(int $positions): ResponseInterface
+    {
+        log_message('warning', 'SourcesController::nearBatch — history query for ' . $positions
+            . ' position(s) stopped after ' . self::$historyQueryMaxSec . ' s');
+
+        return $this->respondError(503, 'History query took longer than ' . self::$historyQueryMaxSec
+            . ' s — the database is overloaded, retry later');
     }
 
     /**

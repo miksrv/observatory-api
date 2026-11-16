@@ -128,6 +128,8 @@ class FramesController extends BaseWebController
             'frames'         => $frames,
             'objects'        => array_column($objects, 'object'),
             'pipelines'      => $pipelineNames,
+            // Revoked pipelines count too: their frames stay.
+            'multiPipeline'  => count($pipelineNames) > 1,
             'pipelineNone'   => self::PIPELINE_NONE,
             'qcFlags'        => array_column($qcFlags, 'quality_flag'),
             'qcNotOk'        => self::QC_NOT_OK,

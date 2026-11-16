@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Libraries\UiAuth;
 use CodeIgniter\Test\FeatureTestTrait;
 use Config\Ui;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Support\DatabaseTestCase;
 use Tests\Support\SignsInToUi;
 
@@ -42,7 +43,7 @@ final class UiAuthTest extends DatabaseTestCase
     }
 
     /** A sign-in attempt from a browser that loaded the form (its session holds the CSRF token). */
-    private function attempt(string $username, string $password, string $next = '/ui')
+    private function signInAttempt(string $username, string $password, string $next = '/ui')
     {
         return $this->withSession([config('Security')->tokenName => self::UI_CSRF])
             ->post('/ui/login', $this->uiForm(['username' => $username, 'password' => $password, 'next' => $next]));
@@ -107,7 +108,7 @@ final class UiAuthTest extends DatabaseTestCase
 
     public function testTheRightCredentialsSignInAndOpenTheRequestedPage(): void
     {
-        $result = $this->attempt(self::UI_USER, self::UI_PASSWORD, '/ui/tasks?status=FAILED');
+        $result = $this->signInAttempt(self::UI_USER, self::UI_PASSWORD, '/ui/tasks?status=FAILED');
 
         $result->assertRedirectTo('/ui/tasks?status=FAILED');
         $result->assertSessionHas(UiAuth::SESSION_KEY);
@@ -115,7 +116,7 @@ final class UiAuthTest extends DatabaseTestCase
 
     public function testAWrongPasswordIsRefused(): void
     {
-        $result = $this->attempt(self::UI_USER, 'wrong');
+        $result = $this->signInAttempt(self::UI_USER, 'wrong');
 
         $result->assertStatus(401);
         $result->assertSee('Неверный логин или пароль');
@@ -124,22 +125,22 @@ final class UiAuthTest extends DatabaseTestCase
 
     public function testAWrongUsernameIsRefused(): void
     {
-        $this->attempt('admin', self::UI_PASSWORD)->assertStatus(401);
+        $this->signInAttempt('admin', self::UI_PASSWORD)->assertStatus(401);
     }
 
     public function testAHashedPasswordFromEnvWorks(): void
     {
         $this->configureUi(['password' => password_hash(self::UI_PASSWORD, PASSWORD_DEFAULT)]);
 
-        $this->attempt(self::UI_USER, self::UI_PASSWORD)->assertSessionHas(UiAuth::SESSION_KEY);
-        $this->attempt(self::UI_USER, 'wrong')->assertStatus(401);
+        $this->signInAttempt(self::UI_USER, self::UI_PASSWORD)->assertSessionHas(UiAuth::SESSION_KEY);
+        $this->signInAttempt(self::UI_USER, 'wrong')->assertStatus(401);
     }
 
     public function testWithoutCredentialsInEnvNobodySignsIn(): void
     {
         $this->configureUi(['username' => '', 'password' => '']);
 
-        $result = $this->attempt('', '');
+        $result = $this->signInAttempt('', '');
 
         $result->assertStatus(200);
         $result->assertSee('Вход отключён');
@@ -154,12 +155,10 @@ final class UiAuthTest extends DatabaseTestCase
         $result->assertSessionHas('error');
     }
 
-    /**
-     * @dataProvider unsafeNextProvider
-     */
+    #[DataProvider('unsafeNextProvider')]
     public function testSignInNeverRedirectsOutsideTheUi(string $next): void
     {
-        $this->attempt(self::UI_USER, self::UI_PASSWORD, $next)->assertRedirectTo('/ui');
+        $this->signInAttempt(self::UI_USER, self::UI_PASSWORD, $next)->assertRedirectTo('/ui');
     }
 
     public static function unsafeNextProvider(): array
@@ -217,17 +216,17 @@ final class UiAuthTest extends DatabaseTestCase
     {
         $this->configureUi(['maxFailures' => 3]);
 
-        $this->attempt(self::UI_USER, 'wrong-1')->assertStatus(401);
+        $this->signInAttempt(self::UI_USER, 'wrong-1')->assertStatus(401);
 
-        $second = $this->attempt(self::UI_USER, 'wrong-2');
+        $second = $this->signInAttempt(self::UI_USER, 'wrong-2');
         $second->assertStatus(401);
         $second->assertSee('Осталось 1');
 
-        $third = $this->attempt(self::UI_USER, 'wrong-3');
+        $third = $this->signInAttempt(self::UI_USER, 'wrong-3');
         $third->assertStatus(429);
         $third->assertSee('заблокирован');
 
-        $result = $this->attempt(self::UI_USER, self::UI_PASSWORD);
+        $result = $this->signInAttempt(self::UI_USER, self::UI_PASSWORD);
         $result->assertStatus(429);
         $result->assertSessionMissing(UiAuth::SESSION_KEY);
     }
@@ -236,12 +235,12 @@ final class UiAuthTest extends DatabaseTestCase
     {
         $this->configureUi(['maxFailures' => 3]);
 
-        $this->attempt(self::UI_USER, 'wrong-1');
-        $this->attempt(self::UI_USER, 'wrong-2');
-        $this->attempt(self::UI_USER, self::UI_PASSWORD)->assertSessionHas(UiAuth::SESSION_KEY);
+        $this->signInAttempt(self::UI_USER, 'wrong-1');
+        $this->signInAttempt(self::UI_USER, 'wrong-2');
+        $this->signInAttempt(self::UI_USER, self::UI_PASSWORD)->assertSessionHas(UiAuth::SESSION_KEY);
 
         // The counter restarted: two more failures still don't lock.
-        $this->attempt(self::UI_USER, 'wrong-3')->assertStatus(401);
-        $this->attempt(self::UI_USER, 'wrong-4')->assertStatus(401);
+        $this->signInAttempt(self::UI_USER, 'wrong-3')->assertStatus(401);
+        $this->signInAttempt(self::UI_USER, 'wrong-4')->assertStatus(401);
     }
 }

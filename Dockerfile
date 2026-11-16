@@ -1,4 +1,4 @@
-FROM php:8.2-apache
+FROM php:8.4-apache
 
 # Enable Apache mod_rewrite (required for CI4)
 RUN a2enmod rewrite
@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
     && docker-php-ext-install mysqli pdo_mysql intl \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Composer, so dependencies can be installed/updated inside this same PHP 8.2
+# Composer, so dependencies can be installed/updated inside this same PHP 8.4
 # runtime instead of whatever PHP version happens to be on the host.
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 

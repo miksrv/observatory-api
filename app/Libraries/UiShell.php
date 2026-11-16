@@ -2,12 +2,15 @@
 
 namespace App\Libraries;
 
+use App\Models\AnomalyModel;
+use App\Models\AnomalyReviewModel;
 use App\Models\PipelineModel;
 use App\Models\TaskModel;
 
 /**
  * What the web UI's layout (app/Views/web/layout.php) shows around every page: each active
- * pipeline's heartbeat in the sidebar and the task queue's counters on the nav. A few cheap
+ * pipeline's heartbeat in the sidebar, the task queue's counters and the alerts still to look at
+ * on the nav. A few cheap
  * queries per page, read here so no controller has to pass them along.
  */
 class UiShell
@@ -17,12 +20,14 @@ class UiShell
      *     pipelines: list<array{name: string, status: string, last_seen_at: ?string}>,
      *     running: int,
      *     pending: int,
+     *     alerts: int,
      *     version: ?string,
      * }
      */
     public static function data(): array
     {
-        $shell = self::status();
+        $shell           = self::status();
+        $shell['alerts'] = self::unreviewedAlerts();
         $shell['version'] = self::version();
 
         return $shell;
@@ -46,6 +51,21 @@ class UiShell
         }
 
         return $version;
+    }
+
+    /**
+     * Alerts not yet marked "nothing interesting" (AnomalyReviewModel) — the same count as the
+     * dashboard's «Аномалии» card: reviewing one takes it off.
+     */
+    private static function unreviewedAlerts(): int
+    {
+        try {
+            return AnomalyReviewModel::joinReviews((new AnomalyModel())->builder(), false)
+                ->where('anomalies.is_alert', 1)
+                ->countAllResults();
+        } catch (\Throwable) {
+            return 0; // migrations not run yet
+        }
     }
 
     /** @return array{pipelines: list<array>, running: int, pending: int} */

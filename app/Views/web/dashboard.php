@@ -13,33 +13,15 @@ $this->setVar('title', 'Обзор');
 $this->setVar('active', 'overview');
 
 $statusTone = ['PENDING' => 'amber', 'RUNNING' => 'blue', 'FAILED' => 'red'];
-$online     = count(array_filter($pipelines, static fn ($p) => $p['status'] === 'online'));
-$registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 'revoked'));
 ?>
 <?= $this->section('content') ?>
-
-<div class="page-head">
-    <div>
-        <h1>Обзор</h1>
-        <p class="sub">
-            <?php if ($registered > 0): ?>
-                На связи <?= $online ?> из <?= $registered ?> <?= ui_plural($registered, 'сервера', 'серверов', 'серверов') ?> обработки<?= $tasksByStatus['RUNNING'] > 0 ? ', выполняется задач: ' . $tasksByStatus['RUNNING'] : '' ?>.
-            <?php else: ?>
-                Ни один сервер обработки ещё не зарегистрирован.
-            <?php endif; ?>
-        </p>
-    </div>
-    <div class="actions">
-        <a class="btn" href="/ui/anomalies?is_alert=1"><?= ui_icon('anomalies') ?>Алерты</a>
-        <a class="btn primary" href="/ui/frames"><?= ui_icon('play') ?>Новая задача</a>
-    </div>
-</div>
 
 <div class="metrics">
     <a class="panel metric" href="/ui/frames<?= $stats['frames_problems'] > 0 ? '?processing=problems' : '' ?>">
         <div class="metric-top"><span class="eyebrow">Кадры</span><span class="metric-icon"><?= ui_icon('frames') ?></span></div>
         <div class="metric-value"><?= ui_num($stats['frames']) ?></div>
-        <div class="metric-foot">зарегистрировано FITS<?= $stats['frames_problems'] > 0 ? ' · <span style="color: var(--amber)">' . ui_num($stats['frames_problems']) . ' с проблемами обработки</span>' : '' ?></div>
+        <?php // One line either way: a second one would stretch the whole row of cards. ?>
+        <div class="metric-foot"><?= $stats['frames_problems'] > 0 ? '<span style="color: var(--red)">' . ui_num($stats['frames_problems']) . ' FITS с ошибками обработки</span>' : 'зарегистрировано FITS' ?></div>
     </a>
     <a class="panel metric" href="/ui/sources">
         <div class="metric-top"><span class="eyebrow">Источники</span><span class="metric-icon cyan"><?= ui_icon('sources') ?></span></div>
@@ -110,6 +92,17 @@ $registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 
                                     <?= $p['catalogs_stale'] ? 'устарело · ' : '' ?>проверено <?= ui_when($p['catalog_checked_at'] ?? null) ?>
                                 </span>
                             </div>
+                            <?php $wait = $p['waiting'] ?? null; ?>
+                            <?php if ($wait !== null): ?>
+                                <?php // The worker holds an ANALYZE item until these catalogs answer (observatory-pipeline 1.7.1). ?>
+                                <div class="pipe-wait<?= $p['catalogs_stale'] ? ' stale' : '' ?>" title="<?= esc('Кадр не регистрируется, пока каталог не ответит; сервер проверяет каталоги каждые несколько минут и продолжит сам' . (($wait['filename'] ?? null) !== null ? '. Кадр: ' . $wait['filename'] : ''), 'attr') ?>">
+                                    <?= ui_icon('clock', 14) ?>
+                                    <span>Ждёт <?= esc(implode(', ', $wait['catalogs'])) ?> · с <?= ui_when($wait['since'] ?? null) ?></span>
+                                    <?php if (($wait['task_id'] ?? null) !== null): ?>
+                                        <a class="small" href="/ui/tasks/<?= esc($wait['task_id'], 'url') ?>">задача</a>
+                                    <?php endif; ?>
+                                </div>
+                            <?php endif; ?>
                             <?php // Compact chips that wrap, not one row per catalog: the card stays short however many catalogs there are. ?>
                             <div class="cat-chips">
                                 <?php foreach ($p['catalogs'] as $c): ?>

@@ -401,6 +401,16 @@ code {
     background: var(--rail-accent);
     color: var(--rail-bg);
 }
+/* Alerts still to look at (the anomalies link). The rail is dark in every theme, so one fixed red;
+   the night-vision theme is all red anyway and keeps its own accent. */
+.rail-count.alert {
+    background: #e5484d;
+    color: #fff;
+}
+:root[data-theme='red'] .rail-count.alert {
+    background: var(--rail-accent);
+    color: var(--rail-bg);
+}
 .rail-foot {
     border-top: 1px solid var(--rail-line);
     padding: 12px 12px 14px;
@@ -1319,11 +1329,15 @@ input[type='datetime-local'].input {
     border-color: var(--accent);
     color: var(--accent);
 }
+/* Clipped: the closed side panel waits translated past the right edge, and unclipped it would
+   widen the document — the whole page, not only the table, would scroll sideways. */
 .filter-host {
     position: relative;
     display: flex;
     flex-direction: column;
     min-height: 0;
+    overflow: hidden;
+    overflow: clip;
 }
 .page.fill > .panel > .filter-host,
 .page.fill > .panel > .filter-host > form:has(.table-wrap) {
@@ -1946,6 +1960,25 @@ a.pipe-task:hover .open {
     margin-top: 14px;
     display: grid;
     gap: 8px;
+}
+.pipe-wait {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+    padding: 6px 10px;
+    border-radius: var(--r-xs);
+    background: var(--amber-bg);
+    color: var(--amber);
+    font-size: 13px;
+}
+.pipe-wait.stale {
+    background: var(--surface-2);
+    color: var(--text-2);
+}
+.pipe-wait a {
+    margin-left: auto;
 }
 .cat-chips {
     display: flex;
