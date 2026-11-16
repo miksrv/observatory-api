@@ -1053,7 +1053,11 @@ present on `GET /sources/near`'s response — that endpoint predates this field.
 
 `{"positions": []}` → `{"results": {}}`.
 
-**Errors:** `400` missing `positions`, missing/non-numeric `radius_arcsec`, non-numeric position, or unparseable `before_time`
+**Errors:** `400` missing `positions`, missing/non-numeric `radius_arcsec`, non-numeric position, or unparseable `before_time`;
+`503` the history query ran longer than 20 s (`SourcesController::$historyQueryMaxSec`, set per
+query as MariaDB `max_statement_time` / MySQL `max_execution_time`) and was stopped — the database is
+overloaded, retry later. The cap is below the pipeline's 30 s client timeout, so a query the pipeline
+has given up on no longer keeps running beside its retry; `500` the candidate rows could not be read.
 
 ---
 
@@ -1270,11 +1274,37 @@ web UI dashboard (marked out of date after an hour without a report).
 | `ok` | Boolean — the catalog answered |
 | `latency_ms` | Non-negative integer or `null` (optional) |
 | `error` | String or `null` (optional); trimmed, kept to 300 characters |
+| `waiting` | Optional. **Absent** = keep the stored wait · `null` = the wait ended · object = see below |
+
+`waiting` (observatory-pipeline 1.7.1+): the worker holds an ANALYZE item — the frame is not
+registered — until these catalogs answer again. Stored in `pipelines.catalog_waiting` and shown on
+the dashboard («Ждёт Gaia DR3 · с …»). The pipeline's periodic check leaves the key out, so it can
+never erase a wait in progress; the wait itself sends the object on every re-check and `null` when it
+ends (and the first check after a worker start sends `null`, clearing a stale one).
+
+```json
+"waiting": {
+  "reason": "catalogs",
+  "catalogs": ["Gaia DR3"],
+  "since": "2026-11-16T03:13:41Z",
+  "task_id": "6af0f7e69f9579.63231956",
+  "filename": "IC 5070_Light_OIII_300_secs_2020-06-23T01-45-20_006.fits"
+}
+```
+
+| Field | Rules |
+|-------|-------|
+| `reason` | `[a-z_]{1,20}` — `catalogs` today |
+| `catalogs` | Non-empty list of at most 20 catalog names (same rules as `name`) |
+| `since` | A date-time; stored as UTC `Y-m-d H:i:s` |
+| `task_id` | String of at most 64 characters, or `null` |
+| `filename` | String of at most 255 characters, or `null` |
 
 **Response 200:** `{"data": {"stored": 2, "checked_at": "2026-10-31 20:00:00"}}`
 
 **Errors:** `400` malformed body · `503` the `AddPipelineCatalogStatus` migration has not been
-run yet (the pipeline only logs it)
+run yet, or the report carries `waiting` before the `AddPipelineCatalogWaiting` one has (the
+pipeline only logs it; a report without `waiting` still works)
 
 ---
 

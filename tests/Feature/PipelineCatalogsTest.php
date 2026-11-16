@@ -173,4 +173,80 @@ final class PipelineCatalogsTest extends DatabaseTestCase
     {
         $this->get('/ui')->assertDontSee('Онлайн-каталоги');
     }
+
+    private const WAITING = [
+        'reason'   => 'catalogs',
+        'catalogs' => ['Gaia DR3'],
+        'since'    => '2026-11-16T03:13:41Z',
+        'task_id'  => '6af0f7e69f9579.63231956',
+        'filename' => 'IC 5070_Light_OIII_300_secs_2020-06-23T01-45-20_006.fits',
+    ];
+
+    public function testAWaitIsStoredKeptByAReportWithoutTheKeyAndClearedByNull(): void
+    {
+        $catalogs = [['name' => 'Gaia DR3', 'ok' => false]];
+
+        $this->report(['catalogs' => $catalogs, 'waiting' => self::WAITING])->assertStatus(200);
+        $this->assertSame(
+            ['reason' => 'catalogs', 'catalogs' => ['Gaia DR3'], 'since' => '2026-11-16 03:13:41',
+                'task_id' => '6af0f7e69f9579.63231956', 'filename' => self::WAITING['filename']],
+            PipelineModel::waitingOf($this->row()),
+        );
+
+        // The pipeline's periodic check leaves `waiting` out: the wait stays.
+        $this->report(['catalogs' => $catalogs])->assertStatus(200);
+        $this->assertNotNull(PipelineModel::waitingOf($this->row()));
+
+        $this->report(['catalogs' => [['name' => 'Gaia DR3', 'ok' => true]], 'waiting' => null])->assertStatus(200);
+        $this->assertNull(PipelineModel::waitingOf($this->row()));
+    }
+
+    /** @return iterable<string, array{mixed}> */
+    public static function malformedWaits(): iterable
+    {
+        yield 'a list'             => [['Gaia DR3']];
+        yield 'a string'           => ['Gaia DR3'];
+        yield 'no catalogs'        => [array_merge(self::WAITING, ['catalogs' => []])];
+        yield 'a bad catalog name' => [array_merge(self::WAITING, ['catalogs' => ['<b>']])];
+        yield 'no reason'          => [array_diff_key(self::WAITING, ['reason' => 1])];
+        yield 'a bad since'        => [array_merge(self::WAITING, ['since' => 'yesterday-ish'])];
+        yield 'a numeric task_id'  => [array_merge(self::WAITING, ['task_id' => 5])];
+    }
+
+    #[DataProvider('malformedWaits')]
+    public function testAMalformedWaitIsRefused(mixed $waiting): void
+    {
+        $this->report(['catalogs' => [['name' => 'Gaia DR3', 'ok' => false]], 'waiting' => $waiting])->assertStatus(400);
+        $this->assertNull($this->row()['catalog_status']);
+    }
+
+    public function testTheDashboardShowsTheWait(): void
+    {
+        $this->report(['catalogs' => [['name' => 'Gaia DR3', 'ok' => false]], 'waiting' => self::WAITING])->assertStatus(200);
+
+        $page = $this->get('/ui');
+        $page->assertSee('Ждёт Gaia DR3');
+        $page->assertSee('/ui/tasks/6af0f7e69f9579.63231956');
+        $page->assertSee('Кадр: IC 5070_Light_OIII');
+
+        $this->report(['catalogs' => [['name' => 'Gaia DR3', 'ok' => true]], 'waiting' => null])->assertStatus(200);
+        $this->get('/ui')->assertDontSee('Ждёт Gaia DR3');
+    }
+
+    public function testBeforeTheWaitingMigrationAReportWithoutTheKeyStillWorks(): void
+    {
+        $forge = \Config\Database::forge($this->db());
+        $forge->dropColumn('pipelines', 'catalog_waiting');
+
+        try {
+            // A pipeline older than 1.7.1, or its periodic check: nothing to store in the new column.
+            $this->report(['catalogs' => [['name' => 'Simbad', 'ok' => true]]])->assertStatus(200);
+            $this->report(['catalogs' => [['name' => 'Simbad', 'ok' => true]], 'waiting' => null])->assertStatus(503);
+            $this->get('/ui')->assertStatus(200);
+        } finally {
+            $forge->addColumn('pipelines', [
+                'catalog_waiting' => ['type' => 'TEXT', 'null' => true, 'after' => 'catalog_checked_at'],
+            ]);
+        }
+    }
 }

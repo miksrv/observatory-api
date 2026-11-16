@@ -536,6 +536,48 @@ final class BatchTest extends DatabaseTestCase
         $this->assertGreaterThan(200, $totalMatches);
     }
 
+    public function testSourcesNearBatchLeavesNoStatementTimeLimitBehind(): void
+    {
+        $db = \Config\Database::connect();
+        $this->createSource();
+
+        $this->withHeaders($this->authHeaders())->withBodyFormat('json')
+            ->post('/api/v1/sources/near/batch', ['positions' => [['ra' => 10.0, 'dec' => 20.0]], 'radius_arcsec' => 5.0])
+            ->assertStatus(200);
+
+        // The cap is for the history query only — the rest of the request
+        // (and a persistent connection's next request) runs at the default.
+        $row = $db->query('SELECT @@SESSION.max_statement_time AS s, @@GLOBAL.max_statement_time AS g')->getRowArray();
+        $this->assertSame($row['g'], $row['s']);
+    }
+
+    public function testSourcesNearBatchAnswers503WhenTheHistoryQueryRunsTooLong(): void
+    {
+        // A second connection holds a write lock, so the history query waits
+        // until the statement time cap stops it.
+        $locker = \Config\Database::connect('tests', false);
+        $locker->query('LOCK TABLES source_observations WRITE');
+
+        $previousCap = \App\Controllers\Api\V1\SourcesController::$historyQueryMaxSec;
+        \App\Controllers\Api\V1\SourcesController::$historyQueryMaxSec = 0.5;
+
+        try {
+            $result = $this->withHeaders($this->authHeaders())->withBodyFormat('json')
+                ->post('/api/v1/sources/near/batch', ['positions' => [['ra' => 10.0, 'dec' => 20.0]], 'radius_arcsec' => 5.0]);
+        } finally {
+            \App\Controllers\Api\V1\SourcesController::$historyQueryMaxSec = $previousCap;
+            $locker->query('UNLOCK TABLES');
+            $locker->close();
+        }
+
+        $result->assertStatus(503);
+        $this->assertStringContainsString('retry later', $result->getJSON());
+
+        $row = \Config\Database::connect()
+            ->query('SELECT @@SESSION.max_statement_time AS s, @@GLOBAL.max_statement_time AS g')->getRowArray();
+        $this->assertSame($row['g'], $row['s']);
+    }
+
     // =========================================================================
     // POST /api/v1/frames/covering/batch
     // =========================================================================

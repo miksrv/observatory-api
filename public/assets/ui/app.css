@@ -1961,6 +1961,25 @@ a.pipe-task:hover .open {
     display: grid;
     gap: 8px;
 }
+.pipe-wait {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+    padding: 6px 10px;
+    border-radius: var(--r-xs);
+    background: var(--amber-bg);
+    color: var(--amber);
+    font-size: 13px;
+}
+.pipe-wait.stale {
+    background: var(--surface-2);
+    color: var(--text-2);
+}
+.pipe-wait a {
+    margin-left: auto;
+}
 .cat-chips {
     display: flex;
     flex-wrap: wrap;

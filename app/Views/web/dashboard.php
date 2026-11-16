@@ -92,6 +92,17 @@ $statusTone = ['PENDING' => 'amber', 'RUNNING' => 'blue', 'FAILED' => 'red'];
                                     <?= $p['catalogs_stale'] ? 'устарело · ' : '' ?>проверено <?= ui_when($p['catalog_checked_at'] ?? null) ?>
                                 </span>
                             </div>
+                            <?php $wait = $p['waiting'] ?? null; ?>
+                            <?php if ($wait !== null): ?>
+                                <?php // The worker holds an ANALYZE item until these catalogs answer (observatory-pipeline 1.7.1). ?>
+                                <div class="pipe-wait<?= $p['catalogs_stale'] ? ' stale' : '' ?>" title="<?= esc('Кадр не регистрируется, пока каталог не ответит; сервер проверяет каталоги каждые несколько минут и продолжит сам' . (($wait['filename'] ?? null) !== null ? '. Кадр: ' . $wait['filename'] : ''), 'attr') ?>">
+                                    <?= ui_icon('clock', 14) ?>
+                                    <span>Ждёт <?= esc(implode(', ', $wait['catalogs'])) ?> · с <?= ui_when($wait['since'] ?? null) ?></span>
+                                    <?php if (($wait['task_id'] ?? null) !== null): ?>
+                                        <a class="small" href="/ui/tasks/<?= esc($wait['task_id'], 'url') ?>">задача</a>
+                                    <?php endif; ?>
+                                </div>
+                            <?php endif; ?>
                             <?php // Compact chips that wrap, not one row per catalog: the card stays short however many catalogs there are. ?>
                             <div class="cat-chips">
                                 <?php foreach ($p['catalogs'] as $c): ?>
