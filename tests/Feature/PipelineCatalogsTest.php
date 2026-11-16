@@ -210,6 +210,8 @@ final class PipelineCatalogsTest extends DatabaseTestCase
         yield 'a bad catalog name' => [array_merge(self::WAITING, ['catalogs' => ['<b>']])];
         yield 'no reason'          => [array_diff_key(self::WAITING, ['reason' => 1])];
         yield 'a bad since'        => [array_merge(self::WAITING, ['since' => 'yesterday-ish'])];
+        yield 'a relative since'   => [array_merge(self::WAITING, ['since' => '+1 week'])];
+        yield 'a future since'     => [array_merge(self::WAITING, ['since' => gmdate('Y-m-d\TH:i:s\Z', time() + 86400)])];
         yield 'a numeric task_id'  => [array_merge(self::WAITING, ['task_id' => 5])];
     }
 
@@ -233,7 +235,26 @@ final class PipelineCatalogsTest extends DatabaseTestCase
         $this->get('/ui')->assertDontSee('Ждёт Gaia DR3');
     }
 
-    public function testBeforeTheWaitingMigrationAReportWithoutTheKeyStillWorks(): void
+    public function testAWaitWhoseCatalogsAllAnswerIsNotShown(): void
+    {
+        // The report clearing the wait was lost; the periodic check (no `waiting` key) shows Gaia up.
+        $this->report(['catalogs' => [['name' => 'Gaia DR3', 'ok' => false]], 'waiting' => self::WAITING])->assertStatus(200);
+        $this->report(['catalogs' => [['name' => 'Gaia DR3', 'ok' => true]]])->assertStatus(200);
+
+        $this->get('/ui')->assertDontSee('Ждёт Gaia DR3');
+    }
+
+    public function testAnMpcWaitFollowsSkyBotAndJpl(): void
+    {
+        $wait = array_merge(self::WAITING, ['catalogs' => ['MPC']]);
+        $this->report(['catalogs' => [['name' => 'SkyBot', 'ok' => false], ['name' => 'JPL SB Ident', 'ok' => false]], 'waiting' => $wait])->assertStatus(200);
+        $this->get('/ui')->assertSee('Ждёт MPC');
+
+        $this->report(['catalogs' => [['name' => 'SkyBot', 'ok' => false], ['name' => 'JPL SB Ident', 'ok' => true]]])->assertStatus(200);
+        $this->get('/ui')->assertDontSee('Ждёт MPC');
+    }
+
+    public function testBeforeTheWaitingMigrationTheCheckIsStillStored(): void
     {
         $forge = \Config\Database::forge($this->db());
         $forge->dropColumn('pipelines', 'catalog_waiting');
@@ -241,7 +262,9 @@ final class PipelineCatalogsTest extends DatabaseTestCase
         try {
             // A pipeline older than 1.7.1, or its periodic check: nothing to store in the new column.
             $this->report(['catalogs' => [['name' => 'Simbad', 'ok' => true]]])->assertStatus(200);
-            $this->report(['catalogs' => [['name' => 'Simbad', 'ok' => true]], 'waiting' => null])->assertStatus(503);
+            // With the key: the check is still stored, only the wait is dropped.
+            $this->report(['catalogs' => [['name' => 'Gaia DR3', 'ok' => false]], 'waiting' => self::WAITING])->assertStatus(200);
+            $this->assertSame('Gaia DR3', PipelineModel::catalogsOf($this->row())[0]['name']);
             $this->get('/ui')->assertStatus(200);
         } finally {
             $forge->addColumn('pipelines', [

@@ -6,8 +6,8 @@
 
 - Web UI: «Аномалии» in the sidebar carries a red badge with the alerts not yet reviewed — marking one «ничего интересного» takes it off the count
 - Platform: requires PHP 8.4 or newer (`composer.json`, deploy build, Docker image); the hosting must run PHP 8.4+ before this release is deployed
-- Dashboard: a server holding a frame until a catalog answers again shows «Ждёт Gaia DR3 · с …» on its card — `POST /pipelines/catalogs` takes `waiting` (absent = keep, `null` = clear; requires observatory-pipeline 1.7.1). Migration `AddPipelineCatalogWaiting`: run `php spark migrate` after the deploy — until then a report carrying `waiting` gets `503` (the pipeline only logs it), one without it still works
-- Sources: `POST /sources/near/batch` stops its history query after 20 s and answers `503` — a query the pipeline had timed out on kept running beside its retry; on 2026-10-28 and 2026-11-05 the piled-up queries were killed by the hosting and then exhausted its connections, failing every request for minutes
+- Dashboard: a server holding a frame until a catalog answers again shows «Ждёт Gaia DR3 · с …» on its card — `POST /pipelines/catalogs` takes `waiting` (absent = keep, `null` = clear; requires observatory-pipeline 1.7.1). Migration `AddPipelineCatalogWaiting`: run `php spark migrate` after the deploy — until then the catalog check is stored without the wait
+- Sources: `POST /sources/near/batch` stops its history query after 25 s (reading the rows included) and answers `503` — a query the pipeline had timed out on kept running beside its retry; on 2026-10-28 and 2026-11-05 the piled-up queries were killed by the hosting and then exhausted its connections, failing every request for minutes
 - Dependencies: CodeIgniter 4.7.4 → 4.7.6 (security fixes, among them SQL injection in named query bindings and mass assignment in `Model::replace()`); dev: PHPUnit 10 → 13
 - Web UI: the frames page no longer scrolls sideways as a whole — the closed filters panel was widening it; only the table scrolls
 - Web UI: the frames list hides its «Pipeline» column and filter while only one pipeline is registered

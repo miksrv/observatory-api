@@ -183,6 +183,33 @@ class PipelineModel extends BaseModel
         return is_array($decoded) && array_is_list($decoded) ? $decoded : [];
     }
 
+    /**
+     * The catalog-check lines that serve each `waiting.catalogs` name: MPC is asked through
+     * SkyBot / JPL SB Ident (the pipeline's MPC_SOURCES); every other catalog has its own line.
+     */
+    private const WAIT_REPORT_NAMES = ['MPC' => ['SkyBot', 'JPL SB Ident']];
+
+    /**
+     * True when the latest catalog check shows every catalog of `$waiting` answering — the wait is
+     * over even if the pipeline's report clearing it never arrived (a single attempt, an API blip),
+     * so the dashboard does not show it. A catalog the check has no line for keeps the wait shown.
+     *
+     * @param array{catalogs: list<string>}                 $waiting
+     * @param list<array{name: string, ok: bool}>           $catalogs
+     */
+    public static function waitIsOver(array $waiting, array $catalogs): bool
+    {
+        foreach ($waiting['catalogs'] as $name) {
+            $names = self::WAIT_REPORT_NAMES[$name] ?? [$name];
+            $lines = array_filter($catalogs, static fn ($c) => in_array($c['name'] ?? null, $names, true));
+            if ($lines === [] || array_filter($lines, static fn ($c) => (bool) ($c['ok'] ?? false)) === []) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /** True when a catalog check exists but is older than CATALOG_STALE_SEC. */
     public static function catalogCheckIsStale(?string $checkedAt): bool
     {
@@ -280,6 +307,9 @@ class PipelineModel extends BaseModel
             $pipeline['frame_count']  = $frames[$id] ?? 0;
             $pipeline['catalogs']     = self::catalogsOf($pipeline);
             $pipeline['waiting']      = self::waitingOf($pipeline);
+            if ($pipeline['waiting'] !== null && self::waitIsOver($pipeline['waiting'], $pipeline['catalogs'])) {
+                $pipeline['waiting'] = null;
+            }
             $pipeline['catalogs_stale'] = self::catalogCheckIsStale($pipeline['catalog_checked_at'] ?? null);
         }
         unset($pipeline);

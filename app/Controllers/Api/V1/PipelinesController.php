@@ -99,13 +99,16 @@ class PipelinesController extends BaseApiController
 
         $checkedAt = gmdate('Y-m-d H:i:s');
 
-        // DBDebug off (production) makes a failed write return false instead of throwing.
-        try {
-            $saved = (new PipelineModel())->saveCatalogStatus($pipelineId, $clean, $checkedAt, $waiting, $setWaiting);
-            $why   = 'update failed';
-        } catch (DatabaseException $e) {
-            $saved = false;
-            $why   = $e->getMessage();
+        [$saved, $why] = $this->saveStatus($pipelineId, $clean, $checkedAt, $waiting, $setWaiting);
+
+        if (! $saved && $setWaiting) {
+            // Most likely the AddPipelineCatalogWaiting migration has not run yet: keep the
+            // catalog check itself rather than losing it with the wait.
+            [$saved, $whyRetry] = $this->saveStatus($pipelineId, $clean, $checkedAt, null, false);
+            if ($saved) {
+                log_message('warning', 'Catalog wait not recorded (run php spark migrate?): {message}', ['message' => $why]);
+            }
+            $why = $whyRetry;
         }
 
         if (! $saved) {
@@ -115,6 +118,23 @@ class PipelinesController extends BaseApiController
         }
 
         return $this->respondOk(['data' => ['stored' => count($clean), 'checked_at' => $checkedAt]]);
+    }
+
+    /**
+     * PipelineModel::saveCatalogStatus(), as [saved, why-not]. DBDebug off (production) makes a
+     * failed write return false instead of throwing.
+     *
+     * @param array<string, mixed>|null $waiting
+     *
+     * @return array{0: bool, 1: string}
+     */
+    private function saveStatus(string $pipelineId, array $clean, string $checkedAt, ?array $waiting, bool $setWaiting): array
+    {
+        try {
+            return [(new PipelineModel())->saveCatalogStatus($pipelineId, $clean, $checkedAt, $waiting, $setWaiting), 'update failed'];
+        } catch (DatabaseException $e) {
+            return [false, $e->getMessage()];
+        }
     }
 
     /**
@@ -144,10 +164,15 @@ class PipelinesController extends BaseApiController
             }
         }
 
+        // ISO 8601 only — strtotime() alone would take "tomorrow" or "+1 week" — and not ahead of
+        // the API's clock by more than a few minutes of drift.
         $since = $waiting['since'] ?? null;
-        $time  = is_string($since) ? strtotime($since) : false;
-        if ($time === false) {
-            return 'waiting.since must be a date-time';
+        $time  = is_string($since)
+            && preg_match('/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/', $since) === 1
+            ? strtotime($since)
+            : false;
+        if ($time === false || $time > time() + 300) {
+            return 'waiting.since must be an ISO 8601 date-time, not in the future';
         }
 
         foreach (['task_id' => 64, 'filename' => 255] as $field => $max) {

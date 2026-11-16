@@ -1054,9 +1054,9 @@ present on `GET /sources/near`'s response — that endpoint predates this field.
 `{"positions": []}` → `{"results": {}}`.
 
 **Errors:** `400` missing `positions`, missing/non-numeric `radius_arcsec`, non-numeric position, or unparseable `before_time`;
-`503` the history query ran longer than 20 s (`SourcesController::$historyQueryMaxSec`, set per
-query as MariaDB `max_statement_time` / MySQL `max_execution_time`) and was stopped — the database is
-overloaded, retry later. The cap is below the pipeline's 30 s client timeout, so a query the pipeline
+`503` the history query ran longer than 25 s (`SourcesController::$historyQueryMaxSec`, set per
+query as MariaDB `max_statement_time` / MySQL `max_execution_time`; the rows are read unbuffered, so
+the time to sweep them counts too) and was stopped — the database is overloaded, retry later. The cap is below the pipeline's 30 s client timeout, so a query the pipeline
 has given up on no longer keeps running beside its retry; `500` the candidate rows could not be read.
 
 ---
@@ -1296,15 +1296,19 @@ ends (and the first check after a worker start sends `null`, clearing a stale on
 |-------|-------|
 | `reason` | `[a-z_]{1,20}` — `catalogs` today |
 | `catalogs` | Non-empty list of at most 20 catalog names (same rules as `name`) |
-| `since` | A date-time; stored as UTC `Y-m-d H:i:s` |
+| `since` | ISO 8601 date-time, not more than 5 minutes ahead of the API's clock; stored as UTC `Y-m-d H:i:s` |
 | `task_id` | String of at most 64 characters, or `null` |
 | `filename` | String of at most 255 characters, or `null` |
 
 **Response 200:** `{"data": {"stored": 2, "checked_at": "2026-10-31 20:00:00"}}`
 
 **Errors:** `400` malformed body · `503` the `AddPipelineCatalogStatus` migration has not been
-run yet, or the report carries `waiting` before the `AddPipelineCatalogWaiting` one has (the
-pipeline only logs it; a report without `waiting` still works)
+run yet (the pipeline only logs it). Before `AddPipelineCatalogWaiting` has run, a report carrying
+`waiting` is stored without it (logged as a warning).
+
+The dashboard hides a stored wait once the latest check shows all of its catalogs answering (`MPC`
+follows the `SkyBot` / `JPL SB Ident` lines) — the report clearing it is a single attempt and may be
+lost.
 
 ---
 

@@ -21,9 +21,11 @@ class SourcesController extends BaseApiController
      * were killed by the hosting ("MySQL server has gone away") and then used
      * up its connection limit, failing every request for minutes.
      *
-     * Public and static only so a test can lower it.
+     * The rows are read unbuffered, so the cap also counts the time PHP spends
+     * sweeping them, not only the database's. Public and static only so a test
+     * can lower it.
      */
-    public static float $historyQueryMaxSec = 20.0;
+    public static float $historyQueryMaxSec = 25.0;
 
     /** "max_statement_time exceeded" (MariaDB) and "maximum statement execution time exceeded" (MySQL). */
     private const STATEMENT_TIMEOUT_ERRORS = [1969, 3024];
@@ -497,10 +499,11 @@ class SourcesController extends BaseApiController
                 }
             }
 
-            // An unbuffered read that fails midway can end the loop like the last row did. A
-            // truncated history must not go out as a 200: the pipeline would read the missing
-            // observations as "never seen here" and raise false alerts. A 500 makes it treat the
-            // history as unavailable instead.
+            // A truncated history must not go out as a 200: the pipeline would read the missing
+            // observations as "never seen here" and raise false alerts. CI's MySQLi driver
+            // reports strictly, so a read failing midway — the time cap firing while rows stream,
+            // which is when it usually fires — throws mysqli_sql_exception (caught below); this
+            // check stays for a driver that ends the loop silently instead.
             $error = $db->error();
             if ((int) ($error['code'] ?? 0) !== 0) {
                 if ($this->isStatementTimeout($db)) {
@@ -510,6 +513,13 @@ class SourcesController extends BaseApiController
 
                 return $this->respondError(500, 'Failed to read historical observations');
             }
+        } catch (\mysqli_sql_exception $e) {
+            if (in_array($e->getCode(), self::STATEMENT_TIMEOUT_ERRORS, true)) {
+                return $this->respondHistoryTimeout(count($positions));
+            }
+            log_message('error', 'SourcesController::nearBatch — reading candidates failed: ' . $e->getMessage());
+
+            return $this->respondError(500, 'Failed to read historical observations');
         } finally {
             // An unbuffered result must be released before the connection
             // runs anything else (ApiKeyFilter::after() writes the heartbeat).
@@ -545,27 +555,38 @@ class SourcesController extends BaseApiController
     }
 
     /**
-     * Caps this connection's statement time at $historyQueryMaxSec and
-     * returns the variable to reset afterwards, or null when the server has
-     * neither (the query then runs unbounded, as before). MariaDB calls it
-     * max_statement_time (seconds), MySQL max_execution_time (milliseconds,
-     * SELECT only).
+     * Caps this connection's statement time at $historyQueryMaxSec and returns the variable to
+     * reset afterwards, or null when the server takes neither (the query then runs unbounded, as
+     * before). MariaDB's max_statement_time (seconds) and MySQL's max_execution_time
+     * (milliseconds, SELECT only) are both tried — the version string picks which goes first, but
+     * a proxy may rewrite it. A failed SET throws with DBDebug on and returns false with it off.
      */
     private function limitStatementTime(\CodeIgniter\Database\BaseConnection $db): ?string
     {
-        [$variable, $value] = str_contains($db->getVersion(), 'MariaDB')
-            ? ['max_statement_time', sprintf('%.3F', self::$historyQueryMaxSec)]
-            : ['max_execution_time', (string) max(1, (int) round(self::$historyQueryMaxSec * 1000))];
-
-        try {
-            $db->query("SET SESSION {$variable} = {$value}");
-
-            return $variable;
-        } catch (\Throwable $e) {
-            log_message('warning', "SourcesController::nearBatch — cannot set {$variable}: " . $e->getMessage());
-
-            return null;
+        $candidates = [
+            'max_statement_time' => sprintf('%.3F', self::$historyQueryMaxSec),
+            'max_execution_time' => (string) max(1, (int) round(self::$historyQueryMaxSec * 1000)),
+        ];
+        if (! str_contains($db->getVersion(), 'MariaDB')) {
+            // Probably MySQL: its variable first, so a working setup logs no failed SET.
+            $candidates = array_reverse($candidates, true);
         }
+        $why = '';
+
+        foreach ($candidates as $variable => $value) {
+            try {
+                if ($db->query("SET SESSION {$variable} = {$value}") !== false) {
+                    return $variable;
+                }
+                $why = (string) ($db->error()['message'] ?? 'failed');
+            } catch (\Throwable $e) {
+                $why = $e->getMessage();
+            }
+        }
+
+        log_message('warning', 'SourcesController::nearBatch — no statement time cap: ' . $why);
+
+        return null;
     }
 
     /**
