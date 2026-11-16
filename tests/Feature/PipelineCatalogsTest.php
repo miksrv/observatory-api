@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\PipelineModel;
 use CodeIgniter\Test\FeatureTestTrait;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Support\DatabaseTestCase;
 use Tests\Support\SignsInToUi;
 
@@ -86,9 +87,7 @@ final class PipelineCatalogsTest extends DatabaseTestCase
         $this->assertSame(300, strlen(PipelineModel::catalogsOf($this->row())[0]['error']));
     }
 
-    /**
-     * @dataProvider malformedBodies
-     */
+    #[DataProvider('malformedBodies')]
     public function testAMalformedReportIsRefused(array $body): void
     {
         $this->report($body)->assertStatus(400);

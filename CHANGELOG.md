@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.1
+
+### Patch Changes
+
+- Web UI: «Аномалии» in the sidebar carries a red badge with the alerts not yet reviewed — marking one «ничего интересного» takes it off the count
+- Platform: requires PHP 8.4 or newer (`composer.json`, deploy build, Docker image); the hosting must run PHP 8.4+ before this release is deployed
+- Dependencies: CodeIgniter 4.7.4 → 4.7.6 (security fixes, among them SQL injection in named query bindings and mass assignment in `Model::replace()`); dev: PHPUnit 10 → 13
+- Web UI: the frames page no longer scrolls sideways as a whole — the closed filters panel was widening it; only the table scrolls
+- Web UI: the frames list hides its «Pipeline» column and filter while only one pipeline is registered
+- Web UI: the dashboard opens straight on its cards — the «Обзор» heading and its buttons are gone
+- Web UI: the dashboard's «Кадры» card shows either «зарегистрировано FITS» or, in red, how many frames have processing errors — one line, so it no longer stretches the row
+
 ## 1.6.0
 
 ### Minor Changes

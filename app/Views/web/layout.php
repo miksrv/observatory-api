@@ -21,16 +21,23 @@ $bleed       = ! empty($bleed);
 $shell       = UiShell::data();
 $user        = (string) (session(UiAuth::SESSION_KEY)['user'] ?? '');
 
+// [href, label, icon, badge]; a badge is [count, tone class, tooltip] or null.
 $nav = [
     'Наблюдения' => [
         'overview'  => ['/ui', 'Обзор', 'overview', null],
         'frames'    => ['/ui/frames', 'Кадры', 'frames', null],
         'sources'   => ['/ui/sources', 'Источники', 'sources', null],
-        'anomalies' => ['/ui/anomalies', 'Аномалии', 'anomalies', null],
+        'anomalies' => ['/ui/anomalies', 'Аномалии', 'anomalies', [
+            $shell['alerts'], 'alert', 'Алертов не разобрано: ' . $shell['alerts'],
+        ]],
         'charts'    => ['/ui/charts', 'Графики', 'charts', null],
     ],
     'Управление' => [
-        'tasks'    => ['/ui/tasks', 'Задачи', 'tasks', $shell['running'] + $shell['pending']],
+        'tasks'    => ['/ui/tasks', 'Задачи', 'tasks', [
+            $shell['running'] + $shell['pending'],
+            $shell['running'] > 0 ? 'live' : '',
+            'Выполняется: ' . $shell['running'] . ', в очереди: ' . $shell['pending'],
+        ]],
         'settings' => ['/ui/settings', 'Настройки', 'settings', null],
     ],
 ];
@@ -64,14 +71,14 @@ $flashes = array_filter([
         <nav class="rail-nav">
             <?php foreach ($nav as $group => $links): ?>
                 <div class="rail-group"><?= esc($group) ?></div>
-                <?php foreach ($links as $key => [$href, $label, $icon, $count]): ?>
+                <?php foreach ($links as $key => [$href, $label, $icon, $badge]): ?>
                     <a class="rail-link<?= $key === $active ? ' active' : '' ?>" href="<?= $href ?>"
                        title="<?= esc($label, 'attr') ?>"<?= $key === $active ? ' aria-current="page"' : '' ?>>
                         <?= ui_icon($icon, 18) ?>
                         <span class="label"><?= esc($label) ?></span>
-                        <?php if ($count): ?>
-                            <span class="rail-count<?= $shell['running'] > 0 ? ' live' : '' ?>"
-                                  title="Выполняется: <?= $shell['running'] ?>, в очереди: <?= $shell['pending'] ?>"><?= (int) $count ?></span>
+                        <?php if ($badge !== null && $badge[0] > 0): ?>
+                            <span class="rail-count<?= $badge[1] !== '' ? ' ' . $badge[1] : '' ?>"
+                                  title="<?= esc($badge[2], 'attr') ?>"><?= (int) $badge[0] ?></span>
                         <?php endif; ?>
                     </a>
                 <?php endforeach; ?>

@@ -13,33 +13,15 @@ $this->setVar('title', 'Обзор');
 $this->setVar('active', 'overview');
 
 $statusTone = ['PENDING' => 'amber', 'RUNNING' => 'blue', 'FAILED' => 'red'];
-$online     = count(array_filter($pipelines, static fn ($p) => $p['status'] === 'online'));
-$registered = count(array_filter($pipelines, static fn ($p) => $p['status'] !== 'revoked'));
 ?>
 <?= $this->section('content') ?>
-
-<div class="page-head">
-    <div>
-        <h1>Обзор</h1>
-        <p class="sub">
-            <?php if ($registered > 0): ?>
-                На связи <?= $online ?> из <?= $registered ?> <?= ui_plural($registered, 'сервера', 'серверов', 'серверов') ?> обработки<?= $tasksByStatus['RUNNING'] > 0 ? ', выполняется задач: ' . $tasksByStatus['RUNNING'] : '' ?>.
-            <?php else: ?>
-                Ни один сервер обработки ещё не зарегистрирован.
-            <?php endif; ?>
-        </p>
-    </div>
-    <div class="actions">
-        <a class="btn" href="/ui/anomalies?is_alert=1"><?= ui_icon('anomalies') ?>Алерты</a>
-        <a class="btn primary" href="/ui/frames"><?= ui_icon('play') ?>Новая задача</a>
-    </div>
-</div>
 
 <div class="metrics">
     <a class="panel metric" href="/ui/frames<?= $stats['frames_problems'] > 0 ? '?processing=problems' : '' ?>">
         <div class="metric-top"><span class="eyebrow">Кадры</span><span class="metric-icon"><?= ui_icon('frames') ?></span></div>
         <div class="metric-value"><?= ui_num($stats['frames']) ?></div>
-        <div class="metric-foot">зарегистрировано FITS<?= $stats['frames_problems'] > 0 ? ' · <span style="color: var(--amber)">' . ui_num($stats['frames_problems']) . ' с проблемами обработки</span>' : '' ?></div>
+        <?php // One line either way: a second one would stretch the whole row of cards. ?>
+        <div class="metric-foot"><?= $stats['frames_problems'] > 0 ? '<span style="color: var(--red)">' . ui_num($stats['frames_problems']) . ' FITS с ошибками обработки</span>' : 'зарегистрировано FITS' ?></div>
     </a>
     <a class="panel metric" href="/ui/sources">
         <div class="metric-top"><span class="eyebrow">Источники</span><span class="metric-icon cyan"><?= ui_icon('sources') ?></span></div>

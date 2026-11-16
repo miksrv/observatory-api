@@ -3,6 +3,8 @@
  * @var list<array>           $frames
  * @var list<string>          $objects
  * @var array<string, string> $pipelines id => name
+ * @var bool                  $multiPipeline more than one pipeline registered — only then the
+ *                                           «Pipeline» column and filter are shown
  * @var string                $pipelineNone
  * @var array<string, string> $filters  the applied list filter, FramesController::FILTERS => value
  * @var bool                  $filtersOpen the side panel starts open (?filters=1)
@@ -134,6 +136,8 @@ $matchFilter = $filters;
                             <?php endforeach; ?>
                         </select>
                     </label>
+                    <?php // One pipeline holds every frame: nothing to tell apart. Still shown while applied (a dashboard link). ?>
+                    <?php if ($multiPipeline || $filterPipeline !== ''): ?>
                     <label class="field">
                         <span class="label">Pipeline</span>
                         <select class="input" name="pipeline" data-filter="pipeline">
@@ -144,6 +148,7 @@ $matchFilter = $filters;
                             <option value="<?= esc($pipelineNone, 'attr') ?>" <?= $filterPipeline === $pipelineNone ? 'selected' : '' ?>>(не указан)</option>
                         </select>
                     </label>
+                    <?php endif; ?>
                     <div class="field-pair">
                         <label class="field">
                             <span class="label">С (UTC)</span>
@@ -191,12 +196,12 @@ $matchFilter = $filters;
                     <?= ui_th($list, 'fwhm', 'FWHM', 'num') ?>
                     <?= ui_th($list, 'snr', 'SNR', 'num') ?>
                     <?= ui_th($list, 'background', 'Фон', 'num') ?>
-                    <th>Pipeline</th>
+                    <?php if ($multiPipeline): ?><th>Pipeline</th><?php endif; ?>
                 </tr>
                 </thead>
                 <tbody>
                 <?php if (empty($frames)): ?>
-                    <tr><td colspan="14" class="empty-cell"><div class="empty"><?= ui_icon('frames') ?><strong>Кадров не найдено</strong><span>Измените или сбросьте фильтр.</span></div></td></tr>
+                    <tr><td colspan="<?= $multiPipeline ? 14 : 13 ?>" class="empty-cell"><div class="empty"><?= ui_icon('frames') ?><strong>Кадров не найдено</strong><span>Измените или сбросьте фильтр.</span></div></td></tr>
                 <?php endif; ?>
                 <?php foreach ($frames as $frame): ?>
                     <tr>
@@ -216,7 +221,9 @@ $matchFilter = $filters;
                         <td class="num"><?= ui_num($frame['qc_fwhm_median'], 2) ?></td>
                         <td class="num"><?= ui_num($frame['qc_snr_median'], 1) ?></td>
                         <td class="num"><?= ui_num($frame['qc_sky_background'], 1) ?></td>
-                        <td class="mono small nowrap"><?= $frame['pipeline_id'] !== null ? esc($pipelines[$frame['pipeline_id']] ?? $frame['pipeline_id']) : '<span class="dim">—</span>' ?></td>
+                        <?php if ($multiPipeline): ?>
+                            <td class="mono small nowrap"><?= $frame['pipeline_id'] !== null ? esc($pipelines[$frame['pipeline_id']] ?? $frame['pipeline_id']) : '<span class="dim">—</span>' ?></td>
+                        <?php endif; ?>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>
